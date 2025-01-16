@@ -1,5 +1,7 @@
-# Changelog for v2.0.0
+# Changelog for v2.1.0
 
 ## Changes
-- feat: workflow new release
+- test: minor release new release
+- test: minor release
+- test: minor release
 
