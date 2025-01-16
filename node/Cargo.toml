@@ -1,0 +1,202 @@
+[package]
+name = "uomi"
+version = "0.2.0"
+description = "Uomi node implementation in Rust."
+build = "build.rs"
+default-run = "uomi"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "uomi"
+path = "bin/main.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# third-party dependencies
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+clap = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true, features = ["std"] }
+parity-scale-codec = { workspace = true, features = ["std"] }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
+tokio = { workspace = true }
+sc-consensus-grandpa-rpc = { workspace = true }
+sc-consensus-babe-rpc = { workspace = true }
+url = { workspace = true }
+thiserror = { workspace = true }
+rand = "0.8"
+
+# primitives
+sp-transaction-storage-proof = { workspace = true, features = ["default"] }
+sp-api = { workspace = true, features = ["std"] }
+sp-block-builder = { workspace = true, features = ["std"] }
+sp-consensus-babe = { workspace = true, features = ["std"] }
+sp-core = { workspace = true, features = ["std"] }
+sp-inherents = { workspace = true, features = ["std"] }
+sp-io = { workspace = true, features = ["std"] }
+sp-offchain = { workspace = true, features = ["std"] }
+sp-runtime = { workspace = true, features = ["std"] }
+sp-session = { workspace = true, features = ["std"] }
+sp-transaction-pool = { workspace = true, features = ["std"] }
+
+sp-blockchain = { workspace = true }
+sp-consensus = { workspace = true }
+sp-keyring = { workspace = true, optional = true }
+sp-keystore = { workspace = true }
+sp-timestamp = { workspace = true }
+sp-trie = { workspace = true }
+ipfs-manager = { workspace = true }
+pallet-uomi-engine = { workspace = true }
+
+# client dependencies
+sc-basic-authorship = { workspace = true }
+sc-chain-spec = { workspace = true }
+sc-client-api = { workspace = true }
+sc-client-db = { workspace = true }
+sc-consensus = { workspace = true }
+once_cell = { workspace = true }
+
+sc-consensus-babe = { workspace = true }
+sc-consensus-grandpa = { workspace = true }
+sc-consensus-manual-seal = { workspace = true, optional = true }
+sc-executor = { workspace = true }
+sc-network = { workspace = true }
+sc-network-sync = { workspace = true }
+sc-offchain = { workspace = true }
+sc-rpc = { workspace = true }
+sc-service = { workspace = true }
+sc-telemetry = { workspace = true }
+sc-tracing = { workspace = true }
+sc-transaction-pool = { workspace = true }
+sc-transaction-pool-api = { workspace = true }
+substrate-prometheus-endpoint = { workspace = true }
+
+# RPC related dependencies
+jsonrpsee = { workspace = true }
+
+# Frontier dependencies
+fp-rpc = { workspace = true, features = ["std"] }
+pallet-ethereum = { workspace = true, features = ["std"] }
+pallet-evm = { workspace = true, features = ["std"] }
+pallet-im-online = { workspace = true, features = ["std"] }
+
+fc-api = { workspace = true }
+fc-consensus = { workspace = true }
+fc-db = { workspace = true }
+fc-mapping-sync = { workspace = true }
+fc-rpc = { workspace = true }
+fc-rpc-core = { workspace = true }
+fc-storage = { workspace = true }
+fp-consensus = { workspace = true }
+fp-evm = { workspace = true, features = ["std"] }
+fp-storage = { workspace = true }
+hex-literal = { workspace = true }
+
+# uomi-specific dependencies
+
+local-runtime = { workspace = true, features = ["std"] }
+finney-runtime = { workspace = true, features = ["std"] }
+uomi-runtime = { workspace = true, features = ["std"] }
+
+# uomi pallets dependencies
+uomi-primitives = { workspace = true }
+
+# frame dependencies
+frame-metadata-hash-extension = { workspace = true }
+frame-system = { workspace = true, features = ["std"] }
+pallet-transaction-payment = { workspace = true, features = ["std"] }
+pallet-transaction-payment-rpc = { workspace = true }
+substrate-frame-rpc-system = { workspace = true }
+
+# CLI-specific dependencies
+sc-cli = { workspace = true, optional = true }
+
+# polkadot dependencies
+polkadot-cli = { workspace = true, optional = true }
+
+polkadot-primitives = { workspace = true, features = ["std"] }
+polkadot-service = { workspace = true }
+
+# benchmark dependencies
+frame-benchmarking = { workspace = true, features = ["std"] }
+frame-benchmarking-cli = { workspace = true, optional = true }
+polkadot-runtime-common = { workspace = true, features = ["std"], optional = true }
+
+# try-runtime
+frame-try-runtime = { workspace = true, features = ["std"], optional = true }
+try-runtime-cli = { workspace = true, optional = true }
+
+# evm-tracing
+moonbeam-rpc-primitives-debug = { workspace = true, features = ["std"], optional = true }
+moonbeam-rpc-primitives-txpool = { workspace = true, features = ["std"], optional = true }
+
+moonbeam-primitives-ext = { workspace = true }
+moonbeam-rpc-debug = { workspace = true, optional = true }
+moonbeam-rpc-trace = { workspace = true, optional = true }
+moonbeam-rpc-txpool = { workspace = true, optional = true }
+
+[build-dependencies]
+polkadot-cli = { workspace = true, optional = true }
+sc-cli = { workspace = true, optional = true }
+sc-service = { workspace = true, optional = true }
+substrate-build-script-utils = { workspace = true }
+
+[features]
+default = ["sc-cli", "polkadot-cli", "sc-service", "sc-service/rocksdb"]
+runtime-benchmarks = [
+	"frame-benchmarking-cli",
+	"local-runtime/runtime-benchmarks",
+	"finney-runtime/runtime-benchmarks",
+	"uomi-runtime/runtime-benchmarks",
+	"polkadot-cli/runtime-benchmarks",
+	"polkadot-runtime-common/std",
+	"sp-keyring",
+	"polkadot-runtime-common",
+	"uomi-primitives/runtime-benchmarks",
+	"frame-benchmarking/runtime-benchmarks",
+	"frame-benchmarking-cli?/runtime-benchmarks",
+	"frame-system/runtime-benchmarks",
+	"pallet-ethereum/runtime-benchmarks",
+	"pallet-evm/runtime-benchmarks",
+	"polkadot-primitives/runtime-benchmarks",
+	"polkadot-runtime-common?/runtime-benchmarks",
+	"polkadot-service/runtime-benchmarks",
+	"sc-client-db/runtime-benchmarks",
+	"sc-service/runtime-benchmarks",
+	"sp-runtime/runtime-benchmarks",
+]
+cli = ["try-runtime-cli"]
+try-runtime = [
+	"local-runtime/try-runtime",
+	"finney-runtime/try-runtime",
+	"uomi-runtime/try-runtime",
+	"try-runtime-cli/try-runtime",
+	"uomi-primitives/try-runtime",
+	"frame-system/try-runtime",
+	"frame-try-runtime/try-runtime",
+	"pallet-ethereum/try-runtime",
+	"pallet-evm/try-runtime",
+	"pallet-transaction-payment/try-runtime",
+	"polkadot-cli?/try-runtime",
+	"polkadot-runtime-common?/try-runtime",
+	"polkadot-service/try-runtime",
+	"sp-runtime/try-runtime",
+]
+evm-tracing = [
+	"moonbeam-rpc-debug",
+	"moonbeam-rpc-primitives-debug",
+	"moonbeam-rpc-primitives-txpool",
+	"moonbeam-rpc-trace",
+	"moonbeam-rpc-txpool",
+	"local-runtime/evm-tracing",
+	"finney-runtime/evm-tracing",
+	"uomi-runtime/evm-tracing",
+]
+manual-seal = ["sc-consensus-manual-seal"]

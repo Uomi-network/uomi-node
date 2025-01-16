@@ -1,0 +1,101 @@
+[package]
+name = "uomi-primitives"
+version = "0.2.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+# third-party dependencies
+impl-trait-for-tuples = { workspace = true }
+log = { workspace = true }
+parity-scale-codec = { workspace = true }
+scale-info = { workspace = true }
+
+# Ethereum/Frontier dependencies
+ethereum = { workspace = true, features = ["with-codec"] }
+ethereum-types = { workspace = true }
+fp-evm = { workspace = true }
+
+# Substrate dependencies
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+pallet-assets = { workspace = true }
+pallet-collective = { workspace = true }
+pallet-membership = { workspace = true }
+pallet-treasury = { workspace = true }
+sp-arithmetic = { workspace = true }
+sp-core = { workspace = true }
+sp-io = { workspace = true }
+sp-runtime = { workspace = true }
+sp-std = { workspace = true }
+
+
+
+
+
+# ORML dependencies
+
+pallet-contracts = { workspace = true }
+
+# Frontier dependencies
+pallet-evm = { workspace = true }
+
+# Uomi pallets & dependencies
+pallet-evm-precompile-assets-erc20 = { workspace = true }
+pallet-evm-precompile-dispatch = { workspace = true }
+
+[dev-dependencies]
+once_cell = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"log/std",
+	"parity-scale-codec/std",
+	"scale-info/std",
+	"ethereum-types/std",
+	"ethereum/std",
+	"fp-evm/std",
+	"frame-support/std",
+	"pallet-treasury/std",
+	"frame-system/std",
+	"pallet-membership/std",
+	"pallet-collective/std",
+	"sp-std/std",
+	"sp-runtime/std",
+	"sp-core/std",
+	"sp-io/std",
+	"fp-evm/std",
+	"pallet-assets/std",
+	"pallet-evm/std",
+	"pallet-contracts/std",
+	"pallet-evm-precompile-assets-erc20/std",
+	"pallet-evm-precompile-dispatch/std",
+	"sp-arithmetic/std",
+]
+runtime-benchmarks = [
+
+	"pallet-assets/runtime-benchmarks",
+	"frame-support/runtime-benchmarks",
+	"frame-system/runtime-benchmarks",
+	"pallet-contracts/runtime-benchmarks",
+	"pallet-evm/runtime-benchmarks",
+	"pallet-evm-precompile-assets-erc20/runtime-benchmarks",
+	"sp-runtime/runtime-benchmarks",
+	"pallet-collective/runtime-benchmarks",
+	"pallet-membership/runtime-benchmarks",
+	"pallet-treasury/runtime-benchmarks",
+]
+try-runtime = [
+	"pallet-contracts/try-runtime",
+	"frame-support/try-runtime",
+	"frame-system/try-runtime",
+	"pallet-assets/try-runtime",
+	"pallet-evm/try-runtime",
+	"sp-runtime/try-runtime",
+	"pallet-collective/try-runtime",
+	"pallet-membership/try-runtime",
+	"pallet-treasury/try-runtime",
+]

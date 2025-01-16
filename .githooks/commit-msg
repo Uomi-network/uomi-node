@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# Conventional Commit message hook
+# Called by "git commit" with one argument, the name of the file
+# that has the commit message.
+#
+# To enable this hook, rename this file to "commit-msg"
+
+commit_msg_file=$1
+commit_msg=$(head -n1 "$commit_msg_file")
+
+# Pattern for conventional commits
+conventional_pattern="^(feat|fix|docs|style|refactor|test|chore)(\([a-z-]+\))?: .+"
+
+if ! echo "$commit_msg" | grep -Eq "$conventional_pattern"; then
+    echo "❌ Invalid commit message format!"
+    echo "Commit message must follow the pattern:"
+    echo "  type(scope): description"
+    echo ""
+    echo "Examples:"
+    echo "  feat(auth): add login system"
+    echo "  fix(db): resolve connection issue"
+    echo "  docs: update README"
+    echo ""
+    echo "Valid types: feat, fix, docs, style, refactor, test, chore"
+    echo ""
+    echo "Your commit message: $commit_msg"
+    exit 1
+fi
+
+exit 0
