@@ -102,6 +102,7 @@ jobs:
           cd $GITHUB_WORKSPACE/runtime/uomi
           cargo set-version ${{ steps.new_version.outputs.new_version }}
 
+
       - name: Update runtime finney Cargo.toml
         run: |
           cd $GITHUB_WORKSPACE/runtime/finney
