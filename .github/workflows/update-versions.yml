@@ -50,14 +50,10 @@ jobs:
         with:
           fetch-depth: 0
           
-
       - name: Setup Git
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install cargo-edit
-        run: cargo install cargo-edit
 
       - name: Get latest tag
         id: get_tag
@@ -96,27 +92,25 @@ jobs:
           echo "minor=$minor" >> $GITHUB_OUTPUT
           echo "patch=$patch" >> $GITHUB_OUTPUT
 
-    
-      - name: Update runtime uomi Cargo.toml
+      - name: Update Cargo.toml versions
         run: |
-          cd $GITHUB_WORKSPACE/runtime/uomi
-          cargo set-version ${{ steps.new_version.outputs.new_version }}
+          # Function to update version in Cargo.toml
+          update_version() {
+            local file=$1
+            local new_version=$2
+            if [ -f "$file" ]; then
+              sed -i "s/^version = \".*\"/version = \"$new_version\"/" "$file"
+              echo "Updated version in $file to $new_version"
+            else
+              echo "Warning: $file not found"
+            fi
+          }
 
-
-      - name: Update runtime finney Cargo.toml
-        run: |
-          cd $GITHUB_WORKSPACE/runtime/finney
-          cargo set-version ${{ steps.new_version.outputs.new_version }}
-
-      - name: Update runtime local Cargo.toml
-        run: |
-          cd $GITHUB_WORKSPACE/runtime/local
-          cargo set-version ${{ steps.new_version.outputs.new_version }}
-
-      - name: Update node Cargo.toml
-        run: |
-          cd $GITHUB_WORKSPACE/node
-          cargo set-version ${{ steps.new_version.outputs.new_version }}
+          # Update versions in all Cargo.toml files
+          update_version "runtime/uomi/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
+          update_version "runtime/finney/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
+          update_version "runtime/local/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
+          update_version "node/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
 
       - name: Generate Changelog
         id: changelog
