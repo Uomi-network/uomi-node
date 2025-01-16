@@ -71,6 +71,7 @@ jobs:
           # Split version into parts
           IFS='.' read -r major minor patch <<< "${{ steps.get_tag.outputs.current_version }}"
           
+          
           # Update version based on release type
           if [[ "${{ needs.check-commit.outputs.release_type }}" == "major" ]]; then
             major=$((major + 1))
