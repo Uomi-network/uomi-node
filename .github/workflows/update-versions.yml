@@ -132,6 +132,8 @@ jobs:
           echo "" >> CHANGELOG.md
 
       - name: Create Release
+        env:
+            GH_TOKEN: ${{ github.token }}
         run: |
           # Commit version changes
           git add .
