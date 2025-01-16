@@ -1,3 +1,10 @@
+name: Update Versions
+
+on:
+  push:
+    branches:
+      - main
+
 jobs:
   check-commit:
     runs-on: ubuntu-latest
