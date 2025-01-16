@@ -225,8 +225,7 @@ impl<T: Config> Pallet<T> {
                 &mut store,
                 move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
                     let data_to_write = generate_data_for_wasm(input_data_as_vec.clone());
-                    log::info!("call get input data from wasm");
-                
+
                     let memory = caller
                         .get_export("memory")
                         .and_then(wasmi::Extern::into_memory)
@@ -241,8 +240,6 @@ impl<T: Config> Pallet<T> {
             let get_input_file = wasmi::Func::wrap(
                 &mut store,
                 move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
-                    log::info!("call get input file from wasm");
-
                     let file = T::IpfsPallet::get_file(&input_file_cid).unwrap();
                     let data_to_write = generate_data_for_wasm(file);
 
@@ -260,7 +257,6 @@ impl<T: Config> Pallet<T> {
             let set_output = wasmi::Func::wrap(
                 &mut store,
                 |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
-                    log::info!("call set output from wasm");
                     let memory = caller
                         .get_export("memory")
                         .and_then(wasmi::Extern::into_memory)
@@ -278,7 +274,6 @@ impl<T: Config> Pallet<T> {
             let call_ai = wasmi::Func::wrap(
                 &mut store,
                 move |mut caller: wasmi::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-                    log::info!("call call ai from wasm");
                     let memory = caller
                         .get_export("memory")
                         .and_then(wasmi::Extern::into_memory)
@@ -378,44 +373,43 @@ impl<T: Config> Pallet<T> {
             let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
             let wasm_run = instance.get_typed_func::<(), ()>(&store, "run")?;
 
-            // BACKUP TIMEOUT USING THREADS -> not working because of change of context
-            // // Calculate the timeout for the execution of the request
-            // // The timeout should be calculated as expiration_block_number - current_block
-            // // If timeout is > nft_execution_max_time - 2, timeout should be nft_execution_max_time - 2
-            // // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
-            // let current_block = <frame_system::Pallet<T>>::block_number();
-            // let timeout_blocks_max = nft_execution_max_time - U256::from(3); // 2 + 1 to be sure
-            // let mut timeout_blocks = expiration_block_number - current_block;
-            // if timeout_blocks > timeout_blocks_max {
-            //     timeout_blocks = nft_execution_max_time - U256::from(3); // 2 + 1 to be sure
-            // }
-            // let timeout_time = timeout_blocks * U256::from(BlockTime::get());
-            // let timeout_time_ms = timeout_time.low_u64() as u64 * 1000;
+            // Calculate the timeout for the execution of the request
+            // The timeout should be calculated as expiration_block_number - current_block
+            // If timeout is > nft_execution_max_time - 2, timeout should be nft_execution_max_time - 2
+            // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
+            let current_block = <frame_system::Pallet<T>>::block_number();
+            let timeout_blocks_max = nft_execution_max_time - U256::from(2);
+            let mut timeout_blocks = expiration_block_number - current_block;
+            if timeout_blocks > timeout_blocks_max {
+                timeout_blocks = nft_execution_max_time - U256::from(2);
+            }
+            let timeout_time = timeout_blocks * U256::from(BlockTime::get());
+            let timeout_time_ms = timeout_time.low_u64() as u64 * 1000;
 
-            // // Create a channel to communicate between threads
-            // let (tx, rx) = std::sync::mpsc::channel();
+            // Create a channel to communicate between threads
+            let (tx, rx) = std::sync::mpsc::channel();
 
-            // // Run the function in a separate thread
-            // std::thread::spawn(move || {
-            //     wasm_run.call(&mut store, ()).unwrap();
-            //     tx.send(store.into_data()).unwrap();
-            // });
+            // Run the function in a separate thread
+            std::thread::spawn(move || {
+                wasm_run.call(&mut store, ()).unwrap();
+                tx.send(store.into_data()).unwrap();
+            });
 
-            // // Wait for timeout_time_ms or until the function completes
-            // let store_data = match rx.recv_timeout(std::time::Duration::from_millis(timeout_time_ms)) {
-            //     Ok(store_data) => {
-            //         log::info!("WASM execution completed successfully");
-            //         store_data
-            //     },
-            //     Err(_) => {
-            //         log::error!("WASM execution timeout");
-            //         return Err(wasmi::Error::new("WASM execution timeout"));
-            //     },
-            // };
+            // Wait for timeout_time_ms or until the function completes
+            let store_data = match rx.recv_timeout(std::time::Duration::from_millis(timeout_time_ms)) {
+                Ok(store_data) => {
+                    log::info!("WASM execution completed successfully");
+                    store_data
+                },
+                Err(_) => {
+                    log::error!("WASM execution timeout");
+                    return Err(wasmi::Error::new("WASM execution timeout"));
+                },
+            };
 
-            // Run the function
-            wasm_run.call(&mut store, ())?;
-            let store_data = store.into_data();
+            // // Run the function
+            // wasm_run.call(&mut store, ())?;
+            // let store_data = store.into_data();
 
             // Convert the store_data to a BoundedVec. If the store_data is too big, it will be converted to an empty BoundedVec
             let store_data_bounded: Data = store_data
@@ -442,8 +436,6 @@ impl<T: Config> Pallet<T> {
         if final_local_name == Data::default() {
             return Err(DispatchError::Other("Error getting the model name from the AiModels storage - final_local_name is empty"));
         }
-        
-        log::info!("Call AI with final local name: {:?}", final_local_name);
 
         let url = "http://localhost:8888/run";
         let input_data = String::from_utf8(input).map_err(|_| {
@@ -464,32 +456,22 @@ impl<T: Config> Pallet<T> {
              .replace('\t', "\\t")   // Handle tabs
         }
         let body: String = format!("{{\"model\": \"{}\", \"input\": \"{}\"}}", model, escape_json_string(&input_data));
-        log::info!("UOMI-ENGINE: Sending HTTP request to {}", url);
-        log::debug!("UOMI-ENGINE: Request body: {}", body);
-    
+
         let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
         request = request
             .add_header("Content-Type", "application/json")
             .add_header("Accept", "application/json");
-    
-        log::info!("UOMI-ENGINE: Sending request...");
+
         let pending = match request.send() {
-            Ok(pending_request) => {
-                log::info!("UOMI-ENGINE: Request sent successfully");
-                pending_request
-            },
+            Ok(pending_request) => pending_request,
             Err(e) => {
                 log::error!("UOMI-ENGINE: Failed to send HTTP request: {:?}", e);
                 return Err(DispatchError::Other("Failed to send HTTP request"));
             }
         };
     
-        log::info!("UOMI-ENGINE: Waiting for response...");
         let response = match pending.wait() {
-            Ok(response) => {
-                log::info!("UOMI-ENGINE: Received response with status: {}", response.code);
-                response
-            },
+            Ok(response) => response,
             Err(e) => {
                 log::error!("UOMI-ENGINE: HTTP request failed after sending: {:?}", e);
                 return Err(DispatchError::Other("HTTP request failed after sending"));
@@ -506,14 +488,12 @@ impl<T: Config> Pallet<T> {
             return Err(DispatchError::Other("Error response from AI service"));
         }
     
-        log::info!("UOMI-ENGINE: Processing response body");
         let response_body = response.body().collect::<Vec<u8>>();
         let output: Data = response_body.try_into().map_err(|_| {
             log::error!("UOMI-ENGINE: Failed to convert response body to Data type");
             DispatchError::Other("Failed to convert response body")
         })?;
-    
-        log::info!("UOMI-ENGINE: Successfully processed AI response");
+
         Ok(output.to_vec())
     }
     
