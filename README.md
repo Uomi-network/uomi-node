@@ -54,7 +54,6 @@ You can run a node and connect to the Uomi network by running the following comm
 --name <node display name>  \
 --port 30333 \
 --rpc-port 9944 \
---telemetry-url "wss://telemetry.polkadot.io/submit/ 0" \
 --validator
 ```
 
@@ -98,7 +97,7 @@ Defining _features_ in the root `Cargo.toml` is additive with the features defin
 Running node locally for development purposes is simple. After the node is compiled (see above), run the following command:
 
 ```bash
-./target/release/uomi --base-path /tmp/alice --dev --alice --port 30333 --rpc-port 9944 --node-key 0000000000000000000000000000000000000000000000000000000000000001 --telemetry-url "wss://telemetry.polkadot.io/submit/ 0" --validator
+./target/release/uomi --base-path /tmp/alice --dev --alice 
 ```
 
 To start multiple nodes you can use **foreman**. First, install it with `gem install foreman`. Then run the following command:
@@ -107,7 +106,7 @@ To start multiple nodes you can use **foreman**. First, install it with `gem ins
 foreman start -f Procfile.dev
 ``` 
 
-After the setup of nodes you need to insert pallets on the keystore using the following command:
+After the setup of nodes you need to insert keys inside the pallets using the following command:
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -134,3 +133,4 @@ curl -H "Content-Type: application/json" \
 -d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["ipfs", "Charlie//stash", "0x1e07379407fecc4b89eb7dbd287c2c781cfb1907a96947a3eb18e4f8e7198625"]}' \
 http://localhost:9946
 ```
+
