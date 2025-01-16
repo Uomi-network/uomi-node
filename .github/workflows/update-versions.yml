@@ -70,20 +70,11 @@ jobs:
         run: |
           # Split version into parts
           IFS='.' read -r major minor patch <<< "${{ steps.get_tag.outputs.current_version }}"
-          
-          
-          # Update version based on release type
-          if [[ "${{ needs.check-commit.outputs.release_type }}" == "major" ]]; then
-            major=$((major + 1))
-            minor=0
-            patch=0
-          elif [[ "${{ needs.check-commit.outputs.release_type }}" == "minor" ]]; then
-            minor=$((minor + 1))
-            patch=0
-          else
-            patch=$((patch + 1))
-          fi
-          
+      
+          major=$((major + 1))
+          minor=0
+          patch=0
+                    
           NEW_VERSION="$major.$minor.$patch"
           echo "New version will be: $NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
@@ -112,6 +103,16 @@ jobs:
           update_version "runtime/finney/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
           update_version "runtime/local/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
           update_version "node/Cargo.toml" "${{ steps.new_version.outputs.new_version }}"
+
+      - name: Update README.md version
+        run: |
+          # Update the version badge in README.md
+          if [ -f "README.md" ]; then
+            sed -i "s|https://badgen.net/badge/version/[0-9]\+\.[0-9]\+\.[0-9]\+/blue|https://badgen.net/badge/version/${{ steps.new_version.outputs.new_version }}/blue|" README.md
+            echo "Updated version badge in README.md to ${{ steps.new_version.outputs.new_version }}"
+          else
+            echo "Warning: README.md not found"
+          fi
 
       - name: Generate Changelog
         id: changelog
