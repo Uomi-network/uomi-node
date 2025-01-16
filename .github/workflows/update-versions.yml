@@ -96,14 +96,20 @@ jobs:
           echo "minor=$minor" >> $GITHUB_OUTPUT
           echo "patch=$patch" >> $GITHUB_OUTPUT
 
-      - name: Update root Cargo.toml
+    
+      - name: Update runtime uomi Cargo.toml
         run: |
-          cd $GITHUB_WORKSPACE
+          cd $GITHUB_WORKSPACE/runtime/uomi
           cargo set-version ${{ steps.new_version.outputs.new_version }}
 
-      - name: Update runtime Cargo.toml
+      - name: Update runtime finney Cargo.toml
         run: |
-          cd $GITHUB_WORKSPACE/runtime
+          cd $GITHUB_WORKSPACE/runtime/finney
+          cargo set-version ${{ steps.new_version.outputs.new_version }}
+
+      - name: Update runtime local Cargo.toml
+        run: |
+          cd $GITHUB_WORKSPACE/runtime/local
           cargo set-version ${{ steps.new_version.outputs.new_version }}
 
       - name: Update node Cargo.toml
