@@ -32,6 +32,7 @@ jobs:
               echo "release_type=patch" >> $GITHUB_OUTPUT
             fi
             
+            
             echo "Commit message contains 'new release', will update versions"
           else
             echo "should_release=false" >> $GITHUB_OUTPUT
