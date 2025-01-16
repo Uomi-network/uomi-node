@@ -1,10 +1,3 @@
-name: Update Versions
-
-on:
-  push:
-    branches:
-      - main
-
 jobs:
   check-commit:
     runs-on: ubuntu-latest
@@ -70,11 +63,23 @@ jobs:
         run: |
           # Split version into parts
           IFS='.' read -r major minor patch <<< "${{ steps.get_tag.outputs.current_version }}"
-      
-          major=$((major + 1))
-          minor=0
-          patch=0
-                    
+          
+          # Update version based on release type
+          case "${{ needs.check-commit.outputs.release_type }}" in
+            "major")
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            "minor")
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            "patch")
+              patch=$((patch + 1))
+              ;;
+          esac
+          
           NEW_VERSION="$major.$minor.$patch"
           echo "New version will be: $NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
