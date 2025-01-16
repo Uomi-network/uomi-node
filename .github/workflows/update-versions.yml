@@ -1,0 +1,171 @@
+name: Update Versions
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  check-commit:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check_commit.outputs.should_release }}
+      release_type: ${{ steps.check_commit.outputs.release_type }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Check commit message
+        id: check_commit
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+          if [[ "$COMMIT_MSG" == *"new release"* ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            
+            # Determine release type (major, minor, patch)
+            if [[ "$COMMIT_MSG" == *"major release"* ]]; then
+              echo "release_type=major" >> $GITHUB_OUTPUT
+            elif [[ "$COMMIT_MSG" == *"minor release"* ]]; then
+              echo "release_type=minor" >> $GITHUB_OUTPUT
+            else
+              echo "release_type=patch" >> $GITHUB_OUTPUT
+            fi
+            
+            echo "Commit message contains 'new release', will update versions"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "release_type=none" >> $GITHUB_OUTPUT
+            echo "Commit message does not contain 'new release', skipping version update"
+          fi
+
+  update-versions:
+    needs: check-commit
+    if: needs.check-commit.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # Get the latest tag or start from 0.0.0 if no tags exist
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
+          # Remove 'v' prefix and store
+          CURRENT_VERSION=${LATEST_TAG#v}
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Calculate new version
+        id: new_version
+        run: |
+          # Split version into parts
+          IFS='.' read -r major minor patch <<< "${{ steps.get_tag.outputs.current_version }}"
+          
+          # Update version based on release type
+          if [[ "${{ needs.check-commit.outputs.release_type }}" == "major" ]]; then
+            major=$((major + 1))
+            minor=0
+            patch=0
+          elif [[ "${{ needs.check-commit.outputs.release_type }}" == "minor" ]]; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          
+          NEW_VERSION="$major.$minor.$patch"
+          echo "New version will be: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          # Store version parts for changelog
+          echo "major=$major" >> $GITHUB_OUTPUT
+          echo "minor=$minor" >> $GITHUB_OUTPUT
+          echo "patch=$patch" >> $GITHUB_OUTPUT
+
+      - name: Update root Cargo.toml
+        run: |
+          cd $GITHUB_WORKSPACE
+          cargo set-version ${{ steps.new_version.outputs.new_version }}
+
+      - name: Update runtime Cargo.toml
+        run: |
+          cd $GITHUB_WORKSPACE/runtime
+          cargo set-version ${{ steps.new_version.outputs.new_version }}
+
+      - name: Update node Cargo.toml
+        run: |
+          cd $GITHUB_WORKSPACE/node
+          cargo set-version ${{ steps.new_version.outputs.new_version }}
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          # Get all commits since last tag
+          COMMITS=$(git log $(git describe --tags --abbrev=0)..HEAD --pretty=format:"- %s")
+          
+          # Create changelog content
+          echo "# Changelog for v${{ steps.new_version.outputs.new_version }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## Changes" >> CHANGELOG.md
+          echo "$COMMITS" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Commit version changes
+          git add .
+          git commit -m "chore: bump version to ${{ steps.new_version.outputs.new_version }}"
+          git tag -a "v${{ steps.new_version.outputs.new_version }}" -m "Version ${{ steps.new_version.outputs.new_version }}"
+          
+          # Push changes and tag
+          git push origin main
+          git push origin "v${{ steps.new_version.outputs.new_version }}"
+          
+          # Create GitHub release with changelog
+          gh release create "v${{ steps.new_version.outputs.new_version }}" \
+            --title "Release v${{ steps.new_version.outputs.new_version }}" \
+            --notes-file CHANGELOG.md \
+            --draft=false \
+            --prerelease=false
+
+      - name: Notify Success
+        if: success()
+        run: |
+          echo "::notice::Successfully released version ${{ steps.new_version.outputs.new_version }}"
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          echo "::error::Failed to release new version"
+
+  notify-discord:
+    needs: [check-commit, update-versions]
+    if: needs.check-commit.outputs.should_release == 'true' && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord Notification
+        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        uses: Ilshidur/action-discord@master
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        with:
+          args: |
+            ${{ needs.update-versions.result == 'success' 
+              && format('Successfully released version {0}! 🎉', needs.update-versions.outputs.new_version)
+              || format('Failed to release new version ❌') }}
