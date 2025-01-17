@@ -386,12 +386,10 @@ pub mod pallet {
         ) -> DispatchResult {
             let _who = ensure_none(origin)?;
 
-            log::info!("IPFS: Submit processed pins and unpins");
-
-            ensure!(
-                Self::is_validator(&payload.public.clone().into_account()),
-                "Only validators can call this function"
-            );
+            if !Self::is_validator(&payload.public.clone().into_account()) {
+                log::error!("IPFS: Only validators can call submit_processed_pins");
+                return Err(DispatchError::Other("Only validators can call submit_processed_pins"));
+            }
 
             for (cid, _expires_at) in payload.to_save {
                 let _ = add_node_pin::<T>(&cid.clone(), &payload.public.clone().into_account());
@@ -410,8 +408,6 @@ pub mod pallet {
                     cid: cid.to_vec(),
                 });
             }
-
-            log::info!("IPFS: Processed pins and unpins");
 
             Ok(())
         }
@@ -476,11 +472,6 @@ pub mod pallet {
                     return None;
                 }
             };
-
-            // TEMPORARY: Calculate the byte size of operations
-            let operations_size = operations.0.len() + operations.1.len();
-            log::info!("IPFS: operations_size: {:?}", operations_size);
-            log::info!("IPFS: operations: {:?}", operations);
 
             Some(Call::set_inherent_data {
                 operations,
@@ -578,6 +569,7 @@ pub mod pallet {
             let signer = Signer::<T, T::AuthorityId>::all_accounts();
 
             if !signer.can_sign() {
+                log::error!("IPFS: No accounts available to sign call_process_pins");
                 return Err(DispatchError::Other("IPFS: No accounts available to sign"));
             }
 
@@ -617,6 +609,7 @@ pub mod pallet {
                 }
                 match Self::offchain_pin_file(cid.clone()) {
                     Ok(_) => {
+                        log::info!("IPFS: File pinned: {:?}", cid);
                         to_save.push((cid, config));
                     }
                     Err(e) => {
@@ -640,6 +633,7 @@ pub mod pallet {
                 if !CidsStatus::<T>::contains_key(&cid) {
                     match Self::offchain_unpin_file(cid.clone()) {
                         Ok(_) => {
+                            log::info!("IPFS: File unpinned: {:?}", cid);
                             to_remove.push((cid.clone(), config));
                         }
                         Err(e) => {

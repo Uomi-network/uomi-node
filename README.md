@@ -110,7 +110,7 @@ After the setup of nodes you need to insert keys inside the pallets using the fo
 
 ```bash
 curl -H "Content-Type: application/json" \
--d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["ipfs", "//Alice//stash", "0x3e59bf9d93a34c3d5e4ef59b11e4882bbde3848bff69d2ed891e32efb9722224"]}' \
+-d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["ipfs", "//Alice//stash", "0xbe5ddb1579b72e84524fc29e78609e3caf42e85aa118ebfe0b0ad404b5bdd25f"]}' \
 http://localhost:9944 
 
 curl -H "Content-Type: application/json" \

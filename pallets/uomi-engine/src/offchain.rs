@@ -506,7 +506,6 @@ impl<T: Config> Pallet<T> {
 
     pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
-            let _ = AIModels::<T>::get(&model); // We need to simulate access to storages to be sure function is called on correct externalities
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
         }
@@ -585,7 +584,6 @@ impl<T: Config> Pallet<T> {
     fn offcahin_worker_get_cid_file(cid: Cid, block_number: BlockNumber) -> Result<Vec<u8>, DispatchError> {
         let file;
         if cfg!(test) { // In tests, we use the cid as file
-            let _ = T::IpfsPallet::get_file(&cid); // We need to simulate access to storages to be sure function is called on correct externalities
             file = cid.to_vec();
         } else {
             let ipfs_min_expire_duration = U256::from(MinExpireDuration::get());
