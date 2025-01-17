@@ -100,12 +100,8 @@ impl<T: Config> Pallet<T> {
         match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_execution_max_time) {
             Ok(output_data) => {
                 log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
-                
-                let output_data_fake =  "bad node".as_bytes().to_vec();
-                //convert output_data_fake to BoundedVec<u8, MaxDataSize>
-                let output_data_fake: Data = output_data_fake.try_into().unwrap();
                 // Store the output data
-                Self::offchain_store_output_data(&request_id, &output_data_fake).unwrap_or_else(|e| {
+                Self::offchain_store_output_data(&request_id, &output_data).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Unlock the semaphore
