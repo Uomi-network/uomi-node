@@ -466,9 +466,9 @@ fn test_offchain_run_wasm_function_with_infinite_wasm() {
         let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(2), U256::from(2));
         assert!(result.is_err());
 
-        // Be sure error message is "WASM execution timeout"
+        // Be sure error message is "WASM execution error"
         let error = result.err().unwrap();
-        assert_eq!(error.to_string(), "WASM execution timeout");
+        assert_eq!(error.to_string(), "WASM execution error");
     });
 }
 

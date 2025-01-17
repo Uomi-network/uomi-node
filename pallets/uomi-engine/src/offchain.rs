@@ -197,192 +197,301 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmi::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
 
         // Calculate the timeout for the execution of the request
-        // The timeout should be calculated as expiration_block_number - current_block
+        // The timeout should be calculated as expiration_block_number - start_block
         // If timeout is > nft_execution_max_time - 2, timeout should be nft_execution_max_time - 2
         // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
-        let current_block = <frame_system::Pallet<T>>::block_number();
+        let start_block = <frame_system::Pallet<T>>::block_number();
         let timeout_blocks_max = nft_execution_max_time - U256::from(2);
-        let mut timeout_blocks = expiration_block_number - current_block;
+        let mut timeout_blocks = expiration_block_number - start_block;
         if timeout_blocks > timeout_blocks_max {
             timeout_blocks = nft_execution_max_time - U256::from(2);
         }
         let timeout_time = timeout_blocks * U256::from(BlockTime::get());
+        let timeout_time_cs = timeout_time.low_u64() as u64 * 10;
         let timeout_time_ms = timeout_time.low_u64() as u64 * 1000;
 
         type HostState = Vec<u8>;
-        let mut config = wasmi::Config::default();
-        config.consume_fuel(true);
-        let engine = wasmi::Engine::new(&config);
-        let module = wasmi::Module::new(&engine, &wasm[..])?;
-        let mut store = wasmi::Store::new(&engine, HostState::new());
-        let _ = store.set_fuel(100_000_000);
+        let mut config = wasmtime::Config::new();
+        config.epoch_interruption(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let mut store = wasmtime::Store::new(&engine, HostState::new());
+        store.set_epoch_deadline(timeout_time_cs);
+        store.epoch_deadline_trap();
+        let module = wasmtime::Module::new(&engine, &wasm)?;
 
-        let get_input_data = wasmi::Func::wrap(
-            &mut store,
-            move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
-                let data_to_write = Self::offchain_worker_generate_data_for_wasm(input_data_as_vec.clone());
+        let get_input_data = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, _len: i32| {
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(input_data_as_vec.clone());
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
 
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-    
-                memory
-                    .write(&mut caller, ptr as usize, &data_to_write)
-                    .expect("Failed to write memory");
+        let get_input_file = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, _len: i32| {
+            let file = T::IpfsPallet::get_file(&input_file_cid).unwrap();
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
+        let set_output = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            *caller.data_mut() = buffer;
+        };
+
+        let call_ai = move |mut caller: wasmtime::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            let model = AiModelKey::from(model as u32);
+            let output = Self::offchain_worker_call_ai(model, block_number, buffer).unwrap();
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
+        let get_cid_file = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            let cid = Cid::try_from(buffer).unwrap();
+            let file = Self::offcahin_worker_get_cid_file(cid, block_number).unwrap();
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
+        let console_log = move |mut caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
+            // Do nothing, function exposed to help wasm debugging
+        };
+
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker.func_wrap("env", "get_input_file", get_input_file).unwrap();
+        linker.func_wrap("env", "get_input_data", get_input_data).unwrap();
+        linker.func_wrap("env", "set_output", set_output).unwrap();
+        linker.func_wrap("env", "call_ai", call_ai).unwrap();
+        linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
+        linker.func_wrap("env", "console_log", console_log).unwrap();
+
+        let instance = linker.instantiate(&mut store, &module)?;
+        let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
+
+        // Start a thread to increment the epoch counter
+        let mut time_passed_ms = 0;
+        let engine_clone = engine.clone();
+        std::thread::spawn(move || {
+            while time_passed_ms < timeout_time_ms {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                engine_clone.increment_epoch();
+                time_passed_ms += 100;
             }
-        );
+        });
 
-        let get_input_file = wasmi::Func::wrap(
-            &mut store,
-            move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
-                let file = T::IpfsPallet::get_file(&input_file_cid).unwrap();
-                let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
-
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-    
-                memory
-                    .write(&mut caller, ptr as usize, &data_to_write)
-                    .expect("Failed to write memory");
+        match run.call(&mut store, ()) {
+            Ok(_) => {
+                let stored_data = store.data().clone();
+                let data: Data = stored_data.try_into().unwrap_or_else(|_| Data::default());
+                Ok(data)
             }
-        );
-
-        let set_output = wasmi::Func::wrap(
-            &mut store,
-            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-    
-                let mut buffer = vec![0u8; len as usize];
-                memory
-                    .read(&caller, ptr as usize, &mut buffer)
-                    .expect("Failed to read memory");
-    
-                *caller.data_mut() = buffer;
+            Err(err) => {
+                log::error!("UOMI-ENGINE: WASM execution error: {:?}", err);
+                Err(wasmtime::Error::new(std::io::Error::new(std::io::ErrorKind::Other, "WASM execution error")))
             }
-        );
-
-        let call_ai = wasmi::Func::wrap(
-            &mut store,
-            move |mut caller: wasmi::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-
-                let mut buffer = vec![0u8; len as usize];
-
-                memory
-                    .read(&caller, ptr as usize, &mut buffer)
-                    .expect("Failed to read memory");
-
-                let model = AiModelKey::from(model as u32);
-
-                let output = Self::offchain_worker_call_ai(model, block_number, buffer).unwrap();
-                let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
-
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-
-                memory
-                    .write(&mut caller, output_ptr as usize, &data_to_write)
-                    .expect("Failed to write memory");
-            }
-        );
-
-        let get_cid_file = wasmi::Func::wrap(
-            &mut store,
-            move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-
-                let mut buffer = vec![0u8; len as usize];
-
-                memory
-                    .read(&caller, ptr as usize, &mut buffer)
-                    .expect("Failed to read memory");
-
-                let cid = Cid::try_from(buffer).unwrap();
-                
-                let file = Self::offcahin_worker_get_cid_file(cid, block_number).unwrap();
-                let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
-
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(wasmi::Extern::into_memory)
-                    .expect("Failed to get memory export");
-
-                memory
-                    .write(&mut caller, output_ptr as usize, &data_to_write)
-                    .expect("Failed to write memory");
-            }
-        );
-
-        let console_log = wasmi::Func::wrap(
-            &mut store,
-            |_caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| {
-                // Do nothing, function exposed to help wasm debugging
-            }
-        );
-
-        let mut linker: wasmi::Linker<Vec<u8>> = wasmi::Linker::new(&engine);
-        linker.define("env", "get_input_data", get_input_data)?;
-        linker.define("env", "get_input_file", get_input_file)?;
-        linker.define("env", "set_output", set_output)?;
-        linker.define("env", "call_ai", call_ai)?;
-        linker.define("env", "get_cid_file", get_cid_file)?;
-        linker.define("env", "console_log", console_log)?;
-
-        let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
-        let wasm_run = instance.get_typed_func::<(), ()>(&store, "run")?;
-
-        // // Create a channel to communicate between threads
-        // let (tx, rx) = std::sync::mpsc::channel();
-
-        // // Run the function in a separate thread
-        // std::thread::spawn(move || {
-        //     wasm_run.call(&mut store, ()).unwrap();
-        //     tx.send(store.into_data()).unwrap();
-        // });
-
-        // // Wait for timeout_time_ms or until the function completes
-        // let store_data = match rx.recv_timeout(std::time::Duration::from_millis(timeout_time_ms)) {
-        //     Ok(store_data) => {
-        //         log::info!("WASM execution completed successfully");
-        //         store_data
-        //     },
-        //     Err(_) => {
-        //         log::error!("WASM execution timeout");
-        //         return Err(wasmi::Error::new("WASM execution timeout"));
-        //     },
-        // };
-
-        // // Run the function
-        wasm_run.call(&mut store, ())?;
-        let store_data = store.into_data();
-
-        // Convert the store_data to a BoundedVec. If the store_data is too big, it will be converted to an empty BoundedVec
-        let store_data_bounded: Data = store_data
-            .clone()
-            .try_into()
-            .unwrap_or_else(|_| Data::default());
-
-        Ok(store_data_bounded)        
+        }
     }
+
+    // BACKUP IMPLEMENTATION WITH WASMI
+    // Need wasmi = { version = "0.35", default-features = false } on Cargo.toml
+    // #[cfg(feature = "std")]
+    // pub fn wasmi_offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmi::Error> {
+    //     // Convert input_data to a Vec<u8>
+    //     let input_data_as_vec = input_data.to_vec();
+
+    //     // Calculate the timeout for the execution of the request
+    //     // The timeout should be calculated as expiration_block_number - current_block
+    //     // If timeout is > nft_execution_max_time - 2, timeout should be nft_execution_max_time - 2
+    //     // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
+    //     let current_block = <frame_system::Pallet<T>>::block_number();
+    //     let timeout_blocks_max = nft_execution_max_time - U256::from(2);
+    //     let mut timeout_blocks = expiration_block_number - current_block;
+    //     if timeout_blocks > timeout_blocks_max {
+    //         timeout_blocks = nft_execution_max_time - U256::from(2);
+    //     }
+    //     let timeout_time = timeout_blocks * U256::from(BlockTime::get());
+    //     let timeout_time_ms = timeout_time.low_u64() as u64 * 1000;
+
+    //     type HostState = Vec<u8>;
+    //     let mut config = wasmi::Config::default();
+    //     config.consume_fuel(true);
+    //     let engine = wasmi::Engine::new(&config);
+    //     let module = wasmi::Module::new(&engine, &wasm[..])?;
+    //     let mut store = wasmi::Store::new(&engine, HostState::new());
+    //     let _ = store.set_fuel(100_000_000);
+
+    //     let get_input_data = wasmi::Func::wrap(
+    //         &mut store,
+    //         move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
+    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(input_data_as_vec.clone());
+
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+    
+    //             memory
+    //                 .write(&mut caller, ptr as usize, &data_to_write)
+    //                 .expect("Failed to write memory");
+    //         }
+    //     );
+
+    //     let get_input_file = wasmi::Func::wrap(
+    //         &mut store,
+    //         move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
+    //             let file = T::IpfsPallet::get_file(&input_file_cid).unwrap();
+    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
+
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+    
+    //             memory
+    //                 .write(&mut caller, ptr as usize, &data_to_write)
+    //                 .expect("Failed to write memory");
+    //         }
+    //     );
+
+    //     let set_output = wasmi::Func::wrap(
+    //         &mut store,
+    //         |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+    
+    //             let mut buffer = vec![0u8; len as usize];
+    //             memory
+    //                 .read(&caller, ptr as usize, &mut buffer)
+    //                 .expect("Failed to read memory");
+    
+    //             *caller.data_mut() = buffer;
+    //         }
+    //     );
+
+    //     let call_ai = wasmi::Func::wrap(
+    //         &mut store,
+    //         move |mut caller: wasmi::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+
+    //             let mut buffer = vec![0u8; len as usize];
+
+    //             memory
+    //                 .read(&caller, ptr as usize, &mut buffer)
+    //                 .expect("Failed to read memory");
+
+    //             let model = AiModelKey::from(model as u32);
+
+    //             let output = Self::offchain_worker_call_ai(model, block_number, buffer).unwrap();
+    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
+
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+
+    //             memory
+    //                 .write(&mut caller, output_ptr as usize, &data_to_write)
+    //                 .expect("Failed to write memory");
+    //         }
+    //     );
+
+    //     let get_cid_file = wasmi::Func::wrap(
+    //         &mut store,
+    //         move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+
+    //             let mut buffer = vec![0u8; len as usize];
+
+    //             memory
+    //                 .read(&caller, ptr as usize, &mut buffer)
+    //                 .expect("Failed to read memory");
+
+    //             let cid = Cid::try_from(buffer).unwrap();
+                
+    //             let file = Self::offcahin_worker_get_cid_file(cid, block_number).unwrap();
+    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
+
+    //             let memory = caller
+    //                 .get_export("memory")
+    //                 .and_then(wasmi::Extern::into_memory)
+    //                 .expect("Failed to get memory export");
+
+    //             memory
+    //                 .write(&mut caller, output_ptr as usize, &data_to_write)
+    //                 .expect("Failed to write memory");
+    //         }
+    //     );
+
+    //     let console_log = wasmi::Func::wrap(
+    //         &mut store,
+    //         |_caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| {
+    //             // Do nothing, function exposed to help wasm debugging
+    //         }
+    //     );
+
+    //     let mut linker: wasmi::Linker<Vec<u8>> = wasmi::Linker::new(&engine);
+    //     linker.define("env", "get_input_data", get_input_data)?;
+    //     linker.define("env", "get_input_file", get_input_file)?;
+    //     linker.define("env", "set_output", set_output)?;
+    //     linker.define("env", "call_ai", call_ai)?;
+    //     linker.define("env", "get_cid_file", get_cid_file)?;
+    //     linker.define("env", "console_log", console_log)?;
+
+    //     let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
+    //     let wasm_run = instance.get_typed_func::<(), ()>(&store, "run")?;
+
+    //     // // Create a channel to communicate between threads
+    //     // let (tx, rx) = std::sync::mpsc::channel();
+
+    //     // // Run the function in a separate thread with same Externalities-provided environment
+    //     // std::thread::spawn(move || {
+    //     //     wasm_run.call(&mut store, ()).unwrap();
+    //     //     tx.send(store.into_data()).unwrap();
+    //     // });
+
+    //     // // Wait for timeout_time_ms or until the function completes
+    //     // let store_data = match rx.recv_timeout(std::time::Duration::from_millis(timeout_time_ms)) {
+    //     //     Ok(store_data) => {
+    //     //         log::info!("WASM execution completed successfully");
+    //     //         store_data
+    //     //     },
+    //     //     Err(_) => {
+    //     //         log::error!("WASM execution timeout");
+    //     //         return Err(wasmi::Error::new("WASM execution timeout"));
+    //     //     },
+    //     // };
+
+    //     // Run the function
+    //     wasm_run.call(&mut store, ())?;
+    //     let store_data = store.into_data();
+
+    //     // Convert the store_data to a BoundedVec. If the store_data is too big, it will be converted to an empty BoundedVec
+    //     let store_data_bounded: Data = store_data
+    //         .clone()
+    //         .try_into()
+    //         .unwrap_or_else(|_| Data::default());
+
+    //     Ok(store_data_bounded)        
+    // }
 
     fn offchain_worker_generate_data_for_wasm(data: Vec<u8>) -> Vec<u8> {
         let data_len = data.len();
@@ -397,6 +506,7 @@ impl<T: Config> Pallet<T> {
 
     pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
+            let _ = AIModels::<T>::get(&model); // We need to simulate access to storages to be sure function is called on correct externalities
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
         }
@@ -475,6 +585,7 @@ impl<T: Config> Pallet<T> {
     fn offcahin_worker_get_cid_file(cid: Cid, block_number: BlockNumber) -> Result<Vec<u8>, DispatchError> {
         let file;
         if cfg!(test) { // In tests, we use the cid as file
+            let _ = T::IpfsPallet::get_file(&cid); // We need to simulate access to storages to be sure function is called on correct externalities
             file = cid.to_vec();
         } else {
             let ipfs_min_expire_duration = U256::from(MinExpireDuration::get());

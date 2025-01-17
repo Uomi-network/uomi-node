@@ -28,8 +28,7 @@ pallet-staking = { workspace = true }
 pallet-session = { workspace = true }
 pallet-ipfs = { workspace = true }
 sp-inherents = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
-wasmi = { version = "0.35", default-features = false }
+wasmtime = { version = "23.0.1" }
 
 # frame deps
 frame-benchmarking = { workspace = true }
