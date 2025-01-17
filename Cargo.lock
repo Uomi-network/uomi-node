@@ -8221,14 +8221,12 @@ dependencies = [
 name = "pallet-uomi-engine"
 version = "0.2.0"
 dependencies = [
- "async-trait",
  "env_logger 0.10.2",
  "frame-benchmarking",
  "frame-election-provider-support",
  "frame-support",
  "frame-system",
  "log",
- "once_cell",
  "pallet-babe",
  "pallet-balances",
  "pallet-election-provider-multi-phase",
@@ -8251,6 +8249,7 @@ dependencies = [
  "sp-staking",
  "sp-std 14.0.0 (git+https://github.com/paritytech/polkadot-sdk?branch=release-polkadot-v1.9.0)",
  "sp-transaction-pool",
+ "tokio",
  "wasmi 0.35.0",
 ]
 

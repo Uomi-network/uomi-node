@@ -28,8 +28,7 @@ pallet-staking = { workspace = true }
 pallet-session = { workspace = true }
 pallet-ipfs = { workspace = true }
 sp-inherents = { workspace = true }
-async-trait = { workspace = true }
-once_cell = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 wasmi = { version = "0.35", default-features = false }
 
 # frame deps
