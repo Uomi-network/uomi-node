@@ -11,7 +11,7 @@ use scale_info::prelude::string::String;
 use scale_info::prelude::format;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-// static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
+static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
@@ -55,23 +55,24 @@ impl<T: Config> Pallet<T> {
 
         // Check semaphore to be sure to do nothing if another agent is running
         // SAFETY: This is safe because offchain workers run in their own thread
-        // let semaphore = unsafe { &SEMAPHORE };
-
-        // if semaphore.compare_exchange(
-        //     false,  // expected value
-        //     true,   // new value
-        //     Ordering::Acquire,
-        //     Ordering::Relaxed
-        // ).is_err() {
-        //     // Another worker is already running
-        //     log::info!("UOMI-ENGINE: Another worker is already running");
-        //     return Ok(());
-        // }
+        let semaphore = unsafe { &SEMAPHORE };
+        if semaphore.compare_exchange(
+            false,  // expected value
+            true,   // new value
+            Ordering::Acquire,
+            Ordering::Relaxed
+        ).is_err() {
+            // Another worker is already running
+            log::info!("UOMI-ENGINE: Another worker is already running");
+            return Ok(());
+        }
 
         // Find the request with less expiration block number to execute
         let (request_id, expiration_block_number) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
             log::info!("UOMI-ENGINE: No requests to run found");
+            // Unlock the semaphore
+            semaphore.store(false, Ordering::Release);
             return Ok(());
         }
         log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
@@ -90,7 +91,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Unlock the semaphore
-                // semaphore.store(false, Ordering::Release);
+                semaphore.store(false, Ordering::Release);
                 return Ok(());
             },
         };
@@ -105,7 +106,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Unlock the semaphore
-                // semaphore.store(false, Ordering::Release);
+                semaphore.store(false, Ordering::Release);
             },
             Err(error) => {
                 log::error!("UOMI-ENGINE: Error running request {:?}: {:?}", request_id, error);
@@ -114,7 +115,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Unlock the semaphore
-                // semaphore.store(false, Ordering::Release);
+                semaphore.store(false, Ordering::Release);
             },
         }
         log::info!("UOMI-ENGINE: Request {:?} completed", request_id);
@@ -203,13 +204,13 @@ impl<T: Config> Pallet<T> {
 
         // Calculate the timeout for the execution of the request
         // The timeout should be calculated as expiration_block_number - start_block
-        // If timeout is > nft_execution_max_time - 2, timeout should be nft_execution_max_time - 2
+        // If timeout is > nft_execution_max_time - 3, timeout should be nft_execution_max_time - 3
         // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
         let start_block = <frame_system::Pallet<T>>::block_number();
-        let timeout_blocks_max = nft_execution_max_time - U256::from(2);
+        let timeout_blocks_max = nft_execution_max_time - U256::from(3);
         let mut timeout_blocks = expiration_block_number - start_block;
         if timeout_blocks > timeout_blocks_max {
-            timeout_blocks = nft_execution_max_time - U256::from(2);
+            timeout_blocks = nft_execution_max_time - U256::from(3);
         }
         let timeout_time = timeout_blocks * U256::from(BlockTime::get());
         let timeout_time_cs = timeout_time.low_u64() as u64 * 10;
