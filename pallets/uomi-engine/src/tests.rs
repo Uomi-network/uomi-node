@@ -463,7 +463,7 @@ fn test_offchain_run_wasm_function_with_infinite_wasm() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(2), U256::from(2));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(3), U256::from(3));
         assert!(result.is_err());
 
         // Be sure error message is "WASM execution error"
