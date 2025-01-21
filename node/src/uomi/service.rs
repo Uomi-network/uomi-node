@@ -252,8 +252,49 @@ pub fn start_node(
     #[cfg(feature = "evm-tracing")] evm_tracing_config: crate::evm_tracing_types::EvmTracingConfig,
 ) -> Result<TaskManager, ServiceError> {
 
-    let ipfs_manager = Arc::new(IpfsManager::new().map_err(|e| ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e)))?);
+    // Load the AI service status by calling localhost:8888/status and get the json response
+    log::info!("🤖 Checking AI service status...");
+    let ai_status = match reqwest::blocking::get("http://localhost:8888/status") {
+        Ok(response) => {
+            match response.json::<serde_json::Value>() {
+                Ok(json) => json,
+                Err(e) => {
+                    log::error!("🚨 Failed to parse AI service status response: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        },
+        Err(e) => {
+            log::error!("🚨 Failed to get AI service status: {}", e);
+            std::process::exit(1);
+        }
+    };
+    // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
+    let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
+    if service_version != pallet_uomi_engine::consts::PALLET_VERSION {
+        log::error!("🚨 AI service version is different from uomiEngine pallet version. Please update the AI service to the same version of uomiEngine pallet.");
+        std::process::exit(1);
+    } else {
+        log::info!("✅ AI service version is the same of uomiEngine pallet version.");
+    }
+    // Check if ai service details.system_valid is true
+    let service_system_valid = ai_status["details"]["system_valid"].as_bool().unwrap();
+    if !service_system_valid {
+        log::error!("🚨 AI service is not running on a valid system. Please check the AI service system requirements.");
+        std::process::exit(1);
+    } else {
+        log::info!("✅ AI service is running on a valid system.");
+    }
+    // Check if ai service details.cuda_available is true
+    let service_cuda_available = ai_status["details"]["cuda_available"].as_bool().unwrap();
+    if !service_cuda_available {
+        log::error!("🚨 AI service is not available to use CUDA. Please enable CUDA on the AI service.");
+        std::process::exit(1);
+    } else {
+        log::info!("✅ AI service is available to use CUDA.");
+    }
 
+    let ipfs_manager = Arc::new(IpfsManager::new().map_err(|e| ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e)))?);
     ipfs_manager.start_daemon().map_err(|e| ServiceError::Other(format!("Failed to start IPFS daemon: {}", e)))?;
    
     let sc_service::PartialComponents {

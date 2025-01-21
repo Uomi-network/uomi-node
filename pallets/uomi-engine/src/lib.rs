@@ -9,8 +9,8 @@ mod mock;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-mod consts;
-mod types;
+pub mod consts;
+pub mod types;
 mod payloads;
 mod offchain;
 mod opoc;
