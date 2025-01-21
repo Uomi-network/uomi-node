@@ -549,66 +549,66 @@ pub mod pallet {
 
             match call {
                 Call::set_inherent_data { opoc_operations, aimodelscalc_operations } => {
-                    // let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
-                    //     Ok(opoc_operations) => {
-                    //         opoc_operations
-                    //     },
-                    //     Err(error) => {
-                    //         log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
-                    //         return Err(InherentError::InvalidInherentValue);
-                    //     },
-                    // };
-                    // let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, nodes_timeouts_operations, outputs_operations, nodes_errors_operations) = opoc_operations;
-                    // let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_nodes_timeouts_operations, expected_outputs_operations, expected_nodes_errors_operations) = expected_opoc_operations;
+                    let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
+                        Ok(opoc_operations) => {
+                            opoc_operations
+                        },
+                        Err(error) => {
+                            log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
+                            return Err(InherentError::InvalidInherentValue);
+                        },
+                    };
+                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, nodes_timeouts_operations, outputs_operations, nodes_errors_operations) = opoc_operations;
+                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_nodes_timeouts_operations, expected_outputs_operations, expected_nodes_errors_operations) = expected_opoc_operations;
                     
-                    // if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
-                    //     log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
-                    //     log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if opoc_assignment_operations != &expected_opoc_assignment_operations {
-                    //     log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
-                    //     log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_works_operations != &expected_nodes_works_operations {
-                    //     log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
-                    //     log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_timeouts_operations != &expected_nodes_timeouts_operations {
-                    //     log::info!("failed check nodes_timeouts_operations: {:?}", nodes_timeouts_operations);
-                    //     log::info!("expected_nodes_timeouts_operations: {:?}", expected_nodes_timeouts_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if outputs_operations != &expected_outputs_operations {
-                    //     log::info!("failed check outputs_operations: {:?}", outputs_operations);
-                    //     log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_errors_operations != &expected_nodes_errors_operations {
-                    //     log::info!("failed check nodes_errors_operations: {:?}", nodes_errors_operations);
-                    //     log::info!("expected_nodes_errors_operations: {:?}", expected_nodes_errors_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
+                    if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
+                        log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
+                        log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if opoc_assignment_operations != &expected_opoc_assignment_operations {
+                        log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
+                        log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_works_operations != &expected_nodes_works_operations {
+                        log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
+                        log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_timeouts_operations != &expected_nodes_timeouts_operations {
+                        log::info!("failed check nodes_timeouts_operations: {:?}", nodes_timeouts_operations);
+                        log::info!("expected_nodes_timeouts_operations: {:?}", expected_nodes_timeouts_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if outputs_operations != &expected_outputs_operations {
+                        log::info!("failed check outputs_operations: {:?}", outputs_operations);
+                        log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_errors_operations != &expected_nodes_errors_operations {
+                        log::info!("failed check nodes_errors_operations: {:?}", nodes_errors_operations);
+                        log::info!("expected_nodes_errors_operations: {:?}", expected_nodes_errors_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
 
-                    // let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
-                    //     Ok(operations) => {
-                    //         operations
-                    //     },
-                    //     Err(error) => {
-                    //         log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
-                    //         return Err(InherentError::InvalidInherentValue);
-                    //     },
-                    // };
+                    let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
+                        Ok(operations) => {
+                            operations
+                        },
+                        Err(error) => {
+                            log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
+                            return Err(InherentError::InvalidInherentValue);
+                        },
+                    };
                     
-                    // if expected_aimodelscalc_operations != *aimodelscalc_operations {
-                    //     log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
-                    //     log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
+                    if expected_aimodelscalc_operations != *aimodelscalc_operations {
+                        log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
+                        log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
 
-                    // log::info!("UOMI-ENGINE: Checking inherent OK");
+                    log::info!("UOMI-ENGINE: Checking inherent OK");
  
                     Ok(())
                 }
