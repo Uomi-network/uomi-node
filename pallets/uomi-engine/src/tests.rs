@@ -448,7 +448,7 @@ fn test_offchain_run_wasm_function_with_valid_wasm() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), U256::from(99));
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -468,7 +468,7 @@ fn test_offchain_run_wasm_function_with_infinite_wasm() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(3), U256::from(3));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(3), U256::from(3));
         assert!(result.is_err());
 
         // Be sure error message is "WASM execution error"
@@ -488,7 +488,7 @@ fn test_offchain_run_wasm_function_with_call_ai() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), U256::from(99));
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -514,7 +514,7 @@ fn test_offchain_run_wasm_function_with_get_file_cid() {
         ));
 
         // Run the offchain_run_wasm function
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(2), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(2), U256::from(99), U256::from(99));
         assert!(result.is_ok());
     });
 }

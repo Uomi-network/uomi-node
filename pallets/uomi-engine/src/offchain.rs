@@ -2,7 +2,7 @@ use frame_support::pallet_prelude::{DispatchError, DispatchResult};
 use frame_system::offchain::{SendUnsignedTransaction, Signer};
 use pallet_ipfs::types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber};
 use pallet_ipfs::MinExpireDuration;
-use sp_core::U256;
+use sp_core::{U256, H160};
 use sp_std::{
     vec,
     vec::Vec,
@@ -98,7 +98,7 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Wasm loaded with length: {:?}", wasm.len());
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_execution_max_time) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_execution_max_time) {
             Ok(output_data) => {
                 log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
                 // Store the output data
@@ -198,7 +198,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
 
@@ -265,6 +265,12 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
+        let get_request_sender = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let data_to_write = address.as_bytes().to_vec();
+            memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
         let console_log = move |mut caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
             // Do nothing, function exposed to help wasm debugging
         };
@@ -275,6 +281,7 @@ impl<T: Config> Pallet<T> {
         linker.func_wrap("env", "set_output", set_output).unwrap();
         linker.func_wrap("env", "call_ai", call_ai).unwrap();
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
+        linker.func_wrap("env", "get_request_sender", get_request_sender).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
 
         let instance = linker.instantiate(&mut store, &module)?;
