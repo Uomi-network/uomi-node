@@ -183,6 +183,10 @@ impl<T: Config> Pallet<T> {
                 let wasm = include_bytes!("./test_agents/agent3.wasm").to_vec();
                 return Ok(wasm);
             }
+            if nft_id == &U256::from(4) { // Agent 4 is a simple agent that read the sender address and return it as output
+                let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
+                return Ok(wasm);
+            }
 
             return Err(DispatchError::Other("Error loading the wasm from the NFT ID for tests"));
         }
@@ -201,6 +205,8 @@ impl<T: Config> Pallet<T> {
     pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
+        // Convert address to a Vec<u8>
+        let address_as_vec = address.as_bytes().to_vec();
 
         // Calculate the timeout for the execution of the request
         // The timeout should be calculated as expiration_block_number - start_block
@@ -266,8 +272,8 @@ impl<T: Config> Pallet<T> {
         };
 
         let get_request_sender = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(address_as_vec.clone());
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
-            let data_to_write = address.as_bytes().to_vec();
             memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 

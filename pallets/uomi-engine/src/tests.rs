@@ -519,6 +519,27 @@ fn test_offchain_run_wasm_function_with_get_file_cid() {
     });
 }
 
+#[test]
+fn test_offchain_run_wasm_function_with_get_request_sender() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(2);
+        let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
+        let address = H160::repeat_byte(0xAA);
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+        // Run the offchain_run_wasm function
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), address, U256::from(2), U256::from(99), U256::from(99));
+        assert!(result.is_ok());
+
+        // Be sure result is the address
+        let address_as_vec: BoundedVec::<u8, MaxDataSize> = address.as_ref().to_vec().try_into().unwrap_or_else(|_| BoundedVec::<u8, MaxDataSize>::default());
+        assert_eq!(result.unwrap(), address_as_vec);
+    });
+}
+
 // OPOC
 //////////////////////////////////////////////////////////////////////////////////
 
