@@ -78,7 +78,7 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
 
         // Load request data from Inputs storage
-        let (block_number, nft_id, _nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
+        let (block_number, address, nft_id, _nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
 
         log::info!("UOMI-ENGINE: Request data loaded");
         // Load wasm associated to the request nft_id

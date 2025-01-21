@@ -233,12 +233,13 @@ pub mod pallet {
         RequestId, // request_id
         (
             BlockNumber, // block_number
+            H160, // address
             NftId, // nft_id
             U256, // nft_required_consensus
             U256, // nft_execution_max_time
             Cid, // nft_file_cid
             Data, // input_data
-            Cid, // input_file_cidx
+            Cid, // input_file_cid
         ),
         ValueQuery
 	>;
@@ -732,7 +733,7 @@ impl<T: Config> Pallet<T> {
         let unsecured = nft_required_consensus <= U256::from(1);
 
         // Store the inputs in the Inputs storage
-        Inputs::<T>::insert(request_id, (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
+        Inputs::<T>::insert(request_id, (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
 
         // When request is unsecured, we can assign work to validator directly here
         if unsecured {

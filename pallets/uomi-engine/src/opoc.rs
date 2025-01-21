@@ -52,6 +52,7 @@ impl<T: Config> Pallet<T> {
             request_id,
             (
                 block_number,
+                _address,
                 _nft_id,
                 nft_required_consensus,
                 _nft_execution_max_time,
@@ -1108,6 +1109,7 @@ impl<T: Config> Pallet<T> {
         for request_id in request_ids.iter() {
             let (
                 _block_number,
+                _address,
                 _nft_id,
                 _nft_required_consensus,
                 nft_execution_max_time,
