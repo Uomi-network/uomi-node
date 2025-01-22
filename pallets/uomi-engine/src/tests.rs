@@ -1200,7 +1200,6 @@ fn test_inherent_opoc_level_2_completed() {
         NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
         NodesOutputs::<Test>::insert(request_id, validators[i].clone(), default_bounded_vec.clone());
     }
-
     
     let inherent_data = InherentData::new();
     let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
@@ -1330,6 +1329,92 @@ fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
         let nodes_works = nodes_works_operations.get(&main_validator).unwrap();
         let request_id_true = nodes_works.get(&request_id).unwrap();
         assert_eq!(*request_id_true, true);
+    });
+}
+
+#[test]
+fn test_opoc_assignment_for_one_validator_free_in_chilling() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 5;
+        let validators = create_validators(num_validators, stake);
+        let main_validator = validators[0].clone();
+        let request_id: U256 = U256::from(1);
+        let current_block: U256 = U256::from(1);
+
+        let mut opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
+        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), U256>::new();
+        let mut nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
+
+        // Add request_id to the Inputs storage to permit the calculation of the expiration block number works correctly
+        Inputs::<Test>::insert(request_id, (
+            U256::zero(),
+            H160::repeat_byte(0xAA),
+            U256::zero(),
+            U256::from(1), // nft_required_consensus
+            U256::from(45), // nft_execution_max_time
+            Cid::default(),
+            BoundedVec::<u8, MaxDataSize>::default(),
+            Cid::default(),
+        ));
+
+        // Put all validators except main_validator in nodes_works
+        let mut request_id_true = BTreeMap::<U256, bool>::new();
+        request_id_true.insert(request_id, true);
+        for i in 1..(num_validators as usize) {
+            let validator = validators[i].clone();
+            if validator != main_validator {
+                nodes_works_operations.insert(validator, request_id_true.clone());
+            }
+        }
+
+        // Put main_validator in chilling
+        Chilling::<Test>::insert(&main_validator, true);
+
+        // Run the opoc_assignment function
+        let assigned_completed = match TestingPallet::opoc_assignment(
+            &mut opoc_blacklist_operations,
+            &mut opoc_assignment_operations,
+            &mut nodes_works_operations,
+            &request_id,
+            &current_block,
+            1,
+            vec![],
+            true
+        ) {
+            Ok(_) => true,
+            Err(_) => false
+        };
+        assert_eq!(assigned_completed, true);
+
+        // Be sure that the main_validator is not on the opoc_assignment_operations
+        let opoc_assignment = opoc_assignment_operations.get(&(request_id, main_validator));
+        assert_eq!(opoc_assignment, None);
+
+        // Remove the chilling from the main_validator
+        Chilling::<Test>::remove(&main_validator);
+
+        // Run the opoc_assignment function
+        let assigned_completed = match TestingPallet::opoc_assignment(
+            &mut opoc_blacklist_operations,
+            &mut opoc_assignment_operations,
+            &mut nodes_works_operations,
+            &request_id,
+            &current_block,
+            1,
+            vec![],
+            true
+        ) {
+            Ok(_) => true,
+            Err(_) => false
+        };
+        assert_eq!(assigned_completed, true);
+
+        // Be sure that the main_validator is on the opoc_assignment_operations with the expiration block number set to the current block number + nft_execution_max_time
+        let opoc_assignment = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
+        assert_eq!(*opoc_assignment, U256::from(1 + 45));
     });
 }
 

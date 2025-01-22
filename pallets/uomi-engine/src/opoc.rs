@@ -20,6 +20,7 @@ use crate::{
     Outputs,
     Pallet,
     Event,
+    Chilling
 };
 
 impl<T: Config> Pallet<T> {
@@ -838,10 +839,20 @@ impl<T: Config> Pallet<T> {
     ) -> Result<Vec<T::AccountId>, DispatchError> {
         let number_usize = number.low_u64() as usize;
 
+        // Take list of chilling validators
+        let validators_chilling: Vec<T::AccountId> = Chilling::<T>::iter().map(|(account_id, chill)| {
+            if chill {
+                Some(account_id)
+            } else {
+                None
+            }
+        }).collect::<Vec<Option<T::AccountId>>>().into_iter().filter_map(|x| x).collect();
+
         // Take all validators from the network excluding the ones that should be excluded
         let validators: Vec<T::AccountId> = Self::get_active_validators()
             .into_iter()
-            .filter(|account_id| !validators_to_exclude.contains(account_id))
+            .filter(|account_id| !validators_chilling.contains(account_id)) // filter out the chilling validators
+            .filter(|account_id| !validators_to_exclude.contains(account_id)) // filter out the validators to exclude
             .collect();
 
         // Take potential validators from the validators list
