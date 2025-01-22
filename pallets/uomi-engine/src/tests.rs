@@ -3,7 +3,7 @@ use pallet_ipfs::CidsStatus;
 use crate::{
     mock::*, Event, Inputs, NodesErrors,
     NodesOutputs, NodesTimeouts, NodesWorks, OpocAssignment, OpocBlacklist,
-    Outputs, MaxDataSize, InherentDidUpdate
+    Outputs, MaxDataSize, InherentDidUpdate, Chilling
 };
 use crate::types::{Address, NftId, RequestId};
 use sp_std::vec;
@@ -1374,6 +1374,92 @@ fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
 //         log::info!("RESPONSE: {:?}", response);
 //     });
 // }
+
+// SET CHILLING FUNCTIONS
+//////////////////////////////////////////////////////////////////////////////////
+
+#[test]
+fn test_set_chilling_true() {
+    make_logger();
+    
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 1;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+        
+        // be sure chilling storage does not contain the validator
+        let chilling = Chilling::<Test>::get(&validator);
+        assert_eq!(chilling, false);
+
+        // call the function using validator as origin
+        let response = TestingPallet::set_chilling(RuntimeOrigin::signed(validator.clone()), true);
+
+        // be sure response is ok
+        assert_eq!(response, Ok(()));
+        
+        // be sure chilling storage contains the validator
+        let chilling = Chilling::<Test>::get(&validator);
+        assert_eq!(chilling, true);
+    });
+}
+
+#[test]
+fn test_set_chilling_false() {
+    make_logger();
+    
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 1;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        // add the validator to the chilling storage
+        Chilling::<Test>::insert(&validator, true);
+        
+        // be sure chilling storage does contain the validator
+        let chilling = Chilling::<Test>::get(&validator);
+        assert_eq!(chilling, true);
+
+        // call the function using validator as origin
+        let response = TestingPallet::set_chilling(RuntimeOrigin::signed(validator.clone()), false);
+        
+        // be sure response is ok
+        assert_eq!(response, Ok(()));
+        
+        // be sure chilling storage does not contain the validator
+        let chilling = Chilling::<Test>::get(&validator);
+        assert_eq!(chilling, false);
+    });
+}
+
+#[test]
+fn test_set_chilling_called_by_a_non_validator() {
+    make_logger();
+    
+    // NOTE: I'm not sure this is the best way to create a not valid validator but it works =)
+    let mut ext = new_test_ext();
+    let keystore = Arc::new(MemoryKeystore::new());
+    keystore.sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None).unwrap();
+    ext.register_extension(KeystoreExt(keystore.clone()));
+    let validator = keystore.sr25519_public_keys(crate::crypto::CRYPTO_KEY_TYPE).swap_remove(0);
+    
+    ext.execute_with(|| {
+        // be sure chilling storage does not contain the validator
+        let chilling = Chilling::<Test>::get(&validator);
+        assert_eq!(chilling, false);
+
+        // call the function using a non-validator as origin
+        let response = TestingPallet::set_chilling(RuntimeOrigin::signed(validator), true);
+
+        // be sure response is an error
+        assert_eq!(response, Err("Only validators can call this function".into()));
+        
+        // be sure chilling storage does not contain the validator
+        let chilling = Chilling::<Test>::get(&validator);
+        assert_eq!(chilling, false);
+    });
+}
 
 // HELPERS
 //////////////////////////////////////////////////////////////////////////////////
