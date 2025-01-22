@@ -485,10 +485,10 @@ pub mod pallet {
             let _ = ensure_signed(origin)?;
             
             // remove all data on Inputs storage
-            let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
-            for (request_id, _) in inputs {
-                Inputs::<T>::remove(request_id);
-            }
+            // let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
+            // for (request_id, _) in inputs {
+            //    Inputs::<T>::remove(request_id);
+            // }
 
             Ok(())
         }
