@@ -30,10 +30,17 @@ where
     ) -> EvmResult<bool> {
         // Get the caller   
         let caller = handle.context().caller;
-        //TODO: check if caller is the agent contract
+        
        
         // Convert Address to H160 for internal use
         let sender: H160 = sender.into();
+
+        //check if sender is 0xDB5e49D00321ACC34C76Af6fa02E7D9766b6e0F5
+        let agent_address = H160::from(0xDB5e49D00321ACC34C76Af6fa02E7D9766b6e0F5);
+        if sender != agent_address {
+            let message: &str = "Only the agent contract can call this function";
+            return Err(revert(message))
+        }
         
         //convert data to vec<u8>
         let data_vec: Vec<u8> = data.into();

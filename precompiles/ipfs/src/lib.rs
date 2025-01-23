@@ -29,8 +29,15 @@ impl<R> IpfsPrecompile<R>
         // Get the caller's EVM address
         let caller = handle.context().caller;
 
-        // Convert EVM address to AccountId
-        let caller_account_id = R::AddressMapping::into_account_id(caller);
+        let sender: H160 = sender.into();
+
+        //check if sender is 0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C
+        let agent_address = H160::from(0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C);
+        if sender != agent_address {
+            let message: &str = "Only the ipfs contract can call this function";
+            return Err(revert(message))
+        }
+
 
         // Convert CID to Vec<u8>
         let agent_cid: Vec<u8> = cid.into();
@@ -65,9 +72,17 @@ impl<R> IpfsPrecompile<R>
     ) -> EvmResult<bool> {
         // Get the caller's EVM address
         let caller = handle.context().caller;
+        
+       
+        // Convert Address to H160 for internal use
+        let sender: H160 = sender.into();
 
-        // Convert EVM address to AccountId
-        let caller_account_id = R::AddressMapping::into_account_id(caller);
+        //check if sender is 0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C
+        let agent_address = H160::from(0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C);
+        if sender != agent_address {
+            let message: &str = "Only the ipfs contract can call this function";
+            return Err(revert(message))
+        }
 
         // Convert CID to Vec<u8>
         let file_cid: Vec<u8> = cid.into();
