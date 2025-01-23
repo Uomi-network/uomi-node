@@ -1,8 +1,9 @@
-# Changelog for v0.1.1
+# Changelog for v0.1.2
 
 ## Changes
-- new release: added semaphore
-- feat: Added semaphore to avoid multiple agents executions on same node
-- Merge branch 'main' of https://github.com/Uomi-network/uomi-node
-- fix: Fix workflow
+- feat: new release finney
+- feat: added addresses sender for precompiles
+- fix: Disabled temporary_cleanup_inputs function content execution
+- fix: Fix typo on comment
+- test: fix offchain worker inifinite wasm test
 
