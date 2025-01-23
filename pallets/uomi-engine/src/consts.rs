@@ -1,7 +1,7 @@
 use frame_support::inherent::InherentIdentifier;
 use crate::types::Version;
 
-pub const PALLET_VERSION:Version = 2;
+pub const PALLET_VERSION:Version = 4;
 pub const PALLET_INHERENT_IDENTIFIER:InherentIdentifier = *b"uomiengi";
 
 // This is the maximum number of inputs that can be managed in a single block by OPoC and offchain workers.

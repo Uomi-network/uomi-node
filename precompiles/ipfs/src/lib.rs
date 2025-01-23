@@ -27,6 +27,7 @@ impl<R> IpfsPrecompile<R>
         cid: UnboundedBytes,
         nft_id: U256
     ) -> EvmResult<bool> {
+        log::info!("pin_agent called");
         // Get the caller's EVM address
         let caller = handle.context().caller;
         let caller_account_id = R::AddressMapping::into_account_id(caller);
@@ -34,8 +35,11 @@ impl<R> IpfsPrecompile<R>
 
         //check if sender is 0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C
         let agent_address = H160::from_slice(&hex::decode("2C236e3f14bC72242ba0e9CDDb367331A9E0102C").expect("Invalid hex"));
+        log::info!("Sender: {:?}", sender);
+        log::info!("Agent Address: {:?}", agent_address);
         if sender != agent_address {
             let message: &str = "Only the ipfs contract can call this function";
+            log::info!("Error: {:?}", message);
             return Err(revert(message))
         }
 

@@ -73,11 +73,20 @@ impl<T: Config> Pallet<T> {
         let mut map = BTreeMap::new();
     
         let qwen2_5: Data = b"Qwen/Qwen2.5-32B-Instruct-GPTQ-Int4".to_vec().try_into().unwrap();
+        let temp2_5: Data = b"Temp2.5/Temp".to_vec().try_into().unwrap();
 
         // Version 2
         let mut version_2 = BTreeMap::new();
         version_2.insert(AiModelKey::from(1), qwen2_5.clone());
         map.insert(2 as u32, version_2);
+
+        let mut version_3 = BTreeMap::new();
+        version_3.insert(AiModelKey::from(1), temp2_5.clone());
+        map.insert(3 as u32, version_3);
+
+        let mut version_4 = BTreeMap::new();
+        version_4.insert(AiModelKey::from(1), qwen2_5.clone());
+        map.insert(4 as u32, version_4);
     
         // Free for future releases...
     
