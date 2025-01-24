@@ -35,8 +35,8 @@ where
         // Convert Address to H160 for internal use
         let sender: H160 = caller.into();
 
-        //check if sender is 0xDB5e49D00321ACC34C76Af6fa02E7D9766b6e0F5
-        let agent_address = H160::from_slice(&hex::decode("DB5e49D00321ACC34C76Af6fa02E7D9766b6e0F5").expect("Invalid hex"));
+        //check if sender is 0x609a8AEeef8b89BE02C5b59A936A520547252824
+        let agent_address = H160::from_slice(&hex::decode("609a8AEeef8b89BE02C5b59A936A520547252824").expect("Invalid hex"));
 
         if sender != agent_address {
             return Err(revert("Only the agent contract can call this function"));

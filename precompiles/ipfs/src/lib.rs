@@ -27,19 +27,18 @@ impl<R> IpfsPrecompile<R>
         cid: UnboundedBytes,
         nft_id: U256
     ) -> EvmResult<bool> {
-        log::info!("pin_agent called");
+       ;
         // Get the caller's EVM address
         let caller = handle.context().caller;
         let caller_account_id = R::AddressMapping::into_account_id(caller);
         let sender: H160 = caller.into();
 
-        //check if sender is 0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C
-        let agent_address = H160::from_slice(&hex::decode("2C236e3f14bC72242ba0e9CDDb367331A9E0102C").expect("Invalid hex"));
-        log::info!("Sender: {:?}", sender);
-        log::info!("Agent Address: {:?}", agent_address);
+        //check if sender is 0x61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2
+        let agent_address = H160::from_slice(&hex::decode("61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2").expect("Invalid hex"));
+     
         if sender != agent_address {
             let message: &str = "Only the ipfs contract can call this function";
-            log::info!("Error: {:?}", message);
+           
             return Err(revert(message))
         }
 
@@ -82,8 +81,8 @@ impl<R> IpfsPrecompile<R>
         // Convert Address to H160 for internal use
         let sender: H160 = caller.into();
 
-        //check if sender is 0x2C236e3f14bC72242ba0e9CDDb367331A9E0102C
-        let agent_address = H160::from_slice(&hex::decode("2C236e3f14bC72242ba0e9CDDb367331A9E0102C").expect("Invalid hex"));
+        //check if sender is 0x61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2
+        let agent_address = H160::from_slice(&hex::decode("61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2").expect("Invalid hex"));
         if sender != agent_address {
             let message: &str = "Only the ipfs contract can call this function";
             return Err(revert(message))
