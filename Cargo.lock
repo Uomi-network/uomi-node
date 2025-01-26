@@ -8636,6 +8636,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-tss"
+version = "0.2.0"
+dependencies = [
+ "env_logger 0.10.2",
+ "frame-benchmarking",
+ "frame-election-provider-support",
+ "frame-support",
+ "frame-system",
+ "hex",
+ "log",
+ "pallet-balances",
+ "pallet-session",
+ "pallet-staking",
+ "pallet-staking-reward-curve",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "rand",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-keystore",
+ "sp-runtime",
+ "sp-staking",
+ "sp-std 14.0.0 (git+https://github.com/paritytech/polkadot-sdk?branch=release-polkadot-v1.9.0)",
+ "sp-transaction-pool",
+ "uomi-primitives",
+ "wasmi 0.35.0",
+]
+
+[[package]]
 name = "pallet-unified-accounts"
 version = "0.2.0"
 dependencies = [
