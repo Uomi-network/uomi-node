@@ -392,8 +392,8 @@ pub mod pallet {
 
             // NOTE: Replace with is_active_validator on TURING!!!
             if !Self::is_validator(&payload.public.clone().into_account()) {
-                log::error!("IPFS: Only validators can call submit_processed_pins");
-                return Err(DispatchError::Other("Only validators can call submit_processed_pins"));
+                log::error!("IPFS: Only validators can call submit_processed_pins, ignore submit_processed_pins execution");
+                return Err(DispatchError::Other("Only validators can call submit_processed_pins, ignore submit_processed_pins execution"));
             }
 
             for (cid, _expires_at) in payload.to_save {
@@ -592,8 +592,8 @@ pub mod pallet {
             }
 
             if !Self::is_active_validator(&Self::get_account_id()?) {
-                log::error!("IPFS: Only validators can call submit_processed_pins");
-                return Err(DispatchError::Other("IPFS: Only validators can call submit_processed_pins"));
+                log::error!("IPFS: Only validators can call submit_processed_pins, skip call_process_pins");
+                return Err(DispatchError::Other("IPFS: Only validators can call submit_processed_pins, skip call_process_pins"));
             }
 
             //send unsigned transaction with signed payload
