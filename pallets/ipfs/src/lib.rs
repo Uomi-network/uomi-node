@@ -608,8 +608,7 @@ pub mod pallet {
                     return Ok(());
                 }
                 match Self::offchain_pin_file(cid.clone()) {
-                    Ok(_) => {
-                        log::info!("IPFS: File pinned: {:?}", cid);
+                    Ok(_) => { 
                         to_save.push((cid, config));
                     }
                     Err(e) => {
