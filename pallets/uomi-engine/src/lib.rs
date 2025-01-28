@@ -786,12 +786,10 @@ impl<T: Config> Pallet<T> {
             return pallet_staking::Validators::<T>::contains_key(account_id);
         }
 
-        let active_validators = session::Validators::<T>::get();
-        if let Some(validator_id) = <T::ValidatorIdOf as Convert<T::AccountId, Option<T::ValidatorId>>>::convert(account_id.clone()) {
-            active_validators.contains(&validator_id)
-        } else {
-            false
-        }
+        let active_validators = pallet_session::Validators::<T>::get();
+        let validator_id = T::ValidatorId::try_from(account_id.clone()).ok().unwrap();
+
+        active_validators.contains(&validator_id)
     }
 
     // TODO: It should be better to load directly validators from session::Validators::<T> but we need to find a way to convert them to T::AccountId

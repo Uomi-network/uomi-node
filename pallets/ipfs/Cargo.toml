@@ -25,6 +25,7 @@ sp-runtime = { workspace = true }
 sp-io = { workspace = true }
 wasmi = { version = "0.35", default-features = false }
 pallet-staking = { workspace = true }
+pallet-session = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 uomi-primitives = { workspace = true }
 
@@ -46,6 +47,7 @@ pallet-staking-reward-curve = { workspace = true }
 pallet-session = { workspace = true, features = ["std"] }
 pallet-timestamp = { workspace = true, features = ["std"] }
 
+
 [features]
 default = ["std"]
 std = [
@@ -63,6 +65,7 @@ std = [
     "uomi-primitives/std",
     "hex/std",
     "log/std",
+    "pallet-session/std",
 ]
 runtime-benchmarks = [
     "frame-benchmarking/runtime-benchmarks",
