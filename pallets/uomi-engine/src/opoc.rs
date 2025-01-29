@@ -873,7 +873,7 @@ impl<T: Config> Pallet<T> {
     
         // Get random seed
         let random_seed = T::Randomness::random(&b"validator_selection"[..]);
-        let mut random_bytes = random_seed.0.encode();
+        let random_bytes = random_seed.0.encode();
 
         let mut selected_validators = Vec::with_capacity(number_usize);
         let mut used_indices = Vec::new();
