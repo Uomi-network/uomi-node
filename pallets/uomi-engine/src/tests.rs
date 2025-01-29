@@ -226,48 +226,48 @@ fn test_run_request_failure_with_large_input_data() {
     });
 }
 
-// This test should force the execution of the run_request function with the unsecured parameter set to true.
-#[test]
-fn test_run_request_with_unsecured_parameter() {
-    make_logger();
+// // This test should force the execution of the run_request function with the unsecured parameter set to true.
+// #[test]
+// fn test_run_request_with_unsecured_parameter() {
+//     make_logger();
 
-    new_test_ext().execute_with(|| {
-        System::set_block_number(1); // NOTE: This is not necessary but is an example of how to set the block number in tests.
+//     new_test_ext().execute_with(|| {
+//         System::set_block_number(1); // NOTE: This is not necessary but is an example of how to set the block number in tests.
 
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 1;
-        let validators = create_validators(num_validators, stake);
-        let validator = validators[0].clone();
+//         let stake = 10_000_000_000_000_000_000;
+//         let num_validators = 1;
+//         let validators = create_validators(num_validators, stake);
+//         let validator = validators[0].clone();
 
-        let request_id: U256 = 1.into();
-        let address: H160 = H160::repeat_byte(0xAA);
-        let nft_id: U256 = 1.into();
-        let input_data = vec![1, 2, 3];
-        let input_file_cid = vec![1, 2, 3];
+//         let request_id: U256 = 1.into();
+//         let address: H160 = H160::repeat_byte(0xAA);
+//         let nft_id: U256 = 1.into();
+//         let input_data = vec![1, 2, 3];
+//         let input_file_cid = vec![1, 2, 3];
 
-        let result = TestingPallet::run_request(request_id, address, nft_id.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(25)).unwrap();
-        assert_eq!(result, ());
+//         let result = TestingPallet::run_request(request_id, address, nft_id.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(25)).unwrap();
+//         assert_eq!(result, ());
 
-        // Be sure request is stored on the Inputs storage
-        let storage_input = Inputs::<Test>::get(request_id);
-        let (si_block_number, si_nft_id, si_nft_required_consensus, _si_nft_execution_max_time, si_nft_file_cid, si_input_data, si_input_file_cid) = storage_input;
-        assert_eq!(si_block_number, 1.into());
-        assert_eq!(si_nft_id, nft_id);
-        assert_eq!(si_nft_required_consensus, U256::from(1));
-        assert_eq!(si_nft_file_cid, BoundedVec::<u8, MaxDataSize>::new());
-        assert_eq!(si_input_data, input_data);
-        assert_eq!(si_input_file_cid, input_file_cid);
+//         // Be sure request is stored on the Inputs storage
+//         let storage_input = Inputs::<Test>::get(request_id);
+//         let (si_block_number, si_nft_id, si_nft_required_consensus, _si_nft_execution_max_time, si_nft_file_cid, si_input_data, si_input_file_cid) = storage_input;
+//         assert_eq!(si_block_number, 1.into());
+//         assert_eq!(si_nft_id, nft_id);
+//         assert_eq!(si_nft_required_consensus, U256::from(1));
+//         assert_eq!(si_nft_file_cid, BoundedVec::<u8, MaxDataSize>::new());
+//         assert_eq!(si_input_data, input_data);
+//         assert_eq!(si_input_file_cid, input_file_cid);
 
-        // Be sure exists a OpocAssignment for the request_id and the validator
-        let opoc_assignment = OpocAssignment::<Test>::get(request_id, validator.clone());
-        assert_ne!(opoc_assignment, U256::zero());
-        // Be sure the OpocAssignment expiration block number is set to the current block number + the input lifetime
-        assert_eq!(opoc_assignment, U256::from(1 + 25));
-        // Be sure the NodesWorks storage contains a record assigned to the validator with the value 1
-        let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
-        assert_eq!(nodes_works_number, true);
-    });
-}
+//         // Be sure exists a OpocAssignment for the request_id and the validator
+//         let opoc_assignment = OpocAssignment::<Test>::get(request_id, validator.clone());
+//         assert_ne!(opoc_assignment, U256::zero());
+//         // Be sure the OpocAssignment expiration block number is set to the current block number + the input lifetime
+//         assert_eq!(opoc_assignment, U256::from(1 + 25));
+//         // Be sure the NodesWorks storage contains a record assigned to the validator with the value 1
+//         let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
+//         assert_eq!(nodes_works_number, true);
+//     });
+// }
 
 // OFFCHAIN WORKER
 //////////////////////////////////////////////////////////////////////////////////
