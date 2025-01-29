@@ -829,7 +829,7 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn opoc_assignment_get_random_validators(
+    pub fn opoc_assignment_get_random_validators(
         nodes_works_operations: &BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         number: U256,
         first_free: bool,
@@ -873,8 +873,8 @@ impl<T: Config> Pallet<T> {
     
         // Get random seed
         let random_seed = T::Randomness::random(&b"validator_selection"[..]);
-        let random_bytes = random_seed.0.encode();
-        
+        let mut random_bytes = random_seed.0.encode();
+
         let mut selected_validators = Vec::with_capacity(number_usize);
         let mut used_indices = Vec::new();
         
