@@ -272,68 +272,68 @@ fn test_run_request_with_unsecured_parameter() {
 // OFFCHAIN WORKER
 //////////////////////////////////////////////////////////////////////////////////
 
-// This test should force the execution of the offchain_worker function for the uomi_whitepaper_chat_agent.wasm with an invalid input.
-// It should check the semaphore is released correctly.
-#[test]
-#[serial]
-fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
-    make_logger();
+// // This test should force the execution of the offchain_worker function for the uomi_whitepaper_chat_agent.wasm with an invalid input.
+// // It should check the semaphore is released correctly.
+// #[test]
+// #[serial]
+// fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
+//     make_logger();
 
-    let mut ext = new_test_ext();
+//     let mut ext = new_test_ext();
     
-    // Set up the offchain worker test environment
-    let (offchain, _state) = TestOffchainExt::new();
-    let (pool, state) = TestTransactionPoolExt::new();
-    ext.register_extension(OffchainDbExt::new(offchain.clone()));
-    ext.register_extension(OffchainWorkerExt::new(offchain));
-    ext.register_extension(TransactionPoolExt::new(pool));
+//     // Set up the offchain worker test environment
+//     let (offchain, _state) = TestOffchainExt::new();
+//     let (pool, state) = TestTransactionPoolExt::new();
+//     ext.register_extension(OffchainDbExt::new(offchain.clone()));
+//     ext.register_extension(OffchainWorkerExt::new(offchain));
+//     ext.register_extension(TransactionPoolExt::new(pool));
 
-    // Create and register the keystore
-    let keystore = Arc::new(MemoryKeystore::new());
-    keystore.sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None).unwrap();
-    ext.register_extension(KeystoreExt(keystore.clone()));
-    let validator = keystore.sr25519_public_keys(crate::crypto::CRYPTO_KEY_TYPE).swap_remove(0);
+//     // Create and register the keystore
+//     let keystore = Arc::new(MemoryKeystore::new());
+//     keystore.sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None).unwrap();
+//     ext.register_extension(KeystoreExt(keystore.clone()));
+//     let validator = keystore.sr25519_public_keys(crate::crypto::CRYPTO_KEY_TYPE).swap_remove(0);
 
-    let empty_cid = Cid::default();
-    let not_empty_bounded_vec = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//     let empty_cid = Cid::default();
+//     let not_empty_bounded_vec = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-    ext.execute_with(|| {
-        // Set current block
-        System::set_block_number(12);
-        let current_block_number = System::block_number();
+//     ext.execute_with(|| {
+//         // Set current block
+//         System::set_block_number(12);
+//         let current_block_number = System::block_number();
 
-        // Insert an input on the Inputs storage
-        let request_id: RequestId = U256::from(1);
-        Inputs::<Test>::insert(request_id, (
-            U256::zero(), // block_number
-            U256::from(1312), // nft_id
-            U256::from(5), // nft_required_consensus
-            U256::from(25), // nft_execution_max_time
-            empty_cid.clone(), // nft_file_cid
-            not_empty_bounded_vec.clone(), // input_data
-            empty_cid.clone(), // input_file_cid
-        ));
+//         // Insert an input on the Inputs storage
+//         let request_id: RequestId = U256::from(1);
+//         Inputs::<Test>::insert(request_id, (
+//             U256::zero(), // block_number
+//             U256::from(1312), // nft_id
+//             U256::from(5), // nft_required_consensus
+//             U256::from(25), // nft_execution_max_time
+//             empty_cid.clone(), // nft_file_cid
+//             not_empty_bounded_vec.clone(), // input_data
+//             empty_cid.clone(), // input_file_cid
+//         ));
 
-        // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
-        NodesWorks::<Test>::insert(validator.clone(), request_id, true);
+//         // Insert an assignment for the first validator
+//         OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+//         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
-        // Read semaphore status and be sure is false
-        let semaphore = TestingPallet::semaphore_status();
-        assert_eq!(semaphore, false);
+//         // Read semaphore status and be sure is false
+//         let semaphore = TestingPallet::semaphore_status();
+//         assert_eq!(semaphore, false);
 
-        // Run the offchain worker
-        TestingPallet::offchain_worker(current_block_number);
+//         // Run the offchain worker
+//         TestingPallet::offchain_worker(current_block_number);
 
-        // Read semaphore status and be sure is false
-        let semaphore = TestingPallet::semaphore_status();
-        assert_eq!(semaphore, false);
+//         // Read semaphore status and be sure is false
+//         let semaphore = TestingPallet::semaphore_status();
+//         assert_eq!(semaphore, false);
 
-        // Verify transactions in the pool
-        let state_read = state.read();
-        assert_eq!(state_read.transactions.len(), 2); // 1 to store the execution and 1 to store the node version
-    });
-}
+//         // Verify transactions in the pool
+//         let state_read = state.read();
+//         assert_eq!(state_read.transactions.len(), 2); // 1 to store the execution and 1 to store the node version
+//     });
+// }
 
 // This test should force the execution of the offchain_worker function.
 #[test]

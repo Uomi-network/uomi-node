@@ -11,7 +11,7 @@ use scale_info::prelude::string::String;
 use scale_info::prelude::format;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
+// static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
@@ -22,9 +22,9 @@ use crate::{
 };
 
 impl<T: Config> Pallet<T> {
-    pub fn semaphore_status() -> bool {
-        unsafe { SEMAPHORE.load(Ordering::Relaxed) }
-    }
+    // pub fn semaphore_status() -> bool {
+    //     unsafe { SEMAPHORE.load(Ordering::Relaxed) }
+    // }
 
     // Offchain worker entry point
     #[cfg(feature = "std")]
@@ -59,24 +59,24 @@ impl<T: Config> Pallet<T> {
 
         // Check semaphore to be sure to do nothing if another agent is running
         // SAFETY: This is safe because offchain workers run in their own thread
-        let semaphore = unsafe { &SEMAPHORE };
-        if semaphore.compare_exchange(
-            false,  // expected value
-            true,   // new value
-            Ordering::Acquire,
-            Ordering::Relaxed
-        ).is_err() {
-            // Another worker is already running
-            log::info!("UOMI-ENGINE: Another worker is already running");
-            return Ok(());
-        }
+        // let semaphore = unsafe { &SEMAPHORE };
+        // if semaphore.compare_exchange(
+        //     false,  // expected value
+        //     true,   // new value
+        //     Ordering::Acquire,
+        //     Ordering::Relaxed
+        // ).is_err() {
+        //     // Another worker is already running
+        //     log::info!("UOMI-ENGINE: Another worker is already running");
+        //     return Ok(());
+        // }
 
         // Find the request with less expiration block number to execute
         let (request_id, expiration_block_number) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
             log::info!("UOMI-ENGINE: No requests to run found");
             // Unlock the semaphore
-            semaphore.store(false, Ordering::Release);
+            // semaphore.store(false, Ordering::Release);
             return Ok(());
         }
         log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
@@ -95,7 +95,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Unlock the semaphore
-                semaphore.store(false, Ordering::Release);
+                // semaphore.store(false, Ordering::Release);
                 return Ok(());
             },
         };
@@ -120,7 +120,7 @@ impl<T: Config> Pallet<T> {
         }
 
         // Unlock the semaphore
-        semaphore.store(false, Ordering::Release);
+        // semaphore.store(false, Ordering::Release);
 
         log::info!("UOMI-ENGINE: Request {:?} completed", request_id);
         Ok(())
