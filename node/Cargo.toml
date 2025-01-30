@@ -1,6 +1,6 @@
 [package]
 name = "uomi"
-version = "0.1.3"
+version = "0.1.4"
 description = "Uomi node implementation in Rust."
 build = "build.rs"
 default-run = "uomi"
