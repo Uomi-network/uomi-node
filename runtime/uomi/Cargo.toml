@@ -1,6 +1,6 @@
 [package]
 name = "uomi-runtime"
-version = "0.1.3"
+version = "0.1.4"
 build = "build.rs"
 authors.workspace = true
 edition.workspace = true
