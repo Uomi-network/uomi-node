@@ -731,6 +731,41 @@ impl<T: Config> Pallet<T> {
         // Store the inputs in the Inputs storage
         Inputs::<T>::insert(request_id, (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
 
+        // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+        if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {
+            log::info!("UOMI-ENGINE: Managed old unsecured mode");
+            let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
+            let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), U256>::new();
+            let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<U256, bool>>::new();
+            let current_block = frame_system::Pallet::<T>::block_number().into();
+            match Self::opoc_assignment_finney_v1(
+                &mut opoc_blacklist_operations,
+                &mut opoc_assignment_operations,
+                &mut nodes_works_operations,
+                &request_id,
+                &current_block,
+                1,
+                vec![],
+                true
+            ) {
+                Ok(_) => {
+                    log::info!("UOMI-ENGINE: Request assigned to a random validator for OPoC level 0 on run_request");
+                    Self::opoc_store_operations((
+                        opoc_blacklist_operations,
+                        opoc_assignment_operations,
+                        nodes_works_operations,
+                        BTreeMap::<T::AccountId, u32>::new(),
+                        BTreeMap::<T::AccountId, u32>::new(),
+                        BTreeMap::<RequestId, (Data, u32, u32)>::new()
+                    ))?;
+                },
+                Err(error) => {
+                    log::error!("UOMI-ENGINE: Failed to assign request to a random validator for OPoC level 0 on run_request. error: {:?}", error);
+                    // NOTE: If assigned is not valid, is not a problem, the request should be assigned by the opoc execution
+                },
+            };
+        }
+
         // Emit the RequestAccepted event
         Self::deposit_event(Event::RequestAccepted { request_id, address, nft_id });
 
