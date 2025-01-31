@@ -214,8 +214,12 @@ impl<T: Config> Pallet<T> {
         // The timeout should be calculated as expiration_block_number - start_block
         // If timeout is > nft_execution_max_time - 3, timeout should be nft_execution_max_time - 3
         // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
-        let start_block = <frame_system::Pallet<T>>::block_number();
+        let start_block = U256::from(0) + <frame_system::Pallet<T>>::block_number();
         let timeout_blocks_max = nft_execution_max_time - U256::from(3);
+        if expiration_block_number < start_block { // NOTE: This case should never happen, but check to avoid runtime error
+            log::error!("UOMI-ENGINE: Expiration block number is before the start block number");
+            return Err(wasmtime::Error::new(std::io::Error::new(std::io::ErrorKind::Other, "Expiration block number is before the start block number")));
+        }
         let mut timeout_blocks = expiration_block_number - start_block;
         if timeout_blocks > timeout_blocks_max {
             timeout_blocks = nft_execution_max_time - U256::from(3);
@@ -227,11 +231,23 @@ impl<T: Config> Pallet<T> {
         type HostState = Vec<u8>;
         let mut config = wasmtime::Config::new();
         config.epoch_interruption(true);
-        let engine = wasmtime::Engine::new(&config).unwrap();
+        let engine = match wasmtime::Engine::new(&config) {
+            Ok(engine) => engine,
+            Err(error) => {
+                log::error!("UOMI-ENGINE: Error creating the wasm engine: {:?}", error);
+                return Err(error);
+            },
+        };
         let mut store = wasmtime::Store::new(&engine, HostState::new());
         store.set_epoch_deadline(timeout_time_cs);
         store.epoch_deadline_trap();
-        let module = wasmtime::Module::new(&engine, &wasm)?;
+        let module = match wasmtime::Module::new(&engine, &wasm) {
+            Ok(module) => module,
+            Err(error) => {
+                log::error!("UOMI-ENGINE: Error loading the wasm module: {:?}", error);
+                return Err(error);
+            },
+        };
 
         let get_input_data = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, _len: i32| {
             let data_to_write = Self::offchain_worker_generate_data_for_wasm(input_data_as_vec.clone());
@@ -309,8 +325,20 @@ impl<T: Config> Pallet<T> {
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
 
-        let instance = linker.instantiate(&mut store, &module)?;
-        let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
+        let instance = match linker.instantiate(&mut store, &module) {
+            Ok(instance) => instance,
+            Err(error) => {
+                log::error!("Error instantiating the wasm module: {:?}", error);
+                return Err(error);
+            }
+        };
+        let run = match instance.get_typed_func::<(), ()>(&mut store, "run") {
+            Ok(run) => run,
+            Err(error) => {
+                log::error!("Error getting the run function: {:?}", error);
+                return Err(error);
+            }
+        };
 
         // Start a thread to increment the epoch counter
         let mut time_passed_ms = 0;
