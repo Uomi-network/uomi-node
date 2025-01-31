@@ -11,7 +11,7 @@ use scale_info::prelude::string::String;
 use scale_info::prelude::format;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-// static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
+static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
@@ -22,9 +22,9 @@ use crate::{
 };
 
 impl<T: Config> Pallet<T> {
-    // pub fn semaphore_status() -> bool {
-    //     unsafe { SEMAPHORE.load(Ordering::Relaxed) }
-    // }
+    pub fn semaphore_status() -> bool {
+        unsafe { SEMAPHORE.load(Ordering::Relaxed) }
+    }
 
     // Offchain worker entry point
     #[cfg(feature = "std")]
@@ -59,24 +59,24 @@ impl<T: Config> Pallet<T> {
 
         // Check semaphore to be sure to do nothing if another agent is running
         // SAFETY: This is safe because offchain workers run in their own thread
-        // let semaphore = unsafe { &SEMAPHORE };
-        // if semaphore.compare_exchange(
-        //     false,  // expected value
-        //     true,   // new value
-        //     Ordering::Acquire,
-        //     Ordering::Relaxed
-        // ).is_err() {
-        //     // Another worker is already running
-        //     log::info!("UOMI-ENGINE: Another worker is already running");
-        //     return Ok(());
-        // }
+        let semaphore = unsafe { &SEMAPHORE };
+        if semaphore.compare_exchange(
+            false,  // expected value
+            true,   // new value
+            Ordering::Acquire,
+            Ordering::Relaxed
+        ).is_err() {
+            // Another worker is already running
+            log::info!("UOMI-ENGINE: Another worker is already running");
+            return Ok(());
+        }
 
         // Find the request with less expiration block number to execute
         let (request_id, expiration_block_number) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
             log::info!("UOMI-ENGINE: No requests to run found");
             // Unlock the semaphore
-            // semaphore.store(false, Ordering::Release);
+            semaphore.store(false, Ordering::Release);
             return Ok(());
         }
         log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
@@ -95,7 +95,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Unlock the semaphore
-                // semaphore.store(false, Ordering::Release);
+                semaphore.store(false, Ordering::Release);
                 return Ok(());
             },
         };
@@ -120,7 +120,7 @@ impl<T: Config> Pallet<T> {
         }
 
         // Unlock the semaphore
-        // semaphore.store(false, Ordering::Release);
+        semaphore.store(false, Ordering::Release);
 
         log::info!("UOMI-ENGINE: Request {:?} completed", request_id);
         Ok(())
@@ -240,7 +240,13 @@ impl<T: Config> Pallet<T> {
         };
 
         let get_input_file = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, _len: i32| {
-            let file = T::IpfsPallet::get_file(&input_file_cid).unwrap();
+            let file = match T::IpfsPallet::get_file(&input_file_cid) {
+                Ok(file) => file,
+                Err(error) => {
+                    log::error!("Error getting the file from the IPFS pallet: {:?}", error);
+                    Vec::new()
+                }
+            };
             let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
             memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
@@ -258,7 +264,13 @@ impl<T: Config> Pallet<T> {
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
             let model = AiModelKey::from(model as u32);
-            let output = Self::offchain_worker_call_ai(model, block_number, buffer).unwrap();
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer) {
+                Ok(output) => output,
+                Err(error) => {
+                    log::error!("Error calling the AI: {:?}", error);
+                    Vec::new()
+                }
+            };
             let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
@@ -267,8 +279,20 @@ impl<T: Config> Pallet<T> {
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
-            let cid = Cid::try_from(buffer).unwrap();
-            let file = Self::offcahin_worker_get_cid_file(cid, block_number).unwrap();
+            let cid = match Cid::try_from(buffer) {
+                Ok(cid) => cid,
+                Err(error) => {
+                    log::error!("Error converting buffer to CID: {:?}", error);
+                    Cid::default()
+                }
+            };
+            let file = match Self::offcahin_worker_get_cid_file(cid, block_number) {
+                Ok(file) => file,
+                Err(error) => {
+                    log::error!("Error getting the file from the IPFS pallet: {:?}", error);
+                    Vec::new()
+                }
+            };
             let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
