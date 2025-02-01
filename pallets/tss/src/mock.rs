@@ -1,9 +1,7 @@
 use crate as pallet_tss;
 use frame_support::{derive_impl, parameter_types};
-use frame_system::{self as system, Origin};
 use sp_core::{sr25519::Public, ConstU16, ConstU32, H256};
 use sp_runtime::{
-    testing::Header,
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 };

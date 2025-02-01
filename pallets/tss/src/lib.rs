@@ -3,6 +3,11 @@ use frame_support::pallet_prelude::*;
 mod mock;
 mod tests;
 mod types;
+mod dkground1;
+mod dkground2;
+mod dkground3;
+mod dkghelpers;
+mod signround1;
 use scale_info::TypeInfo;
 use types::{
     Key, MaxMessageSize, PublicKey,
@@ -47,15 +52,6 @@ pub mod pallet {
         pub state: SessionState,
         pub public_key: Option<PublicKey>, // Corrected: PublicKey<T>
         pub signature_shares: BoundedVec<Share, <T as Config>::MaxNumberOfShares>, // Corrected: Share<T>
-    }
-    pub struct SigningSession<T>
-    where
-        T: Config,
-    {
-        message: BoundedVec<u8, MaxMessageSize>,
-        signature_shares: BoundedVec<Share, <T as Config>::MaxNumberOfShares>,
-        signature_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
-        final_signature: Option<Signature>,
     }
 
     #[pallet::storage]
