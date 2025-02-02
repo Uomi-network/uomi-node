@@ -2,7 +2,7 @@ use crate::{mock::*, pallet, DKGSession, DkgSessions, Error, Event, NextSessionI
 use frame_support::{assert_ok, assert_noop};
 use frame_system::RawOrigin;
 
-use rand::{Rng, thread_rng};  // We'll need the random number generator
+use rand::{Rng, thread_rng};
 
 fn create_test_account() -> AccountId {
     let mut rng = thread_rng();
@@ -57,6 +57,7 @@ fn test_dkg_start_session() {
 
         let ret = TestingPallet::create_dkg_session(
             RuntimeOrigin::signed(create_test_account()), 
+            vec![1].try_into().unwrap(),
             vec![participant_1, participant_2], 
             1);
         assert_ok!(ret);
@@ -82,6 +83,7 @@ fn test_create_dkg_session_errors() {
         assert_noop!(
             TestingPallet::create_dkg_session(
                 RuntimeOrigin::signed(participant_1),
+                vec![1].try_into().unwrap(),
                 vec![],
                 1
             ),
@@ -92,6 +94,7 @@ fn test_create_dkg_session_errors() {
         assert_noop!(
             TestingPallet::create_dkg_session(
                 RuntimeOrigin::signed(participant_1),
+                vec![1].try_into().unwrap(),
                 vec![participant_1, participant_2],
                 3
             ),
@@ -102,6 +105,7 @@ fn test_create_dkg_session_errors() {
         assert_noop!(
             TestingPallet::create_dkg_session(
                 RuntimeOrigin::signed(participant_1),
+                vec![1].try_into().unwrap(),
                 vec![participant_1, participant_2],
                 0
             ),
@@ -112,6 +116,7 @@ fn test_create_dkg_session_errors() {
         assert_noop!(
             TestingPallet::create_dkg_session(
                 RuntimeOrigin::signed(participant_1),
+                vec![1].try_into().unwrap(),
                 vec![participant_1, participant_1],
                 1
             ),

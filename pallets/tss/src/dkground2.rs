@@ -28,7 +28,7 @@ pub fn store_round2_secret_package(session_id:SessionId, secret_package:dkg::rou
 
     let bytes = result.unwrap();
 
-    store_data(session_id, dkghelpers::StorageType::Round2SecretPackage, &bytes, None);
+    store_data(session_id, dkghelpers::StorageType::DKGRound2SecretPackage, &bytes, None);
 }
 
 pub fn store_round2_packages(session_id:SessionId,packages:BTreeMap<Identifier, dkg::round2::Package>) {
@@ -41,6 +41,6 @@ pub fn store_round2_packages(session_id:SessionId,packages:BTreeMap<Identifier, 
 
         let bytes = result.unwrap();
 
-        store_data(session_id, StorageType::Round2IdentifierPackage, &bytes, Some(identifier));
+        store_data(session_id, StorageType::DKGRound2IdentifierPackage, &bytes, Some(identifier));
     }
 }

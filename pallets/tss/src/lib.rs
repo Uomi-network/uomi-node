@@ -2,12 +2,13 @@ use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
 mod mock;
 mod tests;
+mod signlibtests;
 mod types;
 mod dkground1;
 mod dkground2;
 mod dkground3;
 mod dkghelpers;
-mod signround1;
+mod signlib;
 use scale_info::TypeInfo;
 use types::{
     Key, MaxMessageSize, PublicKey,
@@ -20,6 +21,8 @@ pub use pallet::*;
 pub mod pallet {
     use frame_system::ensure_signed;
     use frame_system::pallet_prelude::OriginFor;
+
+    use crate::types::AgentCid;
 
     use super::*;
 
@@ -48,10 +51,10 @@ pub mod pallet {
         T: Config,
     {
         pub participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
+        pub agent_cid: AgentCid,
         pub threshold: u32,
         pub state: SessionState,
-        pub public_key: Option<PublicKey>, // Corrected: PublicKey<T>
-        pub signature_shares: BoundedVec<Share, <T as Config>::MaxNumberOfShares>, // Corrected: Share<T>
+        pub public_key: Option<PublicKey>,
     }
 
     #[pallet::storage]
@@ -87,6 +90,7 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn create_dkg_session(
             origin: OriginFor<T>,
+            agent_cid: AgentCid,
             participants: Vec<T::AccountId>,
             threshold: u32,
         ) -> DispatchResult {
@@ -111,11 +115,11 @@ pub mod pallet {
 
             // Create new DKG session
             let session = DKGSession {
+                agent_cid,
                 participants,
                 threshold,
                 state: SessionState::DKGInProgress,
                 public_key: None,
-                signature_shares: BoundedVec::default(),
             };
 
             // Generate random session ID
