@@ -1,7 +1,7 @@
-# Changelog for v0.1.5
+# Changelog for v0.1.6
 
 ## Changes
-- feat: new release finney
-- fix: Merge branch 'main' of https://github.com/Uomi-network/uomi-node
-- feat: new release finney with retro compatibility with old blocks
+- feat: new release with semaphore reactivated
+- feat: Added some fix to manage semaphore
+- feat: Reactivated semaphore + manage error on proxy functions
 
