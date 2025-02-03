@@ -338,6 +338,8 @@ pub mod pallet {
         type Call = Call<T>;
     
         fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            let current_block_number = frame_system::Pallet::<T>::block_number().into();
+
             match call {
                 Call::set_inherent_data { .. } => {
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -349,7 +351,7 @@ pub mod pallet {
                 },
                 Call::store_nodes_outputs { .. } => {
                     // Existing validation for store_nodes_outputs
-                    if source == TransactionSource::External {
+                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         log::info!("UOMI-ENGINE: Rejecting store_nodes_outputs unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
@@ -363,7 +365,7 @@ pub mod pallet {
                 },
                 Call::store_nodes_versions { .. } => {
                     // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External {
+                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         log::info!("UOMI-ENGINE: Rejecting store_nodes_versions unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }

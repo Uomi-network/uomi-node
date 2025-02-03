@@ -263,6 +263,8 @@ pub mod pallet {
         type Call = Call<T>;
 
         fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            let current_block_number = frame_system::Pallet::<T>::block_number().into();
+
             match call {
                 // Handle inherent extrinsics
                 Call::set_inherent_data { .. } => {
@@ -276,7 +278,7 @@ pub mod pallet {
                 // Handle existing submit_processed_pins validation
                 Call::submit_processed_pins { .. } => {
                     // Existing validation for submit_processed_pins
-                    if source == TransactionSource::External {
+                    if source == TransactionSource::External && current_block_number < 510000.into() {  // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         log::info!("IPFS: Rejecting submit_processed_pins unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
