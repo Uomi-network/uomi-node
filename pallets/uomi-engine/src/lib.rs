@@ -110,7 +110,8 @@ pub mod pallet {
 	pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> + session::Config + pallet_ipfs::Config {
 		type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-		type Randomness: Randomness<<Self as frame_system::Config>::Hash, BlockNumberFor<Self>>;
+        type RandomnessOld: Randomness<<Self as frame_system::Config>::Hash, BlockNumberFor<Self>>; // For finney update. remove on turing
+		type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
 	}
@@ -355,7 +356,7 @@ pub mod pallet {
                         log::info!("UOMI-ENGINE: Rejecting store_nodes_outputs unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
-    
+
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(&call)

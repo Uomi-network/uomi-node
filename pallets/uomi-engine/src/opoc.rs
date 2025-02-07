@@ -872,8 +872,15 @@ impl<T: Config> Pallet<T> {
         }
     
         // Get random seed
-        let random_seed = T::Randomness::random(&b"validator_selection"[..]);
-        let random_bytes = random_seed.0.encode();
+        let current_block = U256::zero() + frame_system::Pallet::<T>::block_number();
+        let mut random_bytes: Vec<u8>;
+        if current_block < U256::from(700000) {
+            let random_seed = T::RandomnessOld::random(&b"validator_selection"[..]);
+            random_bytes = random_seed.0.encode();
+        } else {
+            let random_seed = T::Randomness::random(&b"validator_selection"[..]);
+            random_bytes = random_seed.0.encode();
+        }
 
         let mut selected_validators = Vec::with_capacity(number_usize);
         let mut used_indices = Vec::new();

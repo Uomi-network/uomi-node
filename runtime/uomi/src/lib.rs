@@ -1296,7 +1296,8 @@ impl pallet_uomi_engine::Config for Runtime {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
 	type RuntimeEvent = RuntimeEvent;
     type IpfsPallet = IpfsWrapper;
-    type Randomness = pallet_babe::RandomnessFromOneEpochAgo<Runtime>;
+    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Runtime>; // for finney update. remove on turing
+    type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
     type InherentDataType = u16;
 }
 
