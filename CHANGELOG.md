@@ -1,6 +1,5 @@
-# Changelog for v0.1.8
+# Changelog for v0.1.9
 
 ## Changes
-- feat: new release
-- fix: Fixed randomness to take validators
+- feat: new release 0.1.9
 
