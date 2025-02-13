@@ -36,13 +36,10 @@ use frame_support::{
     Blake2_128Concat,
     storage::types::StorageValue,
     traits::{
-        Currency,
-        fungible::{ Inspect as FungibleInspect, Mutate as FungibleMutate },
-        Imbalance,
-        OnUnbalanced,
-        ReservableCurrency,
+        fungible::{Mutate as FungibleMutate},
     },
 };
+use sp_runtime::traits::Convert;
 use uomi_primitives::Balance;
 use sp_runtime::traits::AtLeast32BitUnsigned;
 use frame_system::{
@@ -161,6 +158,7 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config +
         pallet_staking::Config +
+        pallet_session::Config +
         CreateSignedTransaction<Call<Self>> +
         Debug
     {
@@ -264,7 +262,9 @@ pub mod pallet {
     impl<T: Config> ValidateUnsigned for Pallet<T> {
         type Call = Call<T>;
 
-        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+        fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            let current_block_number = frame_system::Pallet::<T>::block_number().into();
+
             match call {
                 // Handle inherent extrinsics
                 Call::set_inherent_data { .. } => {
@@ -277,6 +277,12 @@ pub mod pallet {
                 }
                 // Handle existing submit_processed_pins validation
                 Call::submit_processed_pins { .. } => {
+                    // Existing validation for submit_processed_pins
+                    if source == TransactionSource::External && current_block_number < 510000.into() {  // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+                        log::info!("IPFS: Rejecting submit_processed_pins unsigned transaction from external origin");
+                        return InvalidTransaction::BadSigner.into()
+                    }
+
                     ValidTransaction::with_tag_prefix("IpfsPallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(&call)
@@ -386,9 +392,10 @@ pub mod pallet {
         ) -> DispatchResult {
             let _who = ensure_none(origin)?;
 
+            // NOTE: Replace with is_active_validator on TURING!!!
             if !Self::is_validator(&payload.public.clone().into_account()) {
-                log::error!("IPFS: Only validators can call submit_processed_pins");
-                return Err(DispatchError::Other("Only validators can call submit_processed_pins"));
+                log::error!("IPFS: Only validators can call submit_processed_pins, ignore submit_processed_pins execution");
+                return Err(DispatchError::Other("Only validators can call submit_processed_pins, ignore submit_processed_pins execution"));
             }
 
             for (cid, _expires_at) in payload.to_save {
@@ -562,6 +569,19 @@ pub mod pallet {
             pallet_staking::Validators::<T>::contains_key(public)
         }
 
+        pub fn is_active_validator(account_id: &T::AccountId) -> bool {
+            // TODO: For tests we return validators only from pallet_staking::Validators::<T>.
+            // In the future we should fix tests to return validators from session::Validators::<T>.
+            if cfg!(test) {
+                return pallet_staking::Validators::<T>::contains_key(account_id);
+            }
+
+            let active_validators = pallet_session::Validators::<T>::get();
+            let validator_id = T::ValidatorId::try_from(account_id.clone()).ok().unwrap();
+
+            active_validators.contains(&validator_id)
+        }
+
         fn call_process_pins(
             to_save: Vec<(Cid, (ExpirationBlockNumber, UsableFromBlockNumber))>,
             to_remove: Vec<(Cid, (ExpirationBlockNumber, UsableFromBlockNumber))>
@@ -571,6 +591,11 @@ pub mod pallet {
             if !signer.can_sign() {
                 log::error!("IPFS: No accounts available to sign call_process_pins");
                 return Err(DispatchError::Other("IPFS: No accounts available to sign"));
+            }
+
+            if !Self::is_active_validator(&Self::get_account_id()?) {
+                log::error!("IPFS: Only validators can call submit_processed_pins, skip call_process_pins");
+                return Err(DispatchError::Other("IPFS: Only validators can call submit_processed_pins, skip call_process_pins"));
             }
 
             //send unsigned transaction with signed payload
@@ -608,8 +633,7 @@ pub mod pallet {
                     return Ok(());
                 }
                 match Self::offchain_pin_file(cid.clone()) {
-                    Ok(_) => {
-                        log::info!("IPFS: File pinned: {:?}", cid);
+                    Ok(_) => { 
                         to_save.push((cid, config));
                     }
                     Err(e) => {

@@ -10,6 +10,7 @@ use sp_core::U256;
 use pallet_evm::AddressMapping;
 use pallet_ipfs::types::MaxCidSize;
 use frame_system::pallet_prelude::BlockNumberFor;
+use sp_core::H160;
 
 /// A precompile that exposes IPFS functions
 pub struct IpfsPrecompile<T>(PhantomData<T>);
@@ -26,11 +27,21 @@ impl<R> IpfsPrecompile<R>
         cid: UnboundedBytes,
         nft_id: U256
     ) -> EvmResult<bool> {
+       ;
         // Get the caller's EVM address
         let caller = handle.context().caller;
-
-        // Convert EVM address to AccountId
         let caller_account_id = R::AddressMapping::into_account_id(caller);
+        let sender: H160 = caller.into();
+
+        //check if sender is 0x61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2
+        let agent_address = H160::from_slice(&hex::decode("61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2").expect("Invalid hex"));
+     
+        if sender != agent_address {
+            let message: &str = "Only the ipfs contract can call this function";
+           
+            return Err(revert(message))
+        }
+
 
         // Convert CID to Vec<u8>
         let agent_cid: Vec<u8> = cid.into();
@@ -65,9 +76,17 @@ impl<R> IpfsPrecompile<R>
     ) -> EvmResult<bool> {
         // Get the caller's EVM address
         let caller = handle.context().caller;
-
-        // Convert EVM address to AccountId
+        
         let caller_account_id = R::AddressMapping::into_account_id(caller);
+        // Convert Address to H160 for internal use
+        let sender: H160 = caller.into();
+
+        //check if sender is 0x61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2
+        let agent_address = H160::from_slice(&hex::decode("61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2").expect("Invalid hex"));
+        if sender != agent_address {
+            let message: &str = "Only the ipfs contract can call this function";
+            return Err(revert(message))
+        }
 
         // Convert CID to Vec<u8>
         let file_cid: Vec<u8> = cid.into();

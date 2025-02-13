@@ -74,7 +74,6 @@ std = [
 	"pallet-session/std",
 	"pallet-balances/std",
 	"pallet-timestamp/std",
-	"pallet-session/std",
 	"pallet-babe/std",
 	"sp-consensus-babe/std",  
 	"pallet-election-provider-multi-phase/std",

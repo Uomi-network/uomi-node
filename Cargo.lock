@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "finney-runtime"
-version = "0.1.1"
+version = "0.1.9"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -5819,7 +5819,7 @@ dependencies = [
 
 [[package]]
 name = "local-runtime"
-version = "0.1.1"
+version = "0.1.9"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -7822,6 +7822,7 @@ dependencies = [
  "fp-evm",
  "frame-support",
  "frame-system",
+ "hex",
  "log",
  "pallet-evm",
  "pallet-ipfs",
@@ -7945,6 +7946,7 @@ dependencies = [
  "fp-evm",
  "frame-support",
  "frame-system",
+ "hex",
  "log",
  "pallet-evm",
  "pallet-uomi-engine",
@@ -15765,7 +15767,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uomi"
-version = "0.1.1"
+version = "0.1.9"
 dependencies = [
  "async-trait",
  "clap",
@@ -15895,7 +15897,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.1.1"
+version = "0.1.9"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",

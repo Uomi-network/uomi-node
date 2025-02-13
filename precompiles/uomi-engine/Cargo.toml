@@ -25,3 +25,4 @@ sp-runtime = { workspace = true }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
 parity-scale-codec = { workspace = true }
+hex = { workspace = true }

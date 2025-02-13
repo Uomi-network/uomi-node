@@ -831,7 +831,7 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn opoc_assignment_get_random_validators(
+    pub fn opoc_assignment_get_random_validators(
         nodes_works_operations: &BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         number: U256,
         first_free: bool,
@@ -848,29 +848,26 @@ impl<T: Config> Pallet<T> {
             }
         }).collect::<Vec<Option<T::AccountId>>>().into_iter().filter_map(|x| x).collect();
 
-        // Take all validators from the network excluding the ones that should be excluded
+        // Get active validators excluding specified ones
         let validators: Vec<T::AccountId> = Self::get_active_validators()
             .into_iter()
             .filter(|account_id| !validators_chilling.contains(account_id)) // filter out the chilling validators
             .filter(|account_id| !validators_to_exclude.contains(account_id)) // filter out the validators to exclude
             .collect();
-
-        // Take potential validators from the validators list
-        // - If first_free is true, take only the validators that have not been assigned any work, it the number of free validators is less than the number of validators needed, take all the validators
-        // - If first_free is false, take all the validators
+    
+        // Get potential validators based on first_free flag
         let potential_validators: Vec<T::AccountId> = if first_free {
             let free_validators: Vec<T::AccountId> = validators
                 .iter()
                 .filter(
-                    |account_id|
-                        Self::opoc_nodes_works_operations_count(
-                            nodes_works_operations,
-                            account_id
-                        ) == 0
+                    |account_id| Self::opoc_nodes_works_operations_count(
+                        nodes_works_operations, 
+                        account_id
+                    ) == 0
                 )
                 .cloned()
                 .collect();
-
+                
             if free_validators.len() >= number_usize {
                 free_validators
             } else {
@@ -879,44 +876,66 @@ impl<T: Config> Pallet<T> {
         } else {
             validators
         };
-
-        // Be sure there are enough validators to assign the work
+    
+        // Check if we have enough validators
         let validator_count = potential_validators.len();
         if validator_count < number_usize {
             return Err(DispatchError::Other("Not enough validators"));
         }
-
-        // Usa BABE VRF per la randomness
-        let random_seed = T::Randomness::random(&b"validator_selection"[..]);
-        let random_bytes = random_seed.0.encode();
+    
+        // Get random seed
+        let current_block = U256::zero() + frame_system::Pallet::<T>::block_number();
+        let mut random_bytes: Vec<u8>;
+        if current_block < U256::from(720000) {
+            let random_seed = T::RandomnessOld::random(&b"validator_selection"[..]);
+            random_bytes = random_seed.0.encode();
+        } else {
+            let random_seed = T::Randomness::random(&b"validator_selection"[..]);
+            random_bytes = random_seed.0.encode();
+        }
 
         let mut selected_validators = Vec::with_capacity(number_usize);
         let mut used_indices = Vec::new();
-
-        for i in 0..number_usize {
-            let random_value = U256::from_big_endian(&random_bytes[i * 4..(i + 1) * 4]);
+        
+        // Modified random selection logic
+        let mut current_byte_index = 0;
+        let bytes_per_selection = 4.min(random_bytes.len() / number_usize);
+    
+        for _ in 0..number_usize {
+            if current_byte_index + bytes_per_selection > random_bytes.len() {
+                // If we run out of random bytes, create a new selection using existing bytes
+                current_byte_index = 0;
+            }
+    
+            // Create random value from available bytes
+            let random_slice = &random_bytes[current_byte_index..current_byte_index + bytes_per_selection];
+            let random_value = U256::from_little_endian(random_slice);
+            
             let mut index = (random_value % U256::from(validator_count)).low_u64() as usize;
-
-            // Trova il prossimo indice non usato
-            let count = 0;
+            
+            // Find next unused index
+            let mut attempts = 0;
             while used_indices.contains(&index) {
                 index = (index + 1) % validator_count;
-                if count == validator_count {
-                    break;
+                attempts += 1;
+                if attempts >= validator_count {
+                    return Err(DispatchError::Other("Failed to find unique validator index"));
                 }
             }
+            
             used_indices.push(index);
-
             if let Some(validator) = potential_validators.get(index) {
                 selected_validators.push(validator.clone());
             }
+            
+            current_byte_index += bytes_per_selection;
         }
-
-        // Be sure the selected validators are in the correct number
+    
+        // Verify we selected enough validators
         if selected_validators.len() < number_usize {
             return Err(DispatchError::Other("Failed to select enough unique validators"));
         }
-
+    
         Ok(selected_validators)
     }
 
@@ -1249,5 +1268,142 @@ impl<T: Config> Pallet<T> {
             *total_consensus,
         ));
         Ok(())
+    }
+
+    // NOTE: The following functions are used to maintain retro-compatibility with the finney chain.
+    pub fn opoc_assignment_finney_v1(
+        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<U256, bool>>,
+        request_id: &RequestId,
+        current_block: &BlockNumber,
+        validators_amount: u32,
+        validators_to_exclude: Vec<T::AccountId>,
+        first_free: bool
+    ) -> Result<(), DispatchError> {
+        let random_validators = match
+            Self::opoc_assignment_get_random_validators_finney_v1(
+                nodes_works_operations,
+                U256::from(validators_amount),
+                first_free,
+                validators_to_exclude
+            )
+        {
+            Ok(validators) => validators,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
+        for validator in random_validators {
+            let is_blacklisted = Self::opoc_blacklist_operations_check(
+                opoc_blacklist_operations,
+                &validator
+            );
+
+            // if black listed, remove the validator from the list of validators
+            if is_blacklisted {
+                Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &validator);
+            }
+
+            // increment the number of works of the validator
+            Self::opoc_nodes_works_operations_add(nodes_works_operations, &validator, &request_id);
+
+            // calculate expiration_block_number after the add of the request
+            let works_execution_max_time_sum =
+                Self::opoc_nodes_works_operations_sum_execution_max_time(
+                    nodes_works_operations,
+                    &validator
+                );
+            let expiration_block_number = current_block + works_execution_max_time_sum;
+
+            // assign the request to the validator
+            Self::opoc_assignment_operations_add(
+                opoc_assignment_operations,
+                &request_id,
+                &validator,
+                &expiration_block_number
+            );
+        }
+
+        Ok(())
+    }
+    fn opoc_assignment_get_random_validators_finney_v1(
+        nodes_works_operations: &BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
+        number: U256,
+        first_free: bool,
+        validators_to_exclude: Vec<T::AccountId>
+    ) -> Result<Vec<T::AccountId>, DispatchError> {
+        let number_usize = number.low_u64() as usize;
+
+        // Take all validators from the network excluding the ones that should be excluded
+        let validators: Vec<T::AccountId> = Self::get_active_validators()
+            .into_iter()
+            .filter(|account_id| !validators_to_exclude.contains(account_id))
+            .collect();
+
+        // Take potential validators from the validators list
+        // - If first_free is true, take only the validators that have not been assigned any work, it the number of free validators is less than the number of validators needed, take all the validators
+        // - If first_free is false, take all the validators
+        let potential_validators: Vec<T::AccountId> = if first_free {
+            let free_validators: Vec<T::AccountId> = validators
+                .iter()
+                .filter(
+                    |account_id|
+                        Self::opoc_nodes_works_operations_count(
+                            nodes_works_operations,
+                            account_id
+                        ) == 0
+                )
+                .cloned()
+                .collect();
+
+            if free_validators.len() >= number_usize {
+                free_validators
+            } else {
+                validators
+            }
+        } else {
+            validators
+        };
+
+        // Be sure there are enough validators to assign the work
+        let validator_count = potential_validators.len();
+        if validator_count < number_usize {
+            return Err(DispatchError::Other("Not enough validators"));
+        }
+
+        // Usa BABE VRF per la randomness
+        let random_seed = T::Randomness::random(&b"validator_selection"[..]);
+        let random_bytes = random_seed.0.encode();
+
+        let mut selected_validators = Vec::with_capacity(number_usize);
+        let mut used_indices = Vec::new();
+
+        for i in 0..number_usize {
+            let random_value = U256::from_big_endian(&random_bytes[i * 4..(i + 1) * 4]);
+            let mut index = (random_value % U256::from(validator_count)).low_u64() as usize;
+
+            // Trova il prossimo indice non usato
+            let count = 0;
+            while used_indices.contains(&index) {
+                index = (index + 1) % validator_count;
+                if count == validator_count {
+                    break;
+                }
+            }
+            used_indices.push(index);
+
+            if let Some(validator) = potential_validators.get(index) {
+                selected_validators.push(validator.clone());
+            }
+        }
+
+        // Be sure the selected validators are in the correct number
+        if selected_validators.len() < number_usize {
+            return Err(DispatchError::Other("Failed to select enough unique validators"));
+        }
+
+        Ok(selected_validators)
     }
 }

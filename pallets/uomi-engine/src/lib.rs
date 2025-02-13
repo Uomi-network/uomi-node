@@ -110,7 +110,8 @@ pub mod pallet {
 	pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> + session::Config + pallet_ipfs::Config {
 		type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-		type Randomness: Randomness<<Self as frame_system::Config>::Hash, BlockNumberFor<Self>>;
+        type RandomnessOld: Randomness<<Self as frame_system::Config>::Hash, BlockNumberFor<Self>>; // For finney update. remove on turing
+		type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
 	}
@@ -349,6 +350,8 @@ pub mod pallet {
         type Call = Call<T>;
     
         fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            let current_block_number = frame_system::Pallet::<T>::block_number().into();
+
             match call {
                 Call::set_inherent_data { .. } => {
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -360,11 +363,11 @@ pub mod pallet {
                 },
                 Call::store_nodes_outputs { .. } => {
                     // Existing validation for store_nodes_outputs
-                    if source == TransactionSource::External {
+                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         log::info!("UOMI-ENGINE: Rejecting store_nodes_outputs unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
-    
+
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(&call)
@@ -374,7 +377,7 @@ pub mod pallet {
                 },
                 Call::store_nodes_versions { .. } => {
                     // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External {
+                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         log::info!("UOMI-ENGINE: Rejecting store_nodes_versions unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
@@ -516,10 +519,10 @@ pub mod pallet {
             let _ = ensure_signed(origin)?;
             
             // remove all data on Inputs storage
-            let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
-            for (request_id, _) in inputs {
-                Inputs::<T>::remove(request_id);
-            }
+            // let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
+            // for (request_id, _) in inputs {
+            //    Inputs::<T>::remove(request_id);
+            // }
 
             Ok(())
         }
@@ -759,19 +762,17 @@ impl<T: Config> Pallet<T> {
         let nft_required_consensus = min_validators;
         let nft_execution_max_time = min_blocks;
 
-        // Consider the request unsecured if the nft_required_consensus is less than or equal to 1
-        let unsecured = nft_required_consensus <= U256::from(1);
-
         // Store the inputs in the Inputs storage
         Inputs::<T>::insert(request_id, (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
 
-        // When request is unsecured, we can assign work to validator directly here
-        if unsecured {
+        // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+        if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {
+            log::info!("UOMI-ENGINE: Managed old unsecured mode");
             let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
             let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), U256>::new();
             let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<U256, bool>>::new();
             let current_block = frame_system::Pallet::<T>::block_number().into();
-            match Self::opoc_assignment(
+            match Self::opoc_assignment_finney_v1(
                 &mut opoc_blacklist_operations,
                 &mut opoc_assignment_operations,
                 &mut nodes_works_operations,
@@ -817,12 +818,10 @@ impl<T: Config> Pallet<T> {
             return pallet_staking::Validators::<T>::contains_key(account_id);
         }
 
-        let active_validators = session::Validators::<T>::get();
-        if let Some(validator_id) = <T::ValidatorIdOf as Convert<T::AccountId, Option<T::ValidatorId>>>::convert(account_id.clone()) {
-            active_validators.contains(&validator_id)
-        } else {
-            false
-        }
+        let active_validators = pallet_session::Validators::<T>::get();
+        let validator_id = T::ValidatorId::try_from(account_id.clone()).ok().unwrap();
+
+        active_validators.contains(&validator_id)
     }
 
     // TODO: It should be better to load directly validators from session::Validators::<T> but we need to find a way to convert them to T::AccountId
