@@ -718,6 +718,24 @@ parameter_types! {
     pub MaxActiveValidators: u32 = 1000;
 }
 
+pub struct ConditionAwareEraPayout;
+
+impl pallet_staking::EraPayout<Balance> for ConditionAwareEraPayout {
+    fn era_payout(
+        total_staked: Balance,
+        total_issuance: Balance,
+        era_duration_millis: u64,
+    ) -> (Balance, Balance) {
+        // Use the standard payout calculation
+        pallet_staking::ConvertCurve::<RewardCurve>::era_payout(
+            total_staked,
+            total_issuance,
+            era_duration_millis,
+        )
+    }
+}
+
+
 impl pallet_staking::Config for Runtime {
     type NominationsQuota = pallet_staking::FixedNominationsQuota<{ MaxNominators::get() }>;
     type Currency = Balances;
@@ -737,7 +755,7 @@ impl pallet_staking::Config for Runtime {
     type SlashDeferDuration = ConstU32<28>;
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
     type SessionInterface = Self;
-    type EraPayout = pallet_staking::ConvertCurve<RewardCurve>;
+    type EraPayout = ConditionAwareEraPayout;
     type NextNewSession = Session;
     type MaxExposurePageSize = ConstU32<1000>; // O un altro valore appropriato
     type VoterList = VoterList;

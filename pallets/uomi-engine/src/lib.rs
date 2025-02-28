@@ -35,7 +35,7 @@ use frame_support::{
         DispatchError, DispatchResultWithPostInfo, Hooks, InvalidTransaction, IsType, 
         MaxEncodedLen, Member, RuntimeDebug, StorageDoubleMap, StorageMap, 
         TransactionPriority, TransactionSource, TransactionValidity, ValidTransaction, 
-        ValidateUnsigned, ValueQuery,
+        ValidateUnsigned, ValueQuery, OptionQuery, Weight
     },
     parameter_types,
     storage::types::StorageValue,
@@ -65,7 +65,7 @@ use sp_std::{
     vec::Vec,
 };
 use types::{Address, AiModelKey, BlockNumber, Data, NftId, RequestId, Version};
-
+use sp_core::Get;
 use crate::ipfs::IpfsInterface;
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
@@ -164,6 +164,26 @@ pub mod pallet {
         InvalidAddress,
         InvalidCid,
     }
+
+    #[pallet::storage]
+    #[pallet::getter(fn frozen_points)]
+    pub type FrozenPoints<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        u32,
+        OptionQuery
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn active_penalties)]
+    pub type ActivePenalties<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        (BlockNumberFor<T>, BlockNumberFor<T>),
+        OptionQuery
+    >;
 
     // InherentDidUpdate storage is used to store the execution of the inherent function.
 	#[pallet::storage]
@@ -326,10 +346,13 @@ pub mod pallet {
             });
         }
 
-		fn on_finalize(_n: BlockNumberFor<T>) {
+
+		fn on_finalize(current_block: BlockNumberFor<T>) {
             // Be sure that the InherentDidUpdate is set to true and reset it to false.
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "UOMI-ENGINE: inherent must be updated once in the block");
+
+            Self::apply_penalties();
 		}
     }
 
@@ -389,6 +412,7 @@ pub mod pallet {
     // Calls are the dispatchable functions that can be called by users and offchain workers.
     #[pallet::call]
     impl<T: Config> Pallet<T> {
+        
 		#[pallet::call_index(0)]
 		#[pallet::weight((500_000, DispatchClass::Mandatory))]
 		pub fn set_inherent_data(
@@ -634,6 +658,61 @@ pub mod pallet {
 //////////////////////////////////////////////////////////////////////////////////
 
 impl<T: Config> Pallet<T> {
+
+    pub fn apply_penalties() -> Weight {
+        let current_block = frame_system::Pallet::<T>::block_number();
+        let current_era = pallet_staking::Pallet::<T>::active_era()
+            .map(|e| e.index)
+            .unwrap_or(0);
+        
+        // Get all validators
+        let validators = pallet_staking::Validators::<T>::iter().map(|(account, _)| account).collect::<Vec<_>>();
+        
+        for validator in validators {
+            if let Some((start, end)) = ActivePenalties::<T>::get(&validator) {
+                // Check if penalty is starting on this block
+                if current_block == start {
+                    // Store current points before setting to zero
+                    let current_points = pallet_staking::ErasRewardPoints::<T>::get(current_era)
+                        .individual
+                        .get(&validator)
+                        .cloned()
+                        .unwrap_or_default();
+                    
+                    // Store the points to restore later
+                    FrozenPoints::<T>::insert(&validator, current_points);
+                    
+                    // Set points to zero
+                    pallet_staking::ErasRewardPoints::<T>::mutate(current_era, |points| {
+                        points.individual.insert(validator.clone(), 0);
+                    });
+                }
+                // Check if penalty is active
+                else if current_block > start && current_block < end {
+                    // Ensure points remain at zero during penalty period
+                    pallet_staking::ErasRewardPoints::<T>::mutate(current_era, |points| {
+                        points.individual.insert(validator.clone(), 0);
+                    });
+                }
+                // Check if penalty is ending on this block
+                else if current_block == end {
+                    // Restore frozen points
+                    if let Some(frozen_points) = FrozenPoints::<T>::get(&validator) {
+                        pallet_staking::ErasRewardPoints::<T>::mutate(current_era, |points| {
+                            points.individual.insert(validator.clone(), frozen_points);
+                        });
+                        
+                        // Clean up storage
+                        FrozenPoints::<T>::remove(&validator);
+                    }
+                }
+            }
+        }
+        
+        // Return estimated weight - increased for additional storage operations
+        T::DbWeight::get().reads_writes(4, 3)
+    }
+
 
     // RUN REQUEST FUNCTION
     //////////////////////////////////////////////////////////////////////////////////
