@@ -29,6 +29,8 @@ pallet-session = { workspace = true }
 pallet-ipfs = { workspace = true }
 sp-inherents = { workspace = true }
 wasmtime = { version = "23.0.1", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # frame deps
 frame-benchmarking = { workspace = true }

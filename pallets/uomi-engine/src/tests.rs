@@ -506,7 +506,7 @@ fn test_offchain_run_wasm_function_with_valid_wasm() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(99), U256::from(99), 0, U256::from(0));
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -526,7 +526,7 @@ fn test_offchain_run_wasm_function_with_infinite_wasm() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(3), U256::from(3));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(3), U256::from(3), 0, U256::from(0));
         assert!(result.is_err());
 
         // Be sure error message is "WASM execution error"
@@ -546,7 +546,7 @@ fn test_offchain_run_wasm_function_with_call_ai() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(99), U256::from(99), 0, U256::from(0));
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -572,7 +572,7 @@ fn test_offchain_run_wasm_function_with_get_file_cid() {
         ));
 
         // Run the offchain_run_wasm function
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(2), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), U256::from(2), U256::from(99), U256::from(99), 0, U256::from(0));
         assert!(result.is_ok());
     });
 }
@@ -963,7 +963,6 @@ fn test_inherent_opoc_level_1_no_timeouts() {
       }
       assert_eq!(opoc_assignments_with_valid_expirations, nft_required_consensus.as_u32() - 1);
   });
-    
 }
 
 #[test]

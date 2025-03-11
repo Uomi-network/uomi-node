@@ -10,13 +10,14 @@ use sp_std::{
 use scale_info::prelude::string::String;
 use scale_info::prelude::format;
 use core::sync::atomic::{AtomicBool, Ordering};
+use serde_json::json;
 
 static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
     ipfs::IpfsInterface,
-    payloads::{PayloadNodesOutputs, PayloadNodesVersions},
+    payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
     {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels},
 };
@@ -82,8 +83,11 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
 
         // Load request data from Inputs storage
-        let (block_number, nft_id, _nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
+        let (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
         log::info!("UOMI-ENGINE: Request data loaded with block number: {:?}, nft_id: {:?} and nft_execution_max_time: {:?}", block_number, nft_id, nft_execution_max_time);
+
+        // Detect the level of opoc the execution should have
+        let opoc_level = Self::offchain_detect_opoc_level(&request_id, &nft_required_consensus);
 
         // Load wasm associated to the request nft_id
         let wasm = match Self::offchain_load_wasm_from_nft_id(&nft_id, &nft_file_cid) {
@@ -102,7 +106,7 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Wasm loaded with length: {:?}", wasm.len());
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_execution_max_time) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_execution_max_time, opoc_level, request_id) {
             Ok(output_data) => {
                 log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
                 // Store the output data
@@ -206,7 +210,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
 
@@ -275,22 +279,6 @@ impl<T: Config> Pallet<T> {
             *caller.data_mut() = buffer;
         };
 
-        let call_ai = move |mut caller: wasmtime::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
-            let mut buffer = vec![0u8; len as usize];
-            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
-            let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer) {
-                Ok(output) => output,
-                Err(error) => {
-                    log::error!("Error calling the AI: {:?}", error);
-                    Vec::new()
-                }
-            };
-            let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
-            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
-        };
-
         let get_cid_file = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
             let mut buffer = vec![0u8; len as usize];
@@ -317,13 +305,34 @@ impl<T: Config> Pallet<T> {
             // Do nothing, function exposed to help wasm debugging
         };
 
+        // NOTE: The call_ai function is "special". It needs to track the number of calls and count them by incrementing a counter.
+        // This is required to permit us to log the executions and store them on OpocL0Inferences (on Opoc level 0) or read them from OpocL0Inferences (on Opoc level 1/2).
+        let call_ai_counter = std::sync::RwLock::new(0u32);
+        let call_ai = move |mut caller: wasmtime::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+            *call_ai_counter.write().unwrap() += 1;
+
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            let model = AiModelKey::from(model as u32);
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, opoc_level, *call_ai_counter.read().unwrap(), request_id) {
+                Ok(output) => output,
+                Err(error) => {
+                    log::error!("Error calling the AI: {:?}", error);
+                    Vec::new()
+                }
+            };
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
         let mut linker = wasmtime::Linker::new(&engine);
         linker.func_wrap("env", "get_input_file", get_input_file).unwrap();
         linker.func_wrap("env", "get_input_data", get_input_data).unwrap();
         linker.func_wrap("env", "set_output", set_output).unwrap();
-        linker.func_wrap("env", "call_ai", call_ai).unwrap();
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
+        linker.func_wrap("env", "call_ai", call_ai).unwrap();
 
         let instance = match linker.instantiate(&mut store, &module) {
             Ok(instance) => instance,
@@ -565,7 +574,7 @@ impl<T: Config> Pallet<T> {
         wasm_data
     }
 
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>) -> Result<Vec<u8>, DispatchError> {
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
@@ -581,65 +590,120 @@ impl<T: Config> Pallet<T> {
         if final_local_name == Data::default() {
             return Err(DispatchError::Other("Error getting the model name from the AiModels storage - final_local_name is empty"));
         }
+ 
+        let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
+        if current_block_number < 2000000.into() || opoc_level < 1 { // For finney update. remove on turing
+            let url = "http://localhost:8888/run";
+            let input_data = String::from_utf8(input).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in input data");
+                DispatchError::Other("Invalid UTF-8 in input data")
+            })?;
 
-        let url = "http://localhost:8888/run";
-        let input_data = String::from_utf8(input).map_err(|_| {
-            log::error!("UOMI-ENGINE: Invalid UTF-8 in input data");
-            DispatchError::Other("Invalid UTF-8 in input data")
-        })?;
+            let model = String::from_utf8(final_local_name.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
+                DispatchError::Other("Invalid UTF-8 in final local name")
+            })?;
 
-        let model = String::from_utf8(final_local_name.to_vec()).map_err(|_| {
-            log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
-            DispatchError::Other("Invalid UTF-8 in final local name")
-        })?;
+            let body = json!({
+                "model": model,
+                "input": input_data
+            }).to_string();
 
-        fn escape_json_string(s: &str) -> String {
-            s.replace('\\', "\\\\")  // First escape backslashes
-             .replace('\"', "\\\"")  // Then escape quotes
-             .replace('\n', "\\n")   // Handle newlines
-             .replace('\r', "\\r")   // Handle carriage returns
-             .replace('\t', "\\t")   // Handle tabs
+            let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
+            request = request
+                .add_header("Content-Type", "application/json")
+                .add_header("Accept", "application/json");
+
+            let pending = match request.send() {
+                Ok(pending_request) => pending_request,
+                Err(e) => {
+                    log::error!("UOMI-ENGINE: Failed to send HTTP request: {:?}", e);
+                    return Err(DispatchError::Other("Failed to send HTTP request"));
+                }
+            };
+        
+            let response = match pending.wait() {
+                Ok(response) => response,
+                Err(e) => {
+                    log::error!("UOMI-ENGINE: HTTP request failed after sending: {:?}", e);
+                    return Err(DispatchError::Other("HTTP request failed after sending"));
+                }
+            };
+        
+            if response.code != 200 {
+                let body = response.body().collect::<Vec<u8>>();
+                if let Ok(body_str) = sp_std::str::from_utf8(&body) {
+                    log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body: {}", response.code, body_str);
+                } else {
+                    log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body is not UTF-8", response.code);
+                }
+                return Err(DispatchError::Other("Error response from AI service"));
+            }
+        
+            let response_body = response.body().collect::<Vec<u8>>();
+            let output: Data = response_body.try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert response body to Data type");
+                DispatchError::Other("Failed to convert response body")
+            })?;
+
+            let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
+                DispatchError::Other("Invalid UTF-8 in output data")
+            })?;
+
+            let output_json: serde_json::Value = serde_json::from_str(&output_string).map_err(|_| {
+                log::error!("UOMI-ENGINE: Error parsing output data to JSON");
+                DispatchError::Other("Error parsing output data to JSON")
+            })?;
+
+            // Take the string written on output_json["proof"] if is present, otherwise take nothing
+            let mut output_proof = String::new();
+            if let Some(proof) = output_json.get("proof") {
+                output_proof = proof.as_str().unwrap_or("").to_string();
+            }
+
+            // Override output_json by removing the proof field
+            let mut output_json_no_proof = output_json.clone();
+            output_json_no_proof.as_object_mut().unwrap().remove("proof");
+
+            // Override output by converting output_json_no_proof to a Data
+            let output: Data = output_json_no_proof.to_string().as_bytes().to_vec().try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert output to Data type");
+                DispatchError::Other("Failed to convert output")
+            })?;
+
+            if !output_proof.is_empty() && current_block_number >= 2000000.into() { // For finney update. remove on turing {
+                // Store the inference on OpocL0Inferences
+                let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
+                if !signer.can_sign() {
+                    log::error!("No accounts available to sign the transaction");
+                    return Err(DispatchError::Other("No accounts available to sign"));
+                }
+
+                // Convert output_proof to a Data
+                let output_proof: Data = output_proof.as_bytes().to_vec().try_into().map_err(|_| {
+                    log::error!("UOMI-ENGINE: Failed to convert output proof to Data type");
+                    DispatchError::Other("Failed to convert output proof")
+                })?;
+
+                let _ = signer.send_unsigned_transaction(
+                    |acct| PayloadNodesOpocL0Inferences { 
+                        request_id: request_id.clone(), 
+                        inference_index: counter,
+                        inference_proof: output_proof.clone(),
+                        public: acct.public.clone(),
+                    },
+                    |payload, signature| Call::store_nodes_opoc_l0_inferences { 
+                        payload, 
+                        signature 
+                    },
+                );
+            }
+
+            Ok(output.to_vec())
+        } else {
+            Ok(Vec::new()) // TODO...
         }
-        let body: String = format!("{{\"model\": \"{}\", \"input\": \"{}\"}}", model, escape_json_string(&input_data));
-
-        let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
-        request = request
-            .add_header("Content-Type", "application/json")
-            .add_header("Accept", "application/json");
-
-        let pending = match request.send() {
-            Ok(pending_request) => pending_request,
-            Err(e) => {
-                log::error!("UOMI-ENGINE: Failed to send HTTP request: {:?}", e);
-                return Err(DispatchError::Other("Failed to send HTTP request"));
-            }
-        };
-    
-        let response = match pending.wait() {
-            Ok(response) => response,
-            Err(e) => {
-                log::error!("UOMI-ENGINE: HTTP request failed after sending: {:?}", e);
-                return Err(DispatchError::Other("HTTP request failed after sending"));
-            }
-        };
-    
-        if response.code != 200 {
-            let body = response.body().collect::<Vec<u8>>();
-            if let Ok(body_str) = sp_std::str::from_utf8(&body) {
-                log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body: {}", response.code, body_str);
-            } else {
-                log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body is not UTF-8", response.code);
-            }
-            return Err(DispatchError::Other("Error response from AI service"));
-        }
-    
-        let response_body = response.body().collect::<Vec<u8>>();
-        let output: Data = response_body.try_into().map_err(|_| {
-            log::error!("UOMI-ENGINE: Failed to convert response body to Data type");
-            DispatchError::Other("Failed to convert response body")
-        })?;
-
-        Ok(output.to_vec())
     }
 
     fn offcahin_worker_get_cid_file(cid: Cid, block_number: BlockNumber) -> Result<Vec<u8>, DispatchError> {
@@ -712,5 +776,31 @@ impl<T: Config> Pallet<T> {
         );
 
         Ok(())
+    }
+
+    fn offchain_detect_opoc_level(request_id: &RequestId, nft_required_consensus: &U256) -> u8 {
+        let mut opoc_level = 0;
+
+        let opoc_assignments_of_level_0 = 1 as usize;
+        let opoc_assignments_of_level_1 = nft_required_consensus.as_u32() as usize;
+
+        let opoc_assignment_count = OpocAssignment::<T>::iter_prefix(*request_id).count();
+
+        match opoc_assignment_count {
+            0 => { // NOTE: This case should never happen, but check to avoid runtime error
+                opoc_level = u8::from(0);
+            },
+            x if x == opoc_assignments_of_level_0 => {
+                opoc_level = u8::from(0);
+            },
+            x if x == opoc_assignments_of_level_1 => {
+                opoc_level = u8::from(1);
+            },
+            _ => {
+                opoc_level = u8::from(2);
+            },
+        }
+
+        opoc_level
     }
 }
