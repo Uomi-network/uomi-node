@@ -8,7 +8,6 @@ use sp_std::{
     vec::Vec,
 };
 use scale_info::prelude::string::String;
-use scale_info::prelude::format;
 use core::sync::atomic::{AtomicBool, Ordering};
 use serde_json::json;
 
@@ -19,8 +18,10 @@ use crate::{
     ipfs::IpfsInterface,
     payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
-    {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels},
+    {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels, NodesOpocL0Inferences},
 };
+
+const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1; // 2000000; // For finney update. remove on turing
 
 impl<T: Config> Pallet<T> {
     pub fn semaphore_status() -> bool {
@@ -574,6 +575,7 @@ impl<T: Config> Pallet<T> {
         wasm_data
     }
 
+    #[cfg(feature = "std")]
     pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
@@ -590,62 +592,25 @@ impl<T: Config> Pallet<T> {
         if final_local_name == Data::default() {
             return Err(DispatchError::Other("Error getting the model name from the AiModels storage - final_local_name is empty"));
         }
+
+        let input_data = String::from_utf8(input).map_err(|_| {
+            log::error!("UOMI-ENGINE: Invalid UTF-8 in input data");
+            DispatchError::Other("Invalid UTF-8 in input data")
+        })?;
+
+        let model = String::from_utf8(final_local_name.to_vec()).map_err(|_| {
+            log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
+            DispatchError::Other("Invalid UTF-8 in final local name")
+        })?;
  
         let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-        if current_block_number < 2000000.into() || opoc_level < 1 { // For finney update. remove on turing
-            let url = "http://localhost:8888/run";
-            let input_data = String::from_utf8(input).map_err(|_| {
-                log::error!("UOMI-ENGINE: Invalid UTF-8 in input data");
-                DispatchError::Other("Invalid UTF-8 in input data")
-            })?;
-
-            let model = String::from_utf8(final_local_name.to_vec()).map_err(|_| {
-                log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
-                DispatchError::Other("Invalid UTF-8 in final local name")
-            })?;
-
+        if current_block_number < TEMP_BLOCK_FOR_NEW_OPOC.into() || opoc_level < 1 { // For finney update. remove on turing
             let body = json!({
                 "model": model,
                 "input": input_data
             }).to_string();
 
-            let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
-            request = request
-                .add_header("Content-Type", "application/json")
-                .add_header("Accept", "application/json");
-
-            let pending = match request.send() {
-                Ok(pending_request) => pending_request,
-                Err(e) => {
-                    log::error!("UOMI-ENGINE: Failed to send HTTP request: {:?}", e);
-                    return Err(DispatchError::Other("Failed to send HTTP request"));
-                }
-            };
-        
-            let response = match pending.wait() {
-                Ok(response) => response,
-                Err(e) => {
-                    log::error!("UOMI-ENGINE: HTTP request failed after sending: {:?}", e);
-                    return Err(DispatchError::Other("HTTP request failed after sending"));
-                }
-            };
-        
-            if response.code != 200 {
-                let body = response.body().collect::<Vec<u8>>();
-                if let Ok(body_str) = sp_std::str::from_utf8(&body) {
-                    log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body: {}", response.code, body_str);
-                } else {
-                    log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body is not UTF-8", response.code);
-                }
-                return Err(DispatchError::Other("Error response from AI service"));
-            }
-        
-            let response_body = response.body().collect::<Vec<u8>>();
-            let output: Data = response_body.try_into().map_err(|_| {
-                log::error!("UOMI-ENGINE: Failed to convert response body to Data type");
-                DispatchError::Other("Failed to convert response body")
-            })?;
-
+            let output = Self::offchain_worker_call_ai_send_request(body)?;
             let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
                 log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
                 DispatchError::Other("Invalid UTF-8 in output data")
@@ -672,7 +637,7 @@ impl<T: Config> Pallet<T> {
                 DispatchError::Other("Failed to convert output")
             })?;
 
-            if !output_proof.is_empty() && current_block_number >= 2000000.into() { // For finney update. remove on turing {
+            if !output_proof.is_empty() && current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing {
                 // Store the inference on OpocL0Inferences
                 let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
                 if !signer.can_sign() {
@@ -702,8 +667,101 @@ impl<T: Config> Pallet<T> {
 
             Ok(output.to_vec())
         } else {
-            Ok(Vec::new()) // TODO...
+            let mut proof: Data = Data::default();
+            for (_account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
+                let (inference_index, inference_proof) = inference_data;
+                if inference_index == counter {
+                    proof = inference_proof;
+                    break;
+                }
+            }
+
+            let mut body = String::new();
+            if proof.is_empty() {
+                body = json!({
+                    "model": model,
+                    "input": input_data
+                }).to_string();
+            } else {
+                body = json!({
+                    "model": model,
+                    "input": input_data,
+                    "proof": String::from_utf8(proof.to_vec()).unwrap_or_default()
+                }).to_string();
+            }
+
+            let output = Self::offchain_worker_call_ai_send_request(body)?;
+            let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
+                DispatchError::Other("Invalid UTF-8 in output data")
+            })?;
+
+            let output_json: serde_json::Value = serde_json::from_str(&output_string).map_err(|_| {
+                log::error!("UOMI-ENGINE: Error parsing output data to JSON");
+                DispatchError::Other("Error parsing output data to JSON")
+            })?;
+
+            // Take the string written on output_json["proof"] if is present, otherwise take nothing
+            let mut output_proof = String::new();
+            if let Some(proof) = output_json.get("proof") {
+                output_proof = proof.as_str().unwrap_or("").to_string();
+            }
+
+            // Override output_json by removing the proof field
+            let mut output_json_no_proof = output_json.clone();
+            output_json_no_proof.as_object_mut().unwrap().remove("proof");
+
+            // Override output by converting output_json_no_proof to a Data
+            let output: Data = output_json_no_proof.to_string().as_bytes().to_vec().try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert output to Data type");
+                DispatchError::Other("Failed to convert output")
+            })?;
+
+            Ok(output.to_vec())
         }
+    }
+    
+    fn offchain_worker_call_ai_send_request(body: String) -> Result<Data, DispatchError> {
+        let url = "http://2.228.138.42:8888/run";
+
+        let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
+        request = request
+            .add_header("Content-Type", "application/json")
+            .add_header("Accept", "application/json");
+
+        let pending = match request.send() {
+            Ok(pending_request) => pending_request,
+            Err(e) => {
+                log::error!("UOMI-ENGINE: Failed to send HTTP request: {:?}", e);
+                return Err(DispatchError::Other("Failed to send HTTP request"));
+            }
+        };
+    
+        let response = match pending.wait() {
+            Ok(response) => response,
+            Err(e) => {
+                log::error!("UOMI-ENGINE: HTTP request failed after sending: {:?}", e);
+                return Err(DispatchError::Other("HTTP request failed after sending"));
+            }
+        };
+    
+        if response.code != 200 {
+            let body = response.body().collect::<Vec<u8>>();
+            if let Ok(body_str) = sp_std::str::from_utf8(&body) {
+                log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body: {}", response.code, body_str);
+            } else {
+                log::error!("UOMI-ENGINE: Error response from AI service. Status: {}. Body is not UTF-8", response.code);
+            }
+            return Err(DispatchError::Other("Error response from AI service"));
+        }
+    
+        let response_body = response.body().collect::<Vec<u8>>();
+        let output: Data = response_body.try_into().map_err(|_| {
+            log::error!("UOMI-ENGINE: Failed to convert response body to Data type");
+            DispatchError::Other("Failed to convert response body")
+        })?;
+
+        Ok(output)
     }
 
     fn offcahin_worker_get_cid_file(cid: Cid, block_number: BlockNumber) -> Result<Vec<u8>, DispatchError> {
