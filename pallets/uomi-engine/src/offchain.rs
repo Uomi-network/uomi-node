@@ -701,12 +701,6 @@ impl<T: Config> Pallet<T> {
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
 
-            // Take the string written on output_json["proof"] if is present, otherwise take nothing
-            let mut output_proof = String::new();
-            if let Some(proof) = output_json.get("proof") {
-                output_proof = proof.as_str().unwrap_or("").to_string();
-            }
-
             // Override output_json by removing the proof field
             let mut output_json_no_proof = output_json.clone();
             output_json_no_proof.as_object_mut().unwrap().remove("proof");
