@@ -9,7 +9,6 @@ use sp_std::{
 };
 use scale_info::prelude::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
-use serde_json::json;
 
 static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
@@ -22,6 +21,33 @@ use crate::{
 };
 
 const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1; // 2000000; // For finney update. remove on turing
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiRequestWithProof {
+    model: String,
+    input: String,
+    proof: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiRequestWithoutProof {
+    model: String,
+    input: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiResponse {
+    result: bool,
+    response: String,
+    proof: String,
+    error: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiResponseCleaned {
+    result: bool,
+    response: String,
+}
 
 impl<T: Config> Pallet<T> {
     pub fn semaphore_status() -> bool {
@@ -605,39 +631,32 @@ impl<T: Config> Pallet<T> {
  
         let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
         if current_block_number < TEMP_BLOCK_FOR_NEW_OPOC.into() || opoc_level < 1 { // For finney update. remove on turing
-            let body = json!({
-                "model": model,
-                "input": input_data
-            }).to_string();
+            let body_data = CallAiRequestWithoutProof {
+                model: model.clone(),
+                input: input_data.clone(),
+            };
+            let body = miniserde::json::to_string(&body_data);
 
             let output = Self::offchain_worker_call_ai_send_request(body)?;
             let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
                 log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
                 DispatchError::Other("Invalid UTF-8 in output data")
             })?;
-
-            let output_json: serde_json::Value = serde_json::from_str(&output_string).map_err(|_| {
+            let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
                 log::error!("UOMI-ENGINE: Error parsing output data to JSON");
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
-
-            // Take the string written on output_json["proof"] if is present, otherwise take nothing
-            let mut output_proof = String::new();
-            if let Some(proof) = output_json.get("proof") {
-                output_proof = proof.as_str().unwrap_or("").to_string();
-            }
-
-            // Override output_json by removing the proof field
-            let mut output_json_no_proof = output_json.clone();
-            output_json_no_proof.as_object_mut().unwrap().remove("proof");
-
-            // Override output by converting output_json_no_proof to a Data
-            let output: Data = output_json_no_proof.to_string().as_bytes().to_vec().try_into().map_err(|_| {
+            let output_json_cleaned = CallAiResponseCleaned {
+                result: output_json.result,
+                response: output_json.response,
+            };
+            let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
+            let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
                 log::error!("UOMI-ENGINE: Failed to convert output to Data type");
                 DispatchError::Other("Failed to convert output")
             })?;
 
-            if !output_proof.is_empty() && current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing {
+            if !output_json.proof.is_empty() && current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing {
                 // Store the inference on OpocL0Inferences
                 let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
                 if !signer.can_sign() {
@@ -646,7 +665,7 @@ impl<T: Config> Pallet<T> {
                 }
 
                 // Convert output_proof to a Data
-                let output_proof: Data = output_proof.as_bytes().to_vec().try_into().map_err(|_| {
+                let output_proof: Data = output_json.proof.as_bytes().to_vec().try_into().map_err(|_| {
                     log::error!("UOMI-ENGINE: Failed to convert output proof to Data type");
                     DispatchError::Other("Failed to convert output proof")
                 })?;
@@ -678,16 +697,18 @@ impl<T: Config> Pallet<T> {
 
             let mut body = String::new();
             if proof.is_empty() {
-                body = json!({
-                    "model": model,
-                    "input": input_data
-                }).to_string();
+                let body_data = CallAiRequestWithoutProof {
+                    model: model.clone(),
+                    input: input_data.clone(),
+                };
+                body = miniserde::json::to_string(&body_data);
             } else {
-                body = json!({
-                    "model": model,
-                    "input": input_data,
-                    "proof": String::from_utf8(proof.to_vec()).unwrap_or_default()
-                }).to_string();
+                let body_data = CallAiRequestWithProof {
+                    model: model.clone(),
+                    input: input_data.clone(),
+                    proof: String::from_utf8(proof.to_vec()).unwrap_or_default(),
+                };
+                body = miniserde::json::to_string(&body_data);
             }
 
             let output = Self::offchain_worker_call_ai_send_request(body)?;
@@ -695,18 +716,16 @@ impl<T: Config> Pallet<T> {
                 log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
                 DispatchError::Other("Invalid UTF-8 in output data")
             })?;
-
-            let output_json: serde_json::Value = serde_json::from_str(&output_string).map_err(|_| {
+            let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
                 log::error!("UOMI-ENGINE: Error parsing output data to JSON");
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
-
-            // Override output_json by removing the proof field
-            let mut output_json_no_proof = output_json.clone();
-            output_json_no_proof.as_object_mut().unwrap().remove("proof");
-
-            // Override output by converting output_json_no_proof to a Data
-            let output: Data = output_json_no_proof.to_string().as_bytes().to_vec().try_into().map_err(|_| {
+            let output_json_cleaned = CallAiResponseCleaned {
+                result: output_json.result,
+                response: output_json.response,
+            };
+            let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
+            let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
                 log::error!("UOMI-ENGINE: Failed to convert output to Data type");
                 DispatchError::Other("Failed to convert output")
             })?;
