@@ -99,6 +99,7 @@ pallet-nomination-pools = { workspace = true }
 pallet-nomination-pools-runtime-api = { workspace = true }
 static_assertions = "1.1"
 pallet-staking-runtime-api = { workspace = true }
+pallet-relayer-orchestration = { workspace = true, default-features = false }
 
 
 # Moonbeam tracing
@@ -198,6 +199,7 @@ std = [
 	"pallet-scheduler/std",
 	"pallet-unified-accounts/std",
 	"pallet-uomi-engine/std",
+	"pallet-relayer-orchestration/std",
 	"moonbeam-evm-tracer/std",
 	"moonbeam-rpc-primitives-debug/std",
 	"moonbeam-rpc-primitives-txpool/std",

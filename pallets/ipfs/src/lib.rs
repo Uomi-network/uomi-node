@@ -557,7 +557,7 @@ pub mod pallet {
                 Some(public_key) => public_key,
                 None => {
                     log::info!(
-                        "IPFS: No local public key available, risking potential slashing! Please check https://docs"
+                        "IPFS: No local public key available, risking potential slashing! Please check https://docs.uomi.ai"
                     );
                     return Err(DispatchError::Other("No local public key available"));
                 }

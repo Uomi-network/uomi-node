@@ -1,3 +1,2 @@
 alice: ./target/release/uomi --base-path /tmp/alice --dev --alice --port 30333 --rpc-port 9944 --node-key 0000000000000000000000000000000000000000000000000000000000000001 --telemetry-url "wss://telemetry.polkadot.io/submit/ 0" --validator
 bob: ./target/release/uomi --base-path /tmp/bob --dev --bob --port 30334 --rpc-port 9945 --telemetry-url "wss://telemetry.polkadot.io/submit/ 0" --validator --bootnodes /ip4/127.0.0.1/tcp/30333/p2p/12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp
-charlie: ./target/release/uomi --base-path /tmp/charlie --dev --charlie --port 30335 --rpc-port 9946 --telemetry-url "wss://telemetry.polkadot.io/submit/ 0" --validator --bootnodes /ip4/127.0.0.1/tcp/30333/p2p/12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp

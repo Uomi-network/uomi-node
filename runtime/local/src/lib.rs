@@ -37,7 +37,7 @@ use frame_support::{
         fungible::HoldConsideration,
         tokens::{PayFromAccount, UnityAssetBalanceConversion},
         KeyOwnerProofSystem, EitherOfDiverse, LockIdentifier,
-        AsEnsureOriginWithArg, ConstU128, ConstU32, ConstU64, Currency, EqualPrivilegeOnly,
+        AsEnsureOriginWithArg, ConstU128, ConstU32, ConstU64, EqualPrivilegeOnly,
         FindAuthor, Get, InstanceFilter, LinearStoragePrice, Nothing, OnFinalize, WithdrawReasons,
     },
     weights::{
@@ -51,6 +51,7 @@ use frame_system::{
     limits::{BlockLength, BlockWeights},
     EnsureRoot, EnsureSigned,
 };
+use sp_runtime::traits::Hash as RelayerHash;
 // other
 use static_assertions::const_assert;
 use frame_election_provider_support::{
@@ -96,9 +97,11 @@ use uomi_primitives::{
     Address, AssetId, Balance, BlockNumber, Hash, Header, Nonce,
 };
 
+use sp_core::sr25519::Public;
 pub use uomi_primitives::{AccountId, Signature};
 pub use pallet_staking::StakerStatus;
 pub use pallet_uomi_engine;
+pub use pallet_relayer_orchestration;
 pub use pallet_ipfs;
 
 pub use crate::precompiles::WhitelistedCalls;
@@ -1295,6 +1298,14 @@ impl pallet_membership::Config<CommunityCouncilMembershipInst> for Runtime {
 
 parameter_types! {
     pub MaxProposalWeight: Weight = Perbill::from_percent(50) * RuntimeBlockWeights::get().max_block;
+    #[derive(Clone)]
+    pub const MaxRelayers: u32 = 100;
+    #[derive(Clone)]
+    pub const RequiredVerifications: u32 = 2;
+    #[derive(Clone)]
+    pub const MaxDataSize: u32 = 10240; // 10KB
+    #[derive(Clone)]
+    pub const RequiredValidatorPercentage: Permill = Permill::from_parts(510_000);
 }
 
 type CouncilCollective = pallet_collective::Instance2;
@@ -1310,6 +1321,21 @@ impl pallet_collective::Config<MainCouncilCollectiveInst> for Runtime {
     type MaxProposalWeight = MaxProposalWeight;
     type WeightInfo = pallet_collective::weights::SubstrateWeight<Runtime>;
 }
+
+
+impl pallet_relayer_orchestration::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    // Use Public from sp_core which implements IdentifyAccount
+    type PublicKey = Public;
+    // Use Signature from sp_runtime
+    type Signature = sp_core::sr25519::Signature;
+    type MaxRelayers = MaxRelayers;
+    type RequiredValidatorPercentage = RequiredValidatorPercentage;
+    type MaxDataSize = MaxDataSize;
+    type WeightInfo = ();
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
+}
+
 
 impl pallet_uomi_engine::Config for Runtime {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
@@ -1699,7 +1725,8 @@ construct_runtime!(
         Ipfs: pallet_ipfs = 111,
         Session: pallet_session = 120,
         Historical: pallet_session_historical = 121,
-        Staking: pallet_staking = 122
+        Staking: pallet_staking = 122,
+        PalletRelayerOrchestration: pallet_relayer_orchestration = 124,
 
 
     }
@@ -1850,19 +1877,186 @@ impl_runtime_apis! {
         }
     }
 
-    impl sp_api::Metadata<Block> for Runtime {
-        fn metadata() -> OpaqueMetadata {
-            OpaqueMetadata::new(Runtime::metadata().into())
-        }
-
-        fn metadata_at_version(version: u32) -> Option<OpaqueMetadata> {
-            Runtime::metadata_at_version(version)
-        }
-
-        fn metadata_versions() -> sp_std::vec::Vec<u32> {
-            Runtime::metadata_versions()
+   //runtime/lib.rs
+   impl pallet_relayer_orchestration::runtime_api::RelayerOrchestrationRuntimeApi<Block, AccountId, Hash> for Runtime {
+    fn submit_event(
+        relayer: AccountId,
+        chain_id: Vec<u8>,
+        block_number: u64,
+        contract_address: Vec<u8>,
+        event_data: Vec<u8>,
+        signature: sp_core::sr25519::Signature
+    ) -> Hash {
+        use frame_system::offchain::SubmitTransaction;
+        use pallet_relayer_orchestration::{Call};
+        
+        // Converti i dati in BoundedVec
+        let chain_id_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
+            ::try_from(chain_id.clone()) {
+            Ok(bounded) => bounded,
+            Err(_) => return Hash::default(),
+        };
+        
+        let contract_address_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
+            ::try_from(contract_address.clone()) {
+            Ok(bounded) => bounded,
+            Err(_) => return Hash::default(),
+        };
+        
+        let event_data_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
+            ::try_from(event_data.clone()) {
+            Ok(bounded) => bounded,
+            Err(_) => return Hash::default(),
+        };
+  
+        
+        // Invia la transazione unsigned
+       let call = Call::submit_event_unsigned { 
+            relayer: relayer.clone(), 
+            chain_id: chain_id_bounded.clone(),  
+            block_number, 
+            contract_address: contract_address_bounded.clone(),  
+            event_data: event_data_bounded.clone(), 
+            signature 
+        };
+        
+        match SubmitTransaction::<Runtime, Call<Runtime>>::submit_unsigned_transaction(call.into()) {
+            Ok(_) => {
+                // Calcola hash dell'evento per restituirlo al chiamante
+                // Creando un mock dell'evento per calcolare l'hash
+                let timestamp = PalletRelayerOrchestration::now();
+                let verifiers = vec![relayer].try_into().unwrap_or_default();
+                
+                let event: pallet_relayer_orchestration::ChainEvent<Runtime> = pallet_relayer_orchestration::ChainEvent {
+                    chain_id: chain_id_bounded,
+                    block_number,
+                    contract_address: contract_address_bounded,
+                    event_data: event_data_bounded,
+                    timestamp,
+                    verifications: 1,
+                    verifiers,
+                };
+                
+                <Runtime as frame_system::Config>::Hashing::hash_of(&event)
+            },
+            Err(_) => Hash::default(),
         }
     }
+    
+    fn batch_submit_events(
+        relayer: AccountId,
+        events: Vec<pallet_relayer_orchestration::RelayerEventInput>,
+        signature: sp_core::sr25519::Signature
+    ) -> Vec<Hash> {
+        // Per implementare batch_submit_events, possiamo semplicemente iterare e chiamare submit_event per ogni evento
+        let mut hashes = Vec::new();
+        
+        for event in events {
+            let hash = Self::submit_event(
+                relayer.clone(),
+                event.chain_id,
+                event.block_number,
+                event.contract_address,
+                event.event_data,
+                signature.clone() // Idealmente dovresti generare una firma per ciascun evento, ma per semplicità riutilizziamo la stessa
+            );
+            
+            if hash != Hash::default() {
+                hashes.push(hash);
+            }
+        }
+        
+        hashes
+    }
+
+    fn get_events(
+        chain_id: Vec<u8>,
+        contract_address: Vec<u8>,
+        limit: u32
+    ) -> Vec<Vec<u8>> {
+        // Questa funzione è di sola lettura, non richiede transazioni
+        match PalletRelayerOrchestration::get_events_for_contract(
+            chain_id,
+            contract_address,
+            limit
+        ) {
+            Ok(events) => events.into_iter().map(|event| event.encode()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+    
+    fn register_relayer(
+        relayer: AccountId,
+        public_key: sp_core::sr25519::Public,
+        validator_signature: sp_core::sr25519::Signature
+    ) -> bool {
+        use frame_system::offchain::SubmitTransaction;
+        use pallet_relayer_orchestration::Call;
+        
+        // Invia una transazione unsigned per registrare il relayer
+        let call = Call::register_relayer_unsigned { 
+            relayer: relayer.clone(),
+            public_key,
+            validator_signature,
+        };
+        
+        match SubmitTransaction::<Runtime, Call<Runtime>>::submit_unsigned_transaction(call.into()) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+    
+    fn remove_relayer(
+        relayer: AccountId,
+        validator_signature: sp_core::sr25519::Signature
+    ) -> bool {
+        use frame_system::offchain::SubmitTransaction;
+        use pallet_relayer_orchestration::Call;
+        
+        // Invia una transazione unsigned per rimuovere il relayer
+        let call = Call::remove_relayer_unsigned { 
+            relayer: relayer.clone(),
+            validator_signature,
+        };
+        
+        match SubmitTransaction::<Runtime, Call<Runtime>>::submit_unsigned_transaction(call.into()) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+    
+    fn list_relayers() -> Vec<(AccountId, sp_core::sr25519::Public)> {
+        PalletRelayerOrchestration::list_all_relayers()
+    }
+    
+    fn check_relayer_status(
+        relayer: AccountId
+    ) -> bool {
+        PalletRelayerOrchestration::is_relayer(&relayer)
+    }
+    
+    // Metodi validator-specific semplificati
+    fn validator_submit_event(
+        relayer: AccountId,
+        chain_id: Vec<u8>,
+        block_number: u64,
+        contract_address: Vec<u8>,
+        event_data: Vec<u8>,
+        validator_signature: sp_core::sr25519::Signature
+    ) -> Hash {
+        // Usa la firma del validatore per verificare
+        // Questa è semplicemente una versione più conveniente di submit_event
+        Self::submit_event(
+            relayer,
+            chain_id,
+            block_number,
+            contract_address,
+            event_data,
+            validator_signature
+        )
+    }
+    
+}
 
     impl sp_block_builder::BlockBuilder<Block> for Runtime {
         fn apply_extrinsic(extrinsic: <Block as BlockT>::Extrinsic) -> ApplyExtrinsicResult {
@@ -1882,6 +2076,20 @@ impl_runtime_apis! {
             data: sp_inherents::InherentData,
         ) -> sp_inherents::CheckInherentsResult {
             data.check_extrinsics(&block)
+        }
+    }
+
+    impl sp_api::Metadata<Block> for Runtime {
+        fn metadata() -> OpaqueMetadata {
+            OpaqueMetadata::new(Runtime::metadata().into())
+        }
+
+        fn metadata_at_version(version: u32) -> Option<OpaqueMetadata> {
+            Runtime::metadata_at_version(version)
+        }
+
+        fn metadata_versions() -> sp_std::vec::Vec<u32> {
+            Runtime::metadata_versions()
         }
     }
 

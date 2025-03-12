@@ -17,6 +17,7 @@
 // along with Uomi. If not, see <http://www.gnu.org/licenses/>.
 
 //! Uomi RPCs implementation.
+//node/src/rpc.rs
 use fc_rpc::pending::ConsensusDataProvider;
 use fc_rpc::{
     Eth, EthApiServer, EthBlockDataCacheTask, EthFilter, EthFilterApiServer, EthPubSub,
@@ -39,6 +40,7 @@ use sc_transaction_pool::{ChainApi, Pool};
 use sc_transaction_pool_api::TransactionPool;
 use sp_api::{CallApiAt, ProvideRuntimeApi};
 use sp_block_builder::BlockBuilder;
+use sp_core::sr25519::Public;
 use sp_blockchain::{
     Backend as BlockchainBackend, Error as BlockChainError, HeaderBackend, HeaderMetadata,
 };
@@ -52,6 +54,13 @@ use sc_consensus_babe::BabeWorkerHandle;
 use moonbeam_rpc_debug::{Debug, DebugServer};
 #[cfg(feature = "evm-tracing")]
 use moonbeam_rpc_trace::{Trace, TraceServer};
+use sp_runtime::traits::Block as BlockT;
+use pallet_relayer_orchestration::Config;
+use pallet_relayer_orchestration::rpc::{RelayerOrchestration};
+use pallet_relayer_orchestration::{
+     RelayerOrchestrationRuntimeApi,
+};
+use pallet_relayer_orchestration::RelayerOrchestrationApiServer;
 // TODO: get rid of this completely now that it's part of frontier?
 #[cfg(feature = "evm-tracing")]
 use moonbeam_rpc_txpool::{TxPool as MoonbeamTxPool, TxPoolServer};
@@ -210,6 +219,7 @@ where
         + moonbeam_rpc_primitives_debug::DebugRuntimeApi<Block>
         + moonbeam_rpc_primitives_txpool::TxPoolRuntimeApi<Block>,
     P: TransactionPool<Block = Block> + Sync + Send + 'static,
+    C::Api: RelayerOrchestrationRuntimeApi<Block, AccountId, Hash>,
     BE: Backend<Block> + 'static,
     BE::State: StateBackend<BlakeTwo256>,
     BE::Blockchain: BlockchainBackend<Block>,
@@ -275,6 +285,7 @@ where
         + BlockBuilder<Block>
         + BabeApi<Block>,
     P: TransactionPool<Block = Block> + Sync + Send + 'static,
+    C::Api: RelayerOrchestrationRuntimeApi<Block, AccountId, Hash>,
     BE: Backend<Block> + 'static,
     BE::State: StateBackend<BlakeTwo256>,
     BE::Blockchain: BlockchainBackend<Block>,
@@ -312,7 +323,8 @@ where
         + fp_rpc::ConvertTransactionRuntimeApi<Block>
         + fp_rpc::EthereumRuntimeRPCApi<Block>
         + BlockBuilder<Block>
-        + BabeApi<Block>,
+        + BabeApi<Block>
+        + RelayerOrchestrationRuntimeApi<Block, AccountId, Hash>, 
     P: TransactionPool<Block = Block> + Sync + Send + 'static,
     BE: Backend<Block> + 'static,
     BE::State: StateBackend<BlakeTwo256>,
@@ -380,6 +392,10 @@ where
     }
 
     if !enable_evm_rpc {
+        // Add RelayerOrchestration RPC using jsonrpsee
+        let relayer_orchestration = RelayerOrchestration::new(client.clone());
+        io.merge(relayer_orchestration.into_rpc())?;
+        
         return Ok(io);
     }
 
@@ -440,6 +456,10 @@ where
         )
         .into_rpc(),
     )?;
+
+    // Add RelayerOrchestration RPC using jsonrpsee
+    let relayer_orchestration = RelayerOrchestration::new(client.clone());
+    io.merge(relayer_orchestration.into_rpc())?;
 
     Ok(io)
 }

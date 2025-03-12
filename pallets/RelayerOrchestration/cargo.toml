@@ -1,0 +1,80 @@
+[package]
+name = "pallet-relayer-orchestration"
+version = "0.1.0"
+authors = ["Jacopo Mosconi <dev@uomi.ai>"]
+edition = "2021"
+homepage = "https://uomi.ai"
+description = "Substrate pallet that orchestrates relayers to observe and report events from external chains"
+readme = "README.md"
+
+[dependencies]
+# Substrate dependencies
+codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive"] }
+scale-info = { version = "2.1.1", default-features = false, features = ["derive"] }
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+sp-std = { workspace = true }
+sp-runtime = { workspace = true }
+sp-api = { workspace = true }
+sp-blockchain = { workspace = true, optional = true  }
+sp-core = { workspace = true }
+pallet-staking = { workspace = true }
+pallet-session = { workspace = true }
+sp-staking = { workspace = true }
+pallet-offences = { workspace = true }
+
+
+# RPC dependencies
+jsonrpc-core = { version = "18.0.0", optional = true }
+jsonrpc-core-client = { version = "18.0.0", optional = true }
+jsonrpc-derive = { version = "18.0.0", optional = true }
+sp-rpc = { workspace = true, optional = true }
+jsonrpsee = { workspace = true,  optional = true }
+
+# Other dependencies
+log = { version = "0.4.17", default-features = false }
+serde = { version = "1.0.152", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+sp-core = { workspace = true }
+sp-runtime = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+    "codec/std",
+    "scale-info/std",
+    "frame-support/std",
+    "frame-system/std",
+    "sp-std/std",
+    "sp-runtime/std",
+    "sp-api/std",
+    "sp-core/std",
+    "jsonrpc-core",
+    "jsonrpc-core-client",
+    "jsonrpc-derive",
+    "serde",
+    "sp-rpc",
+    "log/std",
+    "sp-blockchain",
+    "jsonrpsee"
+]
+runtime-benchmarks = [
+    "frame-support/runtime-benchmarks",
+    "frame-system/runtime-benchmarks",
+    "sp-runtime/runtime-benchmarks",
+]
+try-runtime = [
+    "frame-support/try-runtime",
+    "frame-system/try-runtime",
+    "sp-runtime/try-runtime",
+]
+
+# Feature specifiche per le API RPC
+rpc = [
+    "std",
+    "jsonrpc-core",
+    "jsonrpc-core-client",
+    "jsonrpc-derive",
+    "sp-rpc",
+]

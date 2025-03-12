@@ -37,7 +37,7 @@ use sc_consensus_babe::{BabeLink, BabeWorkerHandle, SlotProportion};
 #[cfg(feature = "evm-tracing")]
 use crate::{evm_tracing_types::EthApi as EthApiCmd, rpc::tracing};
 
-pub use local_runtime::RuntimeApi;
+pub use uomi_runtime::RuntimeApi;
 
 use uomi_primitives::*;
 
