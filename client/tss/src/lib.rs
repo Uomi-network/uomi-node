@@ -2473,13 +2473,10 @@ impl<B: BlockT> SessionManager<B> {
         let reshare = handler.add_reshare(
             id,
             (my_id.unwrap() + 1).to_string(),
-            old_participants.into_iter().map(|el| 
-            
-            
-                AccountId::from_slice(&el[..])
-                .unwrap()
-                .to_ss58check_with_version(Ss58AddressFormat::custom(87))
-            ).collect(),
+            (1..old_participants.len() + 1)
+                .into_iter()
+                .map(|el| el.to_string())
+                .collect::<Vec<String>>(),
             (1..participants.len() + 1)
                 .into_iter()
                 .map(|el| el.to_string())
@@ -2498,7 +2495,7 @@ impl<B: BlockT> SessionManager<B> {
             match msg {
                 Err(error) => log::error!("[TSS] Error beginning process {:?}", error),
                 Ok(msg) => {
-                    self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Key)
+                    self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Reshare)
                 }
             }
         }
