@@ -12,7 +12,7 @@ mod tests {
     use sc_network::PeerId;
 
     // Helper function to generate session ID for testing
-    fn generate_test_session_id() -> SessionId {
+    fn _generate_test_session_id() -> SessionId {
         let mut rng = rand::thread_rng();
         rng.gen()
     }
@@ -416,7 +416,7 @@ mod tests {
             .nodes()
             .iter()
             .skip(1)
-            .map(|((key, _))| key.clone())
+            .map(|(key, _)| key.clone())
             .collect::<Vec<PeerId>>();
 
         for node_key in node_keys {
@@ -764,17 +764,17 @@ mod tests {
         }
 
         // complete the whole carousel
-        let delivered_messages = network.process_round();
+        let _delivered_messages = network.process_round();
         // assert_eq!(delivered_messages.len(), nodes_count * 2, "check 1");
-        let delivered_messages = network.process_round();
+        let _delivered_messages = network.process_round();
         // assert_eq!(delivered_messages.len(), nodes_count, "check 2");
-        let delivered_messages = network.process_round();
+        let _delivered_messages = network.process_round();
         // assert_eq!(delivered_messages.len(), nodes_count, "check 3");
-        let delivered_messages = network.process_round();
+        let _delivered_messages = network.process_round();
         // assert_eq!(delivered_messages.len(), nodes_count * 2, "check 4");
-        let delivered_messages = network.process_round();
+        let _delivered_messages = network.process_round();
         // assert_eq!(delivered_messages.len(), nodes_count, "check 5");
-        let delivered_messages = network.process_round();
+        let _delivered_messages = network.process_round();
         // assert_eq!(delivered_messages.len(), nodes_count, "check 6");
 
         for peer_id in &node_keys {
@@ -795,7 +795,7 @@ mod tests {
                     .key_storage
                     .lock()
                     .unwrap()
-                    .read_data(session_id, StorageType::EcdsaKeys, Some(&identifier))
+                    .read_data(session_id, StorageType::EcdsaKeys, Some(&identifier.serialize()))
                     .is_ok(),
                 true
             );
@@ -807,7 +807,7 @@ mod tests {
                     .read_data(
                         session_id,
                         StorageType::EcdsaOfflineOutput,
-                        Some(&identifier)
+                        Some(&identifier.serialize())
                     )
                     .is_ok(),
                 true
@@ -975,7 +975,7 @@ mod tests {
                     .key_storage
                     .lock()
                     .unwrap()
-                    .read_data(session_id, StorageType::EcdsaOnlineOutput, Some(&_id))
+                    .read_data(session_id, StorageType::EcdsaOnlineOutput, Some(&_id.serialize()))
                     .is_ok(),
                 true
             );
@@ -985,7 +985,211 @@ mod tests {
                     .key_storage
                     .lock()
                     .unwrap()
-                    .read_data(session_id, StorageType::EcdsaOnlineOutput, Some(&_id))
+                    .read_data(session_id, StorageType::EcdsaOnlineOutput, Some(&_id.serialize()))
+                    .unwrap(),
+            );
+        }
+
+        // check that all signatures are the same
+        let first_signature = &signatures[0];
+        for signature in &signatures {
+            assert_eq!(
+                signature, first_signature,
+                "All signatures should be the same"
+            );
+        }
+    }
+
+
+    #[test]
+    fn test_signing_session_after_dkg_and_reshare() {
+        let _ = env_logger::try_init();
+
+        let nodes_count = 3;
+        let session_id: SessionId = 9;
+        let dkg_session_id: SessionId = session_id; // DKG and Signing use the same session ID for simplicity in this test
+        let t = 2;
+        let n: u16 = nodes_count.try_into().unwrap();
+
+        let mut network = setup_test_network(nodes_count);
+        let participants = gather_participants(&network);
+
+        // --- 1. Setup DKG Session ---
+        for (_, node) in network.nodes_mut() {
+            let event =
+                TSSRuntimeEvent::DKGSessionInfoReady(dkg_session_id, t, n, participants.clone());
+            node.session_manager.process_runtime_message(event);
+        }
+
+        network.process_all_rounds(); // Complete DKG
+                                      // let messages = network.process_round();
+                                      //         assert_eq!(messages.len(), 6);
+
+        // Verify DKG completion (optional, but good to check)
+        for (_, node) in network.nodes() {
+            let session_states = node.session_manager.dkg_session_states.lock().unwrap();
+            let state = session_states.get(&dkg_session_id);
+            assert_eq!(state.is_some(), true);
+            assert_eq!(*state.unwrap(), DKGSessionState::KeyGenerated);
+        }
+
+
+        for (_, node) in network.nodes_mut() {
+            let event = TSSRuntimeEvent::DKGReshareSessionInfoReady(
+                dkg_session_id,
+                t,
+                n,
+                participants.clone(),
+                participants.clone(),
+            );
+            node.session_manager.process_runtime_message(event);
+        }
+
+        let messages = network.process_round(); // Here each member sends its material to the coordinator
+        assert_eq!(messages.len(), 9, "Reshare, We expect only 6 messages");
+        let _messages = network.process_all_rounds();
+
+
+
+        // --- 2. Initiate Signing Session ---
+        let signing_session_id: SessionId = session_id;
+        let coordinator = participants[0]; // Let's just pick the first participant as coordinator
+        let message_to_sign =
+            hex::decode("788b0eb4bdd12ebc0600f47910acf3ff458264584920a7a465cd3d548c1d1cc5")
+                .unwrap(); // Example message
+
+        for (_, node) in network.nodes_mut() {
+            let event = TSSRuntimeEvent::SigningSessionInfoReady(
+                signing_session_id,
+                t,
+                n,
+                participants.clone(),
+                coordinator,
+                message_to_sign.clone(),
+            );
+            node.session_manager.process_runtime_message(event);
+        }
+
+        let messages = network.process_round(); // Here each member sends its material to the coordinator
+        assert_eq!(messages.len(), 6, "We expect only 6 messages");
+
+        let messages = network.process_round(); // here
+        assert_eq!(
+            messages.len(),
+            5,
+            "We expect only 5 messages, t=2 + 3 messages for EDCSA"
+        );
+
+        // --- 3. Verify Signing Session progress and Signature (basic verification) ---
+        for (_, node) in network.nodes() {
+            assert_eq!(
+                node.session_manager
+                    .signing_session_states
+                    .try_lock()
+                    .is_ok(),
+                true
+            );
+            let signing_session_states =
+                node.session_manager.signing_session_states.lock().unwrap();
+
+            assert_eq!(signing_session_states.len(), 1);
+            let signing_state = signing_session_states.get(&signing_session_id);
+            assert_eq!(signing_state.is_some(), true);
+
+            if node.session_manager.validator_key == participants[0] {
+                // coordinator
+                // At this point the coordinator should have received the commitmentsm generated the signing package
+                // and sent them to the participants. So on its side he's round2 completed
+                assert!(
+                    *signing_state.unwrap() == SigningSessionState::Round2Completed,
+                    "Signing session should progress {:?}",
+                    signing_state.unwrap()
+                );
+            } else {
+                // for participants (= no coordinator), they should have received the signing package, and sent yet their signature share
+                // so on their side they are on round2 completed
+                // assert!(
+                //     *signing_state.unwrap() == SigningSessionState::Round2Completed,
+                //     "Signing session should progress {:?}",
+                //     signing_state.unwrap()
+                // );
+                log::info!(
+                    "peer_id = {:?}, signing session state = {:?}",
+                    node.session_manager.local_peer_id,
+                    *signing_state.unwrap()
+                );
+            }
+            assert_eq!(node.session_manager.ecdsa_manager.try_lock().is_ok(), true);
+            assert_eq!(
+                node.session_manager
+                    .ecdsa_manager
+                    .lock()
+                    .unwrap()
+                    .get_sign_online(session_id)
+                    .is_some(),
+                true
+            );
+        }
+
+        let messages = network.process_round(); // here
+        assert_eq!(
+            messages.len(),
+            5,
+            "We expect only 5 messages, t=2 + 3 for EDCSA"
+        );
+
+        for (_, node) in network.nodes() {
+            assert_eq!(
+                node.session_manager
+                    .signing_session_states
+                    .try_lock()
+                    .is_ok(),
+                true
+            );
+            let signing_session_states =
+                node.session_manager.signing_session_states.lock().unwrap();
+
+            assert_eq!(signing_session_states.len(), 1);
+            let signing_state = signing_session_states.get(&signing_session_id);
+            assert_eq!(signing_state.is_some(), true);
+
+            if node.session_manager.validator_key == participants[0] {
+                // coordinator
+                // At this point the coordinator should have received the commitmentsm generated the signing package
+                // and sent them to the participants. So on its side he's round2 completed
+                assert!(
+                    *signing_state.unwrap() == SigningSessionState::SignatureGenerated,
+                    "Signing session should progress {:?}",
+                    signing_state.unwrap()
+                );
+            }
+            // assert_eq!(node.session_manager.ecdsa_manager.try_lock().is_ok(), true);
+            // assert_eq!(node.session_manager.ecdsa_manager.lock().unwrap().get_sign_online(session_id).is_some(), true);
+        }
+
+        network.process_all_rounds();
+        let mut signatures = Vec::new();
+
+        for (_, node) in network.nodes() {
+            assert_eq!(node.session_manager.key_storage.try_lock().is_ok(), true);
+
+            let _id = node.session_manager.get_my_identifier(session_id);
+            assert_eq!(
+                node.session_manager
+                    .key_storage
+                    .lock()
+                    .unwrap()
+                    .read_data(session_id, StorageType::EcdsaOnlineOutput, Some(&_id.serialize()))
+                    .is_ok(),
+                true
+            );
+
+            signatures.push(
+                node.session_manager
+                    .key_storage
+                    .lock()
+                    .unwrap()
+                    .read_data(session_id, StorageType::EcdsaOnlineOutput, Some(&_id.serialize()))
                     .unwrap(),
             );
         }

@@ -81,9 +81,6 @@ impl TestNetwork {
 
             for other_peer_id in node_keys_inner.iter() {
                 if peer_id != *other_peer_id {
-                    println!("Inside peerid = {} i will set for peerid = {} the validator key= {:?}",
-                    peer_id, other_peer_id.clone(),
-                    nodes.get(other_peer_id).unwrap().session_manager.validator_key.clone());
                     node.session_manager.peer_mapper.lock().unwrap().add_peer(
                         other_peer_id.clone(),
                         nodes.get(other_peer_id).unwrap().session_manager.validator_key.clone(),

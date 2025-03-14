@@ -27,6 +27,10 @@ wasmi = { version = "0.35", default-features = false }
 pallet-staking = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 uomi-primitives = { workspace = true }
+sp-api = { workspace = true, feature = ["std"]}
+pallet-uomi-engine = { workspace = true }
+pallet-ipfs = { workspace = true }
+pallet-babe = { workspace = true }
 
 # frame deps
 frame-benchmarking = { workspace = true }
@@ -45,6 +49,7 @@ sp-keystore	= { workspace = true, features = ["std"] }
 pallet-staking-reward-curve = { workspace = true }
 pallet-session = { workspace = true, features = ["std"] }
 pallet-timestamp = { workspace = true, features = ["std"] }
+pallet-staking = { workspace = true, features = ["std"] }
 
 [features]
 default = ["std"]
@@ -63,6 +68,7 @@ std = [
     "uomi-primitives/std",
     "hex/std",
     "log/std",
+    "pallet-babe/std"
 ]
 runtime-benchmarks = [
     "frame-benchmarking/runtime-benchmarks",

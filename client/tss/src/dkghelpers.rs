@@ -48,7 +48,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 fn format_filename(
     session_id: SessionId,
     storage_type: &StorageType,
-    identifier: Option<&Identifier>,
+    identifier: Option<&[u8]>,
 ) -> String {
     let base_name = format!("sessions/{}", session_id);
 
@@ -57,28 +57,28 @@ fn format_filename(
         StorageType::DKGRound2SecretPackage => format!("{}/dkg/round2/secret", base_name),
         StorageType::DKGRound1IdentifierPackage => {
             if let Some(id) = identifier {
-                format!("{}/round1/{}", base_name, sha256_hex(&id.serialize()))
+                format!("{}/round1/{}", base_name, sha256_hex(&id))
             } else {
                 format!("{}/round1", base_name)
             }
         }
         StorageType::DKGRound2IdentifierPackage => {
             if let Some(id) = identifier {
-                format!("{}/round2/{}", base_name, sha256_hex(&id.serialize()))
+                format!("{}/round2/{}", base_name, sha256_hex(&id))
             } else {
                 format!("{}/round2", base_name)
             }
         }
-        StorageType::Key => format!("{}/frost/keys/{}", base_name, sha256_hex(&identifier.unwrap().serialize())),
-        StorageType::PubKey => format!("{}/frost/pubkeys/{}", base_name, sha256_hex(&identifier.unwrap().serialize())),
+        StorageType::Key => format!("{}/frost/keys/{}", base_name, sha256_hex(&identifier.unwrap())),
+        StorageType::PubKey => format!("{}/frost/pubkeys/{}", base_name, sha256_hex(&identifier.unwrap())),
         StorageType::SigningCommitments => format!("{}/signing/commitments", base_name),
         StorageType::SigningNonces => format!("{}/signing/nonces", base_name),
         StorageType::SignatureShare => format!("{}/signing/share", base_name),
         StorageType::SigningPackage => format!("{}/signing/package", base_name),
 
-        StorageType::EcdsaKeys => format!("{}/ecdsa/keys/{}", base_name, sha256_hex(&identifier.unwrap().serialize())),
-        StorageType::EcdsaOfflineOutput => format!("{}/ecdsa/offline/{}", base_name, sha256_hex(&identifier.unwrap().serialize())),
-        StorageType::EcdsaOnlineOutput => format!("{}/ecdsa/online/{}", base_name, sha256_hex(&identifier.unwrap().serialize())),
+        StorageType::EcdsaKeys => format!("{}/ecdsa/keys/{}", base_name, sha256_hex(&identifier.unwrap())),
+        StorageType::EcdsaOfflineOutput => format!("{}/ecdsa/offline/{}", base_name, sha256_hex(&identifier.unwrap())),
+        StorageType::EcdsaOnlineOutput => format!("{}/ecdsa/online/{}", base_name, sha256_hex(&identifier.unwrap())),
     }
 }
 
@@ -88,14 +88,14 @@ pub trait Storage {
         session_id: SessionId,
         storage_type: StorageType,
         data: &[u8],
-        identifier: Option<&Identifier>,
+        identifier: Option<&[u8]>,
     ) -> io::Result<()>;
 
     fn read_data(
         &self,
         session_id: SessionId,
         storage_type: StorageType,
-        identifier: Option<&Identifier>,
+        identifier: Option<&[u8]>,
     ) -> io::Result<Vec<u8>>;
     
     // Helper for testing - checks if any data exists for this session
@@ -167,7 +167,7 @@ pub trait Storage {
         identifier: &Identifier
     ) -> Result<frost_ed25519::keys::KeyPackage, frost_ed25519::Error> {
         let data = self
-            .read_data(session_id, StorageType::Key, Some(identifier))
+            .read_data(session_id, StorageType::Key, Some(&identifier.serialize()[..]))
             .map_err(|err| {
                 log::error!("Errrr {:?}", err);
                 frost_ed25519::Error::DeserializationError
@@ -191,7 +191,7 @@ pub trait Storage {
 
     fn get_pubkey(&self, session_id: SessionId, identifier: &Identifier) -> Result<PublicKeyPackage, frost_ed25519::Error> {
         let data = self
-            .read_data(session_id, StorageType::PubKey, Some(identifier))
+            .read_data(session_id, StorageType::PubKey, Some(&identifier.serialize()[..]))
             .map_err(|_| frost_ed25519::Error::DeserializationError)
             .unwrap();
         PublicKeyPackage::deserialize(&data).map_err(|_| frost_ed25519::Error::DeserializationError)
@@ -230,7 +230,7 @@ pub trait Storage {
     }
     
     // Remove signature (for testing)
-    fn remove_signature(&mut self, session_id: SessionId) -> io::Result<()> {
+    fn remove_signature(&mut self, _session_id: SessionId) -> io::Result<()> {
         // Default implementation - can be overridden by implementors
         Ok(())
     }
@@ -416,7 +416,7 @@ impl Storage for MemoryStorage {
         &self,
         session_id: SessionId,
         storage_type: StorageType,
-        _identifier: Option<&Identifier>,
+        _identifier: Option<&[u8]>,
     ) -> io::Result<Vec<u8>> {
         self.data
             .get(&(session_id, storage_type))
@@ -437,7 +437,7 @@ impl Storage for MemoryStorage {
         session_id: SessionId,
         storage_type: StorageType,
         data: &[u8],
-        _identifier: Option<&Identifier>,
+        _identifier: Option<&[u8]>,
     ) -> io::Result<()> {
         self.data.insert((session_id, storage_type), data.to_vec()); // Store a copy of data
         Ok(())
@@ -527,8 +527,9 @@ impl Storage for FileStorage {
         session_id: SessionId,
         storage_type: StorageType,
         data: &[u8],
-        identifier: Option<&Identifier>,
+        identifier: Option<&[u8]>,
     ) -> io::Result<()> {
+        println!("Storing data for session {} type {:?}, identifier {:?}", session_id, storage_type, identifier);
         let filename = format_filename(session_id, &storage_type, identifier);
         store_file(filename, data)
     }
@@ -537,7 +538,7 @@ impl Storage for FileStorage {
         &self,
         session_id: SessionId,
         storage_type: StorageType,
-        identifier: Option<&Identifier>,
+        identifier: Option<&[u8]>,
     ) -> io::Result<Vec<u8>> {
         let filename = format_filename(session_id, &storage_type, identifier);
         read_file(filename)

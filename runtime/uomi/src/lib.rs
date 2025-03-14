@@ -1304,6 +1304,7 @@ impl pallet_uomi_engine::Config for Runtime {
 impl pallet_tss::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type MaxNumberOfShares = pallet_tss::types::MaxNumberOfShares;
+    type SignatureVerifier = pallet_tss::pallet::Verifier;
 }
 pub struct IpfsWrapper;
 
@@ -2534,8 +2535,71 @@ impl_runtime_apis! {
 
 
     impl pallet_tss::TssApi<Block> for Runtime {
-        fn get_unhandled_dkg_sessions() -> pallet_tss::types::SessionId {
-            pallet_tss::pallet::Pallet::<Runtime>::get_next_session_id()
+        fn get_dkg_session_threshold(session_id: u64) -> u32 {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+                return session.threshold;
+            }  
+
+            return u32::MAX;
+        }
+
+        fn get_dkg_session_participant_index(session_id: u64, account_id: [u8; 32]) -> u32 {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+                for (index, item) in session.participants.into_iter().enumerate() {
+
+                    if item == account_id.into() {
+                        return index.try_into().unwrap();
+                    }
+                }
+            }
+
+            return u32::MAX;
+        }
+
+        
+        fn get_dkg_session_participants_count(session_id: u64) -> u16 {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+                return u16::try_from(session.participants.len()).unwrap();
+            }  
+
+            return u16::MAX;
+        }
+
+        fn get_dkg_session_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+
+                let mut to_return = sp_std::prelude::Vec::<[u8; 32]>::new();
+
+                for el in session.participants.into_iter() {
+                    to_return.push(el.into());
+                }
+
+                return to_return;
+            }  
+            return Vec::new();
+        }
+        fn get_signing_session_message(session_id: u64) -> Vec<[u8; 32]> {
+            Vec::new()
+        }
+        fn get_dkg_session_old_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+
+                let mut to_return = sp_std::prelude::Vec::<[u8; 32]>::new();
+
+                if session.old_participants.is_none() {
+                    return Vec::new();
+                }
+                
+                let old_participants = session.old_participants.unwrap();
+
+                for el in old_participants.into_iter() {
+                    to_return.push(el.into());
+                }
+
+                return to_return;
+            }
+
+            return Vec::new();
         }
     }
 }

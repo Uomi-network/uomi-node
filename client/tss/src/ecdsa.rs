@@ -8,6 +8,7 @@ use multi_party_ecdsa::{
     protocols::multi_party::dmz21::{
         keygen::{KeyGenPhase, Parameters},
         sign::{SignPhase, SignPhaseOnline},
+        reshare::ReshareKeyPhase
     },
 };
 
@@ -26,19 +27,23 @@ pub struct ECDSAManager {
     keygens: BTreeMap<SessionId, RwLock<KeyGenPhase>>,
     signs: BTreeMap<SessionId, RwLock<SignPhase>>,
     signs_online: BTreeMap<SessionId, RwLock<SignPhaseOnline>>,
+    reshares: BTreeMap<SessionId, RwLock<ReshareKeyPhase>>,
 
-    buffer_keygen: BTreeMap<SessionId, Vec<(String, Vec<u8>)>>,
-    buffer_sign: BTreeMap<SessionId, Vec<(String, Vec<u8>)>>,
-    buffer_sign_online: BTreeMap<SessionId, Vec<(String, Vec<u8>)>>,
+    buffer_keygen: BTreeMap<SessionId, Vec<(ECDSAIndexWrapper, Vec<u8>)>>,
+    buffer_reshare: BTreeMap<SessionId, Vec<(ECDSAIndexWrapper, Vec<u8>)>>,
+    buffer_sign: BTreeMap<SessionId, Vec<(ECDSAIndexWrapper, Vec<u8>)>>,
+    buffer_sign_online: BTreeMap<SessionId, Vec<(ECDSAIndexWrapper, Vec<u8>)>>,
 }
 
 impl ECDSAManager {
     pub fn new() -> Self {
         Self {
             keygens: BTreeMap::new(),
+            reshares: BTreeMap::new(),
             signs: BTreeMap::new(),
             signs_online: BTreeMap::new(),
             buffer_keygen: BTreeMap::new(),
+            buffer_reshare: BTreeMap::new(),
             buffer_sign: BTreeMap::new(),
             buffer_sign_online: BTreeMap::new(),
         }
@@ -67,6 +72,31 @@ impl ECDSAManager {
 
         self.keygens.insert(session_id, lock);
 
+        Some(())
+    }
+
+    pub fn add_reshare(
+        &mut self,
+        session_id: SessionId,
+        party_id: String,
+        party_ids: Vec<String>,
+        new_party_ids: Vec<String>,
+        t: usize,
+        n: usize,
+        keys: Option<String>,
+    ) -> Option<()> {   
+        let params = Parameters {
+            threshold: t.into(),
+            share_count: n.into(),
+        };
+        let reshare = ReshareKeyPhase::new(party_id, party_ids, new_party_ids, t, keys);
+
+        if let Err(error) = reshare {
+            log::error!("[TSS] Error creating reshare {:?}", error);
+            return None;
+        }
+        let lock = RwLock::new(reshare.unwrap());
+        self.reshares.insert(session_id, lock);
         Some(())
     }
 
@@ -138,13 +168,14 @@ impl ECDSAManager {
     pub fn handle_keygen_message(
         &mut self,
         session_id: SessionId,
-        index: String,
+        index: ECDSAIndexWrapper,
         message: &Vec<u8>,
     ) -> Result<SendingMessages, ECDSAError> {
+        println!("TSS: handle_keygen_message from index {:?}", index.get_index());
         if let Some(mut keygen) = self.get_keygen(session_id) {
             log::info!("[TSS] handling key gen message");
             return keygen
-                .msg_handler(index, message)
+                .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
         }
         // buffer the messages and throw an error
@@ -152,20 +183,20 @@ impl ECDSAManager {
         self.buffer_keygen
             .entry(session_id)
             .or_insert(Vec::new())
-            .push((index.clone(), message.clone()));
+            .push((index, message.clone()));
         Err(ECDSAError::KeygenNotFound)
     }
 
     pub fn handle_sign_message(
         &mut self,
         session_id: SessionId,
-        index: String,
+        index: ECDSAIndexWrapper,
         message: &Vec<u8>,
     ) -> Result<SendingMessages, ECDSAError> {
         if let Some(mut sign) = self.get_sign(session_id) {
             log::info!("[TSS] handling Sign offline message");
             return sign
-                .msg_handler(index, message)
+                .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
         }
 
@@ -174,27 +205,27 @@ impl ECDSAManager {
         self.buffer_sign
             .entry(session_id)
             .or_insert(Vec::new())
-            .push((index.clone(), message.clone()));
+            .push((index, message.clone()));
         Err(ECDSAError::SignNotFound)
     }
 
     pub fn handle_sign_online_message(
         &mut self,
         session_id: SessionId,
-        index: String,
+        index: ECDSAIndexWrapper,
         message: &Vec<u8>,
     ) -> Result<SendingMessages, ECDSAError> {
         if let Some(mut sign) = self.get_sign_online(session_id) {
             log::info!("[TSS] handling Sign online message");
             return sign
-                .msg_handler(index, message)
+                .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
         }
         log::info!("[TSS] buffering message to sign online");
         self.buffer_sign_online
             .entry(session_id)
             .or_insert(Vec::new())
-            .push((index.clone(), message.clone()));
+            .push((index, message.clone()));
         Err(ECDSAError::SignOnlineNotFound)
     }
 
@@ -211,6 +242,27 @@ impl ECDSAManager {
             // Only remove the buffer if processing was successful
             if results.is_ok() {
                 self.buffer_keygen.remove(&session_id);
+            }
+
+            results
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    pub fn handle_reshare_buffer(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<Vec<SendingMessages>, ECDSAError> {
+        if let Some(messages) = self.buffer_reshare.get(&session_id).cloned() {
+            let results: Result<Vec<SendingMessages>, ECDSAError> = messages
+                .into_iter()
+                .map(|(index, message)| self.handle_reshare_message(session_id, index, &message))
+                .collect();
+
+            // Only remove the buffer if processing was successful
+            if results.is_ok() {
+                self.buffer_reshare.remove(&session_id);
             }
 
             results
@@ -267,5 +319,38 @@ impl ECDSAManager {
         } else {
             Ok(Vec::new())
         }
+    }
+
+    pub fn get_reshare(&mut self, session_id: SessionId) -> Option<RwLockWriteGuard<'_, ReshareKeyPhase>> {
+        match self.reshares.get(&session_id) {
+            Some(data) => Some(data.write().unwrap()),
+            None => None,
+        }
+    }
+
+    pub fn handle_reshare_message(
+        &mut self,
+        session_id: SessionId,
+        index: ECDSAIndexWrapper,
+        message: &Vec<u8>,
+    ) -> Result<SendingMessages, ECDSAError> {
+        if let Some(mut reshare) = self.get_reshare(session_id) {
+            log::info!("[TSS] handling reshare message");
+            return reshare
+                .msg_handler(index.get_index(), message)
+                .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
+        }
+        Err(ECDSAError::KeygenNotFound)
+    }
+            
+}
+
+
+#[derive(Clone)]
+pub struct ECDSAIndexWrapper(pub String);
+
+impl ECDSAIndexWrapper {
+    pub fn get_index(&self) -> String {
+        self.0.clone()
     }
 }

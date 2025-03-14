@@ -1,5 +1,5 @@
 use codec::{Compact, Decode, Encode, EncodeLike, Error};
-use ecdsa::{ECDSAError, ECDSAManager};
+use ecdsa::{ECDSAError, ECDSAIndexWrapper, ECDSAManager};
 use frame_system::EventRecord;
 use multi_party_ecdsa::communication::sending_messages::SendingMessages;
 use rand::prelude::*;
@@ -103,6 +103,8 @@ pub enum TssMessage {
 
     /// Utils Keygen
     ECDSAMessageKeygen(SessionId, String, Vec<u8>),
+    /// Utils Reshare
+    ECDSAMessageReshare(SessionId, String, Vec<u8>),
     /// Utils Sign Offline
     ECDSAMessageSign(SessionId, String, Vec<u8>),
     /// Utils Sign Online
@@ -112,6 +114,7 @@ pub enum TssMessage {
 #[derive(Encode, Decode, Debug, Clone)]
 pub enum ECDSAPhase {
     Key,
+    Reshare,
     Sign,
     SignOnline,
 }
@@ -150,6 +153,7 @@ pub enum SessionManagerMessage {
 #[derive(Encode, Decode, Debug)]
 pub enum TSSRuntimeEvent {
     DKGSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>), // Session info from runtime is now available
+    DKGReshareSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>, Vec<TSSParticipant>), // Session info from runtime is now available
     SigningSessionInfoReady(
         SessionId,
         u16,
@@ -757,6 +761,7 @@ impl<B: BlockT> SessionManager<B> {
             }
 
             TssMessage::ECDSAMessageKeygen(session_id, _index, msg)
+            | TssMessage::ECDSAMessageReshare(session_id, _index, msg)
             | TssMessage::ECDSAMessageSign(session_id, _index, msg)
             | TssMessage::ECDSAMessageSignOnline(session_id, _index, msg) => {
                 // Check if this session exists or is timed out
@@ -789,7 +794,7 @@ impl<B: BlockT> SessionManager<B> {
                             session_id,
                             msg,
                             &mut manager,
-                            index,
+                            ECDSAIndexWrapper(index),
                         ),
                     TssMessage::ECDSAMessageSign(_, index, _) => {
                         log::debug!("[TSS] Starting consuming buffer");
@@ -797,7 +802,7 @@ impl<B: BlockT> SessionManager<B> {
                             session_id,
                             msg,
                             &mut manager,
-                            index,
+                            ECDSAIndexWrapper(index),
                         )
                     }
                     TssMessage::ECDSAMessageSignOnline(_, index, _) => self
@@ -805,7 +810,7 @@ impl<B: BlockT> SessionManager<B> {
                             session_id,
                             msg,
                             &mut manager,
-                            index,
+                            ECDSAIndexWrapper(index),
                         ),
                     _ => (
                         Err(ecdsa::ECDSAError::ECDSAError(
@@ -842,7 +847,7 @@ impl<B: BlockT> SessionManager<B> {
         session_id: &u64,
         msg: &Vec<u8>,
         manager: &mut MutexGuard<'_, ECDSAManager>,
-        index: String,
+        index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_sign_online_buffer(*session_id) {
             Err(error) => log::error!(
@@ -871,7 +876,7 @@ impl<B: BlockT> SessionManager<B> {
         session_id: &u64,
         msg: &Vec<u8>,
         manager: &mut MutexGuard<'_, ECDSAManager>,
-        index: String,
+        index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_sign_buffer(*session_id) {
             Err(error) => log::error!(
@@ -902,7 +907,7 @@ impl<B: BlockT> SessionManager<B> {
         session_id: &u64,
         msg: &Vec<u8>,
         manager: &mut MutexGuard<'_, ECDSAManager>,
-        index: String,
+        index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_keygen_buffer(*session_id) {
             Err(error) => log::error!(
@@ -923,6 +928,35 @@ impl<B: BlockT> SessionManager<B> {
         (
             manager.handle_keygen_message(*session_id, index, &msg),
             ECDSAPhase::Key,
+        )
+    }
+
+    fn handle_buffer_and_sending_messages_for_reshare(
+        &self,
+        session_id: &u64,
+        msg: &Vec<u8>,
+        manager: &mut MutexGuard<'_, ECDSAManager>,
+        index: ECDSAIndexWrapper,
+    ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
+        match manager.handle_reshare_buffer(*session_id) {
+            Err(error) => log::error!(
+                "[TSS] There was an error consuming the reshare buffer {:?}",
+                error
+            ),
+            Ok(handled_buffer) => {
+                for sending_message in handled_buffer {
+                    self.handle_ecdsa_sending_messages(
+                        *session_id,
+                        sending_message,
+                        manager,
+                        ECDSAPhase::Reshare,
+                    );
+                }
+            }
+        }
+        (
+            manager.handle_reshare_message(*session_id, index, &msg),
+            ECDSAPhase::Reshare,
         )
     }
 
@@ -958,7 +992,7 @@ impl<B: BlockT> SessionManager<B> {
                                     &session_id,
                                     &data,
                                     ecdsa_manager,
-                                    id,
+                                    ECDSAIndexWrapper(id),
                                 ) {
                                 (Err(error), _) => {
                                     log::error!("[TSS] Error sending messages {:?}", error);
@@ -966,12 +1000,25 @@ impl<B: BlockT> SessionManager<B> {
                                 }
                                 (Ok(sending_messages), _) => Some(sending_messages),
                             },
+                            ECDSAPhase::Reshare => match self
+                                .handle_buffer_and_sending_messages_for_reshare(
+                                    &session_id,
+                                    &data,
+                                    ecdsa_manager,
+                                    ECDSAIndexWrapper(id),
+                                ) {
+                                (Err(error), _) => {
+                                    log::error!("[TSS] Error sending messages {:?}", error);
+                                    None
+                                } 
+                                (Ok(sending_messages), _) => Some(sending_messages),
+                            },
                             ECDSAPhase::Sign => match self
                                 .handle_buffer_and_sending_messages_for_sign_offline(
                                     &session_id,
                                     &data,
                                     ecdsa_manager,
-                                    id,
+                                    ECDSAIndexWrapper(id),
                                 ) {
                                 (Err(error), _) => {
                                     log::error!("[TSS] Error sending messages {:?}", error);
@@ -984,7 +1031,7 @@ impl<B: BlockT> SessionManager<B> {
                                     &session_id,
                                     &data,
                                     ecdsa_manager,
-                                    id,
+                                    ECDSAIndexWrapper(id),
                                 ) {
                                 (Err(error), _) => {
                                     log::error!("[TSS] Error sending messages {:?}", error);
@@ -1052,7 +1099,7 @@ impl<B: BlockT> SessionManager<B> {
                     )
                     .clone();
 
-                drop(peer_mapper);
+                                drop(peer_mapper);
                 log::debug!("[TSS] SendingMessages::BroadcastMessage, lock dropped");
 
                 if let None = index {
@@ -1070,8 +1117,21 @@ impl<B: BlockT> SessionManager<B> {
                         &session_id,
                         &msg,
                         ecdsa_manager,
-                        (index.unwrap()).to_string(),
+                        ECDSAIndexWrapper(index.unwrap().to_string()),
                     ) {
+                        (Err(error), _) => {
+                            log::error!("[TSS] Error sending messages {:?}", error);
+                            None
+                        }
+                        (Ok(sending_messages), _) => Some(sending_messages),
+                    },
+                    ECDSAPhase::Reshare => match self
+                        .handle_buffer_and_sending_messages_for_reshare(
+                            &session_id,
+                            &msg,
+                            ecdsa_manager,
+                            ECDSAIndexWrapper(index.unwrap().to_string()),
+                        ) {
                         (Err(error), _) => {
                             log::error!("[TSS] Error sending messages {:?}", error);
                             None
@@ -1083,7 +1143,7 @@ impl<B: BlockT> SessionManager<B> {
                             &session_id,
                             &msg,
                             ecdsa_manager,
-                            (index.unwrap()).to_string(),
+                            ECDSAIndexWrapper(index.unwrap().to_string()),
                         ) {
                         (Err(error), _) => {
                             log::error!("[TSS] Error sending messages {:?}", error);
@@ -1096,7 +1156,7 @@ impl<B: BlockT> SessionManager<B> {
                             &session_id,
                             &msg,
                             ecdsa_manager,
-                            (index.unwrap()).to_string(),
+                            ECDSAIndexWrapper(index.unwrap().to_string()),
                         ) {
                         (Err(error), _) => {
                             log::error!("[TSS] Error sending messages {:?}", error);
@@ -1140,7 +1200,7 @@ impl<B: BlockT> SessionManager<B> {
                     session_id,
                     StorageType::EcdsaKeys,
                     &msg.as_bytes(),
-                    Some(&_id),
+                    Some(&_id.serialize()),
                 ) {
                     log::error!("[TSS] There was an error storing keys {:?}", error);
                     return;
@@ -1182,6 +1242,58 @@ impl<B: BlockT> SessionManager<B> {
                     }
                 };
             }
+            SendingMessages::ReshareKeySuccessWithResult(msg) =>{
+                let _id = self.get_my_identifier(session_id);
+                log::info!("[TSS] ECDSA Reshare successful, storing keys {:?}", msg);
+
+                let mut storage: MutexGuard<'_, FileStorage> = self.key_storage.lock().unwrap();
+
+                if let Err(error) = storage.store_data(
+                    session_id,
+                    StorageType::EcdsaKeys,
+                    &msg.as_bytes(),
+                    Some(&_id.serialize()),
+                ) {
+                    log::error!("[TSS] There was an error storing keys {:?}", error);
+                    return;
+                }
+
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+
+                let index = peer_mapper
+                    .get_id_from_peer_id(
+                        &session_id,
+                        &PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
+                    )
+                    .clone();
+                drop(peer_mapper);
+                drop(storage);
+
+
+                if let None = index {
+                    log::error!("[TSS] Index is not, shouldn't have happened, returning");
+                    return;
+                }
+
+                let session_data = self.get_session_data(&session_id);
+
+                match session_data {
+                    Some((t, n, _coordinator, _message)) => {
+                        self.ecdsa_create_sign_offline_phase(
+                            session_id,
+                            t,
+                            n,
+                            msg,
+                            index.unwrap().to_string(),
+                            ecdsa_manager,
+                        );
+                    }
+                    None => {
+                        log::error!("[TSS] Session data not found, returning");
+                        return;
+                    }
+                };
+            }
             SendingMessages::SignOfflineSuccessWithResult(msg) => {
                 log::debug!("[TSS] SendingMessages::SignOfflineSuccessWithResult");
                 let _id = self.get_my_identifier(session_id);
@@ -1192,7 +1304,7 @@ impl<B: BlockT> SessionManager<B> {
                     session_id,
                     StorageType::EcdsaOfflineOutput,
                     &msg.as_bytes(),
-                    Some(&_id),
+                    Some(&_id.serialize()),
                 ) {
                     log::error!("[TSS] There was an error storing keys {:?}", error);
                     return;
@@ -1210,7 +1322,7 @@ impl<B: BlockT> SessionManager<B> {
                     session_id,
                     StorageType::EcdsaOnlineOutput,
                     &msg.as_bytes(),
-                    Some(&_id),
+                    Some(&_id.serialize()),
                 ) {
                     log::error!("[TSS] There was an error storing keys {:?}", error);
                     return;
@@ -1569,13 +1681,13 @@ impl<B: BlockT> SessionManager<B> {
                         session_id,
                         dkghelpers::StorageType::PubKey,
                         &public_key.serialize().unwrap()[..],
-                        Some(&whoami_identifier.unwrap()),
+                        Some(&whoami_identifier.unwrap().serialize()),
                     );
                     if let Err(error) = storage.store_data(
                         session_id,
                         dkghelpers::StorageType::Key,
                         &private_key.serialize().unwrap()[..],
-                        Some(&whoami_identifier.unwrap()),
+                        Some(&whoami_identifier.unwrap().serialize()),
                     ) {
                         log::error!("[TSS] There was an error storing key {:?}", error);
                     }
@@ -2323,7 +2435,73 @@ impl<B: BlockT> SessionManager<B> {
                 }
             }
         }
-        log::info!("[TSS] Droopping now ");
+        drop(handler);
+    }
+
+    fn ecdsa_create_reshare_phase(
+        &self,
+        id: SessionId,
+        n: u16,
+        t: u16,
+        participants: Vec<TSSParticipant>,
+        old_participants: Vec<TSSParticipant>,
+    ) {
+        let mut handler = self.ecdsa_manager.lock().unwrap();
+
+
+        let my_id = participants
+            .iter()
+            .position(|&el| el == &self.validator_key[..]);
+
+        if let None = my_id {
+            log::info!("[TSS] We are not allowed to participate");
+            return;
+        }
+        log::info!("[TSS] My Id = {:?}", my_id.unwrap() + 1);
+
+        let identifier: Identifier = u16::try_from(my_id.unwrap() + 1).unwrap().try_into().unwrap();
+
+        let current_keys = self.key_storage.lock().unwrap().read_data(id, StorageType::EcdsaKeys, Some(&identifier.serialize()));
+
+        let current_keys = match current_keys {
+            Err(_) => None,
+            Ok(keys) => Some(String::from_utf8(keys).unwrap()),
+        };
+
+
+
+        let reshare = handler.add_reshare(
+            id,
+            (my_id.unwrap() + 1).to_string(),
+            old_participants.into_iter().map(|el| 
+            
+            
+                AccountId::from_slice(&el[..])
+                .unwrap()
+                .to_ss58check_with_version(Ss58AddressFormat::custom(87))
+            ).collect(),
+            (1..participants.len() + 1)
+                .into_iter()
+                .map(|el| el.to_string())
+                .collect::<Vec<String>>(),
+            t.into(),
+            n.into(),
+            current_keys,
+        );
+
+        if let Some(_) = reshare {
+            let msg = {
+                let mut reshare = handler.get_reshare(id).unwrap();
+                reshare.process_begin()
+            };
+
+            match msg {
+                Err(error) => log::error!("[TSS] Error beginning process {:?}", error),
+                Ok(msg) => {
+                    self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Key)
+                }
+            }
+        }
         drop(handler);
     }
 
@@ -2393,7 +2571,7 @@ impl<B: BlockT> SessionManager<B> {
         let storage = self.key_storage.lock().unwrap();
 
         let offline_result =
-            storage.read_data(id, StorageType::EcdsaOfflineOutput, Some(&identifier));
+            storage.read_data(id, StorageType::EcdsaOfflineOutput, Some(&identifier.serialize()));
 
         if let Err(error) = offline_result {
             log::error!("[TSS] Error fetching keys {:?}", error);
@@ -2526,6 +2704,11 @@ impl<B: BlockT> SessionManager<B> {
                     log::error!("[TSS] Failed to process DKG session {}: {:?}", id, e);
                 }
             }
+            TSSRuntimeEvent::DKGReshareSessionInfoReady(id, t, n, participants, old_participants) => {
+                if let Err(e) = self.add_and_initialize_dkg_reshare_session(id, t, n, participants, old_participants) {
+                    log::error!("[TSS] Failed to process DKG session {}: {:?}", id, e);
+                }
+            }
             TSSRuntimeEvent::SigningSessionInfoReady(id, t, n, participants, coordinator, message) => {
                 if let Err(e) = self.add_and_initialize_signing_session(id, t, n, participants, coordinator, message) {
                     log::error!("[TSS] Failed to process signing session {}: {:?}", id, e);
@@ -2546,6 +2729,22 @@ impl<B: BlockT> SessionManager<B> {
         log::info!("[TSS] Successfully initialized DKG session {}", id);
         
         self.ecdsa_create_keygen_phase(id, n.into(), t.into(), participants);
+        
+        Ok(())
+    }
+
+    fn add_and_initialize_dkg_reshare_session(&mut self, id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, old_participants: Vec<TSSParticipant>) -> Result<(), String> {
+        self.add_session_data(id, t, n, [0; 32], participants.clone(), Vec::new())
+            .map_err(|e| format!("Failed to add data: {:?}", e))?;
+        
+        // log::info!("[TSS] Successfully added data for DKG session {}", id);
+        
+        // self.dkg_handle_session_created(id, n.into(), t.into(), participants.clone())
+        //     .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
+        
+        log::info!("[TSS] Successfully initialized DKG session {}", id);
+        
+        self.ecdsa_create_reshare_phase(id, n.into(), t.into(), participants, old_participants);
         
         Ok(())
     }
@@ -2645,6 +2844,44 @@ where
                                                 u16::try_from(t).unwrap_or(u16::MAX),
                                                 n,
                                                 participants,
+                                            ),
+                                        ) {
+                                            log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);
+                                        }
+                                    }
+
+                                    RuntimeEvent::Tss(TssEvent::DKGReshareSessionCreated(id)) => {
+                                        let n = self
+                                            .client
+                                            .runtime_api()
+                                            .get_dkg_session_participants_count(hash, id)
+                                            .unwrap();
+                                        let t = self
+                                            .client
+                                            .runtime_api()
+                                            .get_dkg_session_threshold(hash, id)
+                                            .unwrap();
+
+                                        let participants = self
+                                            .client
+                                            .runtime_api()
+                                            .get_dkg_session_participants(hash, id)
+                                            .unwrap_or(Vec::new());
+
+                                        let old_participants = self
+                                            .client
+                                            .runtime_api()
+                                            .get_dkg_session_old_participants(hash, id)
+                                            .unwrap_or(Vec::new());
+
+                                        // let the session manager now about the new DKG Session started
+                                        if let Err(e) = self.sender.unbounded_send(
+                                            TSSRuntimeEvent::DKGReshareSessionInfoReady(
+                                                id,
+                                                u16::try_from(t).unwrap_or(u16::MAX),
+                                                n,
+                                                participants,
+                                                old_participants,
                                             ),
                                         ) {
                                             log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);
@@ -2809,6 +3046,7 @@ impl<T: TssMessageHandler> ECDSAMessageRouter for T {
     ) -> Result<(), String> {
         let message = match phase {
             ECDSAPhase::Key => TssMessage::ECDSAMessageKeygen(session_id, index, bytes),
+            ECDSAPhase::Reshare => TssMessage::ECDSAMessageReshare(session_id, index, bytes),
             ECDSAPhase::Sign => TssMessage::ECDSAMessageSign(session_id, index, bytes),
             ECDSAPhase::SignOnline => TssMessage::ECDSAMessageSignOnline(session_id, index, bytes),
         };
