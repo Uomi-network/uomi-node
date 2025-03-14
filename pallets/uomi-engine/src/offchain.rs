@@ -39,13 +39,11 @@ struct CallAiRequestWithoutProof {
 struct CallAiResponse {
     result: bool,
     response: String,
-    proof: String,
-    error: String,
+    proof: String
 }
 
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiResponseCleaned {
-    result: bool,
     response: String,
 }
 
@@ -642,12 +640,12 @@ impl<T: Config> Pallet<T> {
                 log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
                 DispatchError::Other("Invalid UTF-8 in output data")
             })?;
+            let output_string = output_string.trim();
             let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
                 log::error!("UOMI-ENGINE: Error parsing output data to JSON");
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
             let output_json_cleaned = CallAiResponseCleaned {
-                result: output_json.result,
                 response: output_json.response,
             };
             let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
@@ -695,6 +693,11 @@ impl<T: Config> Pallet<T> {
                 }
             }
 
+            let proof_string = String::from_utf8(proof.clone().to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in proof data");
+                DispatchError::Other("Invalid UTF-8 in proof data")
+            })?;
+
             let mut body = String::new();
             if proof.is_empty() {
                 let body_data = CallAiRequestWithoutProof {
@@ -716,12 +719,13 @@ impl<T: Config> Pallet<T> {
                 log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
                 DispatchError::Other("Invalid UTF-8 in output data")
             })?;
+
+            let output_string = output_string.trim();
             let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
                 log::error!("UOMI-ENGINE: Error parsing output data to JSON");
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
             let output_json_cleaned = CallAiResponseCleaned {
-                result: output_json.result,
                 response: output_json.response,
             };
             let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
