@@ -100,6 +100,7 @@ pub use uomi_primitives::{AccountId, Signature};
 pub use pallet_staking::StakerStatus;
 pub use pallet_uomi_engine;
 pub use pallet_ipfs;
+pub use pallet_tss;
 
 pub use crate::precompiles::WhitelistedCalls;
 #[cfg(feature = "std")]
@@ -1300,6 +1301,10 @@ impl pallet_uomi_engine::Config for Runtime {
     type InherentDataType = u16;
 }
 
+impl pallet_tss::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxNumberOfShares = pallet_tss::types::MaxNumberOfShares;
+}
 pub struct IpfsWrapper;
 
 impl pallet_uomi_engine::ipfs::IpfsInterface<Runtime> for IpfsWrapper {
@@ -1679,7 +1684,8 @@ construct_runtime!(
         Ipfs: pallet_ipfs = 111,
         Session: pallet_session = 120,
         Historical: pallet_session_historical = 121,
-        Staking: pallet_staking = 122
+        Staking: pallet_staking = 122,
+        Tss: pallet_tss = 123
 
 
     }
@@ -2523,6 +2529,13 @@ impl_runtime_apis! {
                 select,
             );
             Executive::try_execute_block(block, state_root_check, signature_check, select).expect("execute-block failed")
+        }
+    }
+
+
+    impl pallet_tss::TssApi<Block> for Runtime {
+        fn get_unhandled_dkg_sessions() -> pallet_tss::types::SessionId {
+            pallet_tss::pallet::Pallet::<Runtime>::get_next_session_id()
         }
     }
 }

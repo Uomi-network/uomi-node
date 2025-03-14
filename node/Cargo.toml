@@ -54,7 +54,9 @@ sp-keystore = { workspace = true }
 sp-timestamp = { workspace = true }
 sp-trie = { workspace = true }
 ipfs-manager = { workspace = true }
+tss = { workspace = true }
 pallet-uomi-engine = { workspace = true }
+pallet-tss = { workspace = true }
 
 # client dependencies
 sc-basic-authorship = { workspace = true }

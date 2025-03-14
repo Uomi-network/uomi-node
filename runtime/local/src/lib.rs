@@ -100,6 +100,7 @@ pub use uomi_primitives::{AccountId, Signature};
 pub use pallet_staking::StakerStatus;
 pub use pallet_uomi_engine;
 pub use pallet_ipfs;
+pub use pallet_tss;
 
 pub use crate::precompiles::WhitelistedCalls;
 #[cfg(feature = "std")]
@@ -130,7 +131,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     impl_name: create_runtime_str!("local"),
     authoring_version: 1,
     spec_version: 1,
-    impl_version: 1,
+    impl_version: 2,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1,
     state_version: 1,
@@ -1325,6 +1326,12 @@ impl pallet_uomi_engine::ipfs::IpfsInterface<Runtime> for IpfsWrapper {
     }
 }
 
+impl pallet_tss::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxNumberOfShares = pallet_tss::types::MaxNumberOfShares;
+}
+
+
 parameter_types! {
     pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
     pub const IpfsTemporaryPinningCost: Balance = 10 * UOMI;
@@ -1680,8 +1687,9 @@ construct_runtime!(
         Ipfs: pallet_ipfs = 111,
         Session: pallet_session = 120,
         Historical: pallet_session_historical = 121,
-        Staking: pallet_staking = 122
+        Staking: pallet_staking = 122,
 
+        Tss: pallet_tss = 123
 
     }
 );
@@ -2524,6 +2532,13 @@ impl_runtime_apis! {
                 select,
             );
             Executive::try_execute_block(block, state_root_check, signature_check, select).expect("execute-block failed")
+        }
+    }
+
+    impl pallet_tss::TssApi<Block> for Runtime {
+        fn get_unhandled_dkg_sessions() -> pallet_tss::types::SessionId  {
+            // pallet_tss::Pallet::
+            pallet_tss::pallet::Pallet::<Runtime>::get_next_session_id()
         }
     }
 }

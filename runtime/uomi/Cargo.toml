@@ -51,6 +51,7 @@ pallet-utility = { workspace = true }
 pallet-vesting = { workspace = true }
 pallet-uomi-engine = { workspace = true }
 pallet-ipfs = { workspace = true }
+pallet-tss = { workspace = true }
 sp-api = { workspace = true }
 sp-arithmetic = { workspace = true }
 sp-block-builder = { workspace = true }

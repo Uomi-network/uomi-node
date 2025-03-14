@@ -1,9 +1,6 @@
-use frame_support::{parameter_types, BoundedVec, pallet_prelude::{Encode, Decode,TypeInfo, MaxEncodedLen}};
-use frame_system::pallet_prelude::BlockNumberFor;
+use frame_support::{parameter_types, BoundedVec};
+use sc_utils::mpsc::{TracingUnboundedReceiver, TracingUnboundedSender};
 
-use sp_core::U256;
-
-use crate::Config;
 
 const MAX_KEY_SIZE: u32 = 64;
 const MAX_SHARE_SIZE: u32 = 128;
@@ -30,5 +27,14 @@ pub type ParticipantId = u32;
 pub type Share = BoundedVec<u8, MaxShareSize>;
 pub type PublicKey = BoundedVec<u8, MaxPublicKeySize>;
 pub type Signature = BoundedVec<u8, MaxSignatureSize>;
-pub type NftId = BoundedVec<u8, MaxCidSize>;
+pub type AgentCid = BoundedVec<u8, MaxCidSize>;
+
+
+
+/// Represents a TSS public key as a byte vector.
+pub type TSSPublic = Vec<u8>;
+/// Represents a TSS signature as a byte vector.
+pub type TSSSignature = Vec<u8>;
+/// Represents a TSS Peer ID as a byte vector.
+pub type TSSPeerId = Vec<u8>;
 
