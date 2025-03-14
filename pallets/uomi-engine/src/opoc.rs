@@ -1,6 +1,6 @@
 use codec::Encode;
 use frame_support::{ pallet_prelude::{ DispatchError, DispatchResult }, traits::Randomness };
-use pallet_ipfs::types::{ Cid, UsableFromBlockNumber, ExpirationBlockNumber };
+use pallet_ipfs::types::{ UsableFromBlockNumber, ExpirationBlockNumber };
 use pallet_ipfs::MinExpireDuration;
 use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
