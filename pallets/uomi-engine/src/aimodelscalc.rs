@@ -95,7 +95,7 @@ impl<T: Config> Pallet<T> {
         version_5.insert(AiModelKey::from(1), mistral_24b.clone());
         version_5.insert(AiModelKey::from(2), deepseek_r1_14b.clone());
         version_5.insert(AiModelKey::from(3), dobby3_1_8b.clone());
-        version_5.insert(AiModelKey::from(4), sana_1600m.clone());
+        version_5.insert(AiModelKey::from(100), sana_1600m.clone());
         map.insert(5 as u32, version_5);
 
         // Free for future releases...
