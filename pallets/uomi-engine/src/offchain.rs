@@ -131,7 +131,7 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Wasm loaded with length: {:?}", wasm.len());
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_execution_max_time, opoc_level, request_id) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, opoc_level, request_id) {
             Ok(output_data) => {
                 log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
                 // Store the output data
@@ -235,7 +235,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
 
@@ -340,7 +340,7 @@ impl<T: Config> Pallet<T> {
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
             let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, opoc_level, *call_ai_counter.read().unwrap(), request_id) {
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, opoc_level, *call_ai_counter.read().unwrap(), request_id) {
                 Ok(output) => output,
                 Err(error) => {
                     log::error!("Error calling the AI: {:?}", error);
@@ -600,12 +600,16 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
         }
-    
+
+        if model >= U256::from(100) && required_consensus > U256::from(1) { // Models with id > 100 (example image generation) can not be called with security (consensus > 1)
+            return Err(DispatchError::Other("Model can not be called by agents with required consensus > 1"));
+        }
+
         let (local_name, previous_local_name, available_from_block_number) = AIModels::<T>::get(&model);
         let final_local_name = if block_number < available_from_block_number {
             previous_local_name
