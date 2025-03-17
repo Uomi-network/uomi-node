@@ -50,7 +50,7 @@ fn test_dkg_start_session() {
         let ret = TestingPallet::create_dkg_session(
             RuntimeOrigin::signed(create_test_account()), 
             vec![1].try_into().unwrap(),
-            1);
+            60);
         assert_ok!(ret);
 
         assert_eq!(DkgSessions::<Test>::iter_keys().count(), 1, "DkgSessions count should be 1 after starting a session");
@@ -58,7 +58,7 @@ fn test_dkg_start_session() {
 
         let session = TestingPallet::get_dkg_session(session_id).unwrap();
 
-        assert_eq!(session.threshold,1);
+        assert_eq!(session.threshold, 60);
         assert_eq!(session.participants.iter().count(), 0);
         assert_eq!(session.state, pallet::SessionState::DKGCreated);
     });
