@@ -47,7 +47,6 @@ use frame_support::{
     },
     ConsensusEngineId, PalletId,
 };
-use sp_runtime::traits::Hash as RelayerHash;
 use frame_system::{
     limits::{BlockLength, BlockWeights},
     EnsureRoot, EnsureSigned,
@@ -1875,7 +1874,7 @@ impl_runtime_apis! {
     }
 
     impl pallet_relayer_orchestration::runtime_api::RelayerOrchestrationRuntimeApi<Block, AccountId, Hash> for Runtime {
-        
+
         fn submit_event(
             relayer: AccountId,
             chain_id: Vec<u8>,

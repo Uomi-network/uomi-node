@@ -51,7 +51,6 @@ use frame_system::{
     limits::{BlockLength, BlockWeights},
     EnsureRoot, EnsureSigned,
 };
-use sp_runtime::traits::Hash as RelayerHash;
 // other
 use static_assertions::const_assert;
 use frame_election_provider_support::{
