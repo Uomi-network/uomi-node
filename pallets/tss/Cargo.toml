@@ -68,7 +68,8 @@ std = [
     "uomi-primitives/std",
     "hex/std",
     "log/std",
-    "pallet-babe/std"
+    "pallet-babe/std",
+    "pallet-uomi-engine/std",
 ]
 runtime-benchmarks = [
     "frame-benchmarking/runtime-benchmarks",
@@ -79,3 +80,4 @@ try-runtime = [
     "frame-support/try-runtime",
     "frame-system/try-runtime",
 ]
+
