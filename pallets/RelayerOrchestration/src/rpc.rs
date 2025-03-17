@@ -12,9 +12,7 @@ use codec::{Encode, Decode};
 use sp_core::sr25519;
 use std::marker::PhantomData;
 use sc_transaction_pool_api::TransactionPool;
-use sp_runtime::{
-	generic::BlockId, transaction_validity::TransactionSource,
-};
+use sp_runtime::transaction_validity::TransactionSource;
 
 use crate::RelayerOrchestrationRuntimeApi;
 
@@ -51,43 +49,42 @@ where
         signature: sr25519::Signature,
         at: Option<<Block as BlockT>::Hash>
     ) -> RpcResult<bool> {
-        // let api = self.client.runtime_api();
-        // let at_hash = at.unwrap_or_else(|| self.client.info().best_hash);
+        let api = self.client.runtime_api();
+        let at_hash = at.unwrap_or_else(|| self.client.info().best_hash);
 
-        // let extrinsic = api.submit_event(
-        //     at_hash,
-        //     relayer,
-        //     chain_id,
-        //     block_number,
-        //     contract_address,
-        //     event_data,
-        //     signature
-        // ).map_err(|e| {
-        //     ErrorObject::owned(1, format!("Runtime error: {:?}", e), None::<()>)
-        // });
+        let extrinsic = api.submit_event(
+            at_hash,
+            relayer,
+            chain_id,
+            block_number,
+            contract_address,
+            event_data,
+            signature
+        ).map_err(|e| {
+            ErrorObject::owned(1, format!("Runtime error: {:?}", e), None::<()>)
+        });
 
-        // let extrinsic = match extrinsic {
-        //     Ok(extrinsic) => extrinsic,
-        //     Err(_) => {
-        //         return Ok(false);
-        //     }
-        // };
+        let extrinsic = match extrinsic {
+            Ok(extrinsic) => extrinsic,
+            Err(_) => {
+                return Ok(false);
+            }
+        };
         
-        // let block_hash = self.client.info().best_hash;
+        let block_hash = self.client.info().best_hash;
         
-        // match self.pool
-        //     .submit_one(
-        //         block_hash,
-        //         TransactionSource::Local,
-        //         extrinsic,
-        //     ).await {
-        //     Ok(_) => Ok(true),
-        //     Err(e) => {
-        //         log::error!("Error submitting extrinsic: {:?}", e);
-        //         Ok(false)
-        //     }
-        // }
-        Ok(true)
+        match self.pool
+            .submit_one(
+                block_hash,
+                TransactionSource::Local,
+                extrinsic.unwrap(),
+            ).await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                log::error!("Error submitting extrinsic: {:?}", e);
+                Ok(false)
+            }
+        }
     }
 
     fn get_events(
@@ -135,7 +132,7 @@ where
 
        let extrinsic = match extrinsic {
             Ok(extrinsic) => extrinsic,
-            Err(e) => {
+            Err(_e) => {
                 return Ok(false);
             }
         };
@@ -177,7 +174,7 @@ where
 
         let extrinsic = match extrinsic {
             Ok(extrinsic) => extrinsic,
-            Err(e) => {
+            Err(_e) => {
                 return Ok(false);
             }
         };

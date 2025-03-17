@@ -23,7 +23,6 @@ use sp_staking::offence::ReportOffence;
 use sp_staking::offence::Offence;
 use sp_std::prelude::*;
 use sp_staking::{EraIndex, SessionIndex};
-use frame_system::offchain::SubmitTransaction;
 //perbill
 use sp_runtime::Perbill;
 
