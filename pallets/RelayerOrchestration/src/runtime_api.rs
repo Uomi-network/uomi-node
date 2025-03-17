@@ -2,8 +2,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 use codec::{Decode, Encode};
 use sp_std::prelude::*;
-use crate::RelayerEventInput;
 use sp_core::sr25519;
+use sp_runtime::traits::Block as BlockT;
 
 sp_api::decl_runtime_apis! {
     #[api_version(1)]
@@ -20,15 +20,7 @@ sp_api::decl_runtime_apis! {
             contract_address: Vec<u8>,
             event_data: Vec<u8>,
             signature: sr25519::Signature
-        ) -> Hash;
-        
-        
-        
-        fn batch_submit_events(
-            relayer: AccountId,
-            events: Vec<RelayerEventInput>,
-            signature: sr25519::Signature
-        ) -> Vec<Hash>;
+        ) -> Result<<Block as BlockT>::Extrinsic, sp_runtime::RuntimeString>;
 
         
         fn get_events(
@@ -42,13 +34,13 @@ sp_api::decl_runtime_apis! {
             relayer: AccountId,
             public_key: sr25519::Public,
             validator_signature: sr25519::Signature
-        ) -> bool;
+        ) -> <Block as BlockT>::Extrinsic;
         
        
         fn remove_relayer(
             relayer: AccountId,
             validator_signature: sr25519::Signature
-        ) -> bool;
+        ) -> <Block as BlockT>::Extrinsic;
 
         
         fn list_relayers() -> Vec<(AccountId, sr25519::Public)>;
@@ -57,15 +49,5 @@ sp_api::decl_runtime_apis! {
         fn check_relayer_status(
             relayer: AccountId
         ) -> bool;
-        
-        
-        fn validator_submit_event(
-            relayer: AccountId,
-            chain_id: Vec<u8>,
-            block_number: u64,
-            contract_address: Vec<u8>,
-            event_data: Vec<u8>,
-            validator_signature: sr25519::Signature
-        ) -> Hash;
     }
 }

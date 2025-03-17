@@ -8243,8 +8243,10 @@ dependencies = [
 name = "pallet-relayer-orchestration"
 version = "0.1.0"
 dependencies = [
+ "fp-self-contained",
  "frame-support",
  "frame-system",
+ "futures 0.3.30",
  "jsonrpc-core",
  "jsonrpc-core-client",
  "jsonrpc-derive",
@@ -8254,11 +8256,13 @@ dependencies = [
  "pallet-session",
  "pallet-staking",
  "parity-scale-codec",
+ "sc-transaction-pool-api",
  "scale-info",
  "serde",
  "sp-api",
  "sp-blockchain",
  "sp-core",
+ "sp-io",
  "sp-rpc",
  "sp-runtime",
  "sp-staking",

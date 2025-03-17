@@ -30,10 +30,14 @@ jsonrpc-core-client = { version = "18.0.0", optional = true }
 jsonrpc-derive = { version = "18.0.0", optional = true }
 sp-rpc = { workspace = true, optional = true }
 jsonrpsee = { workspace = true,  optional = true }
-
+sp-io = { workspace = true }
+sc-transaction-pool-api = { workspace = true, optional = true }
+futures = { version = "0.3", features = ["executor"] }
+fp-self-contained = { workspace = true }
 # Other dependencies
 log = { version = "0.4.17", default-features = false }
 serde = { version = "1.0.152", optional = true, features = ["derive"] }
+
 
 [dev-dependencies]
 sp-core = { workspace = true }
@@ -57,7 +61,9 @@ std = [
     "sp-rpc",
     "log/std",
     "sp-blockchain",
-    "jsonrpsee"
+    "jsonrpsee",
+    "sc-transaction-pool-api",
+    "fp-self-contained/std"
 ]
 runtime-benchmarks = [
     "frame-support/runtime-benchmarks",

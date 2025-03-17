@@ -393,7 +393,7 @@ where
 
     if !enable_evm_rpc {
         // Add RelayerOrchestration RPC using jsonrpsee
-        let relayer_orchestration = RelayerOrchestration::new(client.clone());
+        let relayer_orchestration = RelayerOrchestration::new(client.clone(), pool.clone());
         io.merge(relayer_orchestration.into_rpc())?;
         
         return Ok(io);
@@ -447,7 +447,7 @@ where
 
     io.merge(
         EthPubSub::new(
-            pool,
+            pool.clone(),
             client.clone(),
             sync,
             subscription_task_executor,
@@ -458,7 +458,7 @@ where
     )?;
 
     // Add RelayerOrchestration RPC using jsonrpsee
-    let relayer_orchestration = RelayerOrchestration::new(client.clone());
+    let relayer_orchestration = RelayerOrchestration::new(client.clone(), pool.clone());
     io.merge(relayer_orchestration.into_rpc())?;
 
     Ok(io)

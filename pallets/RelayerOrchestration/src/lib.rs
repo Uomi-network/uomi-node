@@ -23,6 +23,7 @@ use sp_staking::offence::ReportOffence;
 use sp_staking::offence::Offence;
 use sp_std::prelude::*;
 use sp_staking::{EraIndex, SessionIndex};
+use frame_system::offchain::SubmitTransaction;
 //perbill
 use sp_runtime::Perbill;
 
@@ -41,6 +42,7 @@ pub use crate::runtime_api::*;
 
 // Export the needed types for RPC
 pub use pallet::RelayerEventInput;
+
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -206,9 +208,6 @@ pub mod pallet {
         
         /// Not authorized
         NotAuthorized,
-        
-        /// Admin key not set
-        AdminKeyNotSet,
 
         /// Not a validator
         NotValidator,
@@ -225,7 +224,8 @@ pub mod pallet {
     + pallet_staking::Config 
     + pallet_session::Config<ValidatorId = <Self as frame_system::Config>::AccountId>
     + pallet_session::historical::Config
-    + pallet_offences::Config {
+    + pallet_offences::Config
+    + frame_system::offchain::SendTransactionTypes<Call<Self>> {
         /// The overarching event type.
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
@@ -238,6 +238,7 @@ pub mod pallet {
                     + Encode 
                     + Decode 
                     + Clone
+                    + MaxEncodedLen
                     + 'static;
         
         /// Maximum number of relayers
@@ -331,10 +332,6 @@ pub mod pallet {
     pub type RelayerCount<T: Config> = StorageValue<_, u32, ValueQuery>;
 
     #[pallet::storage]
-    #[pallet::getter(fn admin_key)]
-    pub type AdminKey<T: Config> = StorageValue<_, T::PublicKey, OptionQuery>;
-
-    #[pallet::storage]
     #[pallet::getter(fn chain_events)]
     pub type ChainEvents<T: Config> = StorageMap<
         _,
@@ -379,8 +376,6 @@ pub mod pallet {
         /// Relayer removed
         RelayerRemoved(T::AccountId),
         
-        /// Admin key set
-        AdminKeySet(T::PublicKey),
         
         /// New event submitted
         EventSubmitted(T::Hash, BoundedVec<u8, T::MaxDataSize>, T::AccountId), // (event_hash, chain_id, relayer)
@@ -490,15 +485,19 @@ pub mod pallet {
             
             consumed_weight
         }
+
     }
+
 
     #[pallet::validate_unsigned]
     impl<T: Config> ValidateUnsigned for Pallet<T> {
         type Call = Call<T>;
 
         fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            log::info!("validate");
             match call {
                 Call::submit_event_unsigned { relayer, chain_id, block_number, contract_address, event_data, signature } => {
+                   
                     // Controlla che il relayer sia registrato
                     if !Self::is_relayer(relayer) {
                         return InvalidTransaction::BadProof.into();
@@ -535,6 +534,7 @@ pub mod pallet {
                         .build()
                 },
                 Call::register_relayer_unsigned { relayer, public_key, validator_signature } => {
+                    log::info!("validate_sub");
                     // Verifica che il relayer non sia già registrato
                     if Self::is_relayer(relayer) {
                         return InvalidTransaction::BadProof.into();
@@ -548,14 +548,16 @@ pub mod pallet {
                     // Verifica che la firma sia valida
                     let payload = (b"register_relayer", relayer.clone(), public_key.clone()).encode();
                     let account_id = public_key.clone().into_account();
-                    
+
+
                     if !validator_signature.verify(payload.as_slice(), &account_id) {
+                        log::info!("validate_sub_err");
                         return InvalidTransaction::BadProof.into();
                     }
-                    
-                    ValidTransaction::with_tag_prefix("RelayerOrchestration")
-                        .priority(TransactionPriority::max_value())
-                        .and_provides(relayer)
+                    log::info!("validate_sub_ok");
+                    ValidTransaction::with_tag_prefix("RelayerOrchestrationPallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(&call)
                         .longevity(64_u64)
                         .propagate(true)
                         .build()
@@ -688,30 +690,34 @@ pub mod pallet {
             validator_signature: T::Signature,
         ) -> DispatchResult {
             ensure_none(origin)?;
+
+            log::info!("Registering relayer: {:?}", relayer);
             
             // Verifica che la chiave pubblica del relayer corrisponda alla chiave che ha generato la firma
             let payload = (b"register_relayer", relayer.clone(), public_key.clone()).encode();
             let account_id = public_key.clone().into_account();
+            log::info!("2");
             
             // Verifica che la firma sia creata dalla stessa chiave che si vuole registrare
             ensure!(validator_signature.verify(payload.as_slice(), &account_id), Error::<T>::InvalidSignature);
-            
+            log::info!("3");
             // Verifica se relayer esiste già
             ensure!(!Relayers::<T>::contains_key(&relayer), Error::<T>::RelayerAlreadyExists);
-
+            log::info!("4");
             //verifica che il relayer sia anche un validator in pallet-staking
             let is_validator = Self::address_is_active_validator(&relayer);
             ensure!(is_validator, Error::<T>::NotValidator);
-            
+            log::info!("5");
             // Verifica limite relayers
             let count = RelayerCount::<T>::get();
             ensure!(count < T::MaxRelayers::get(), Error::<T>::TooManyRelayers);
-            
+            log::info!("6");
             // Registra il relayer
             Relayers::<T>::insert(&relayer, public_key);
             RelayerCount::<T>::put(count + 1);
-            
+            log::info!("7");
             Self::deposit_event(Event::RelayerAdded(relayer));
+            log::info!("8");
             Ok(())
         }
         
@@ -917,7 +923,7 @@ impl<T: Config> Pallet<T> {
         })?;
         
         Ok(())
-    }
+    }      
 
     /// Get current timestamp
     pub fn now() -> u64 {
@@ -944,20 +950,6 @@ impl<T: Config> Pallet<T> {
         if let Some(public_key) = Self::get_relayer_public_key(relayer) {
             // Convert the public key to an account ID before verifying
             let account_id = public_key.into_account();
-            signature.verify(payload, &account_id)
-        } else {
-            false
-        }
-    }
-    
-    /// Verify an admin signature
-    pub fn verify_admin_signature(
-        payload: &[u8],
-        signature: &T::Signature
-    ) -> bool {
-        if let Some(admin_key) = AdminKey::<T>::get() {
-            // Convert the admin key (public key) to an account ID before verifying
-            let account_id = admin_key.into_account();
             signature.verify(payload, &account_id)
         } else {
             false
@@ -1020,7 +1012,6 @@ impl<T: Config> Clone for ChainEvent<T> {
 // Define weights for calls
 pub trait WeightInfo {
     fn register_relayer() -> Weight;
-    fn set_admin_key() -> Weight;
     fn submit_event() -> Weight;
     fn verify_event() -> Weight;
     fn remove_relayer() -> Weight;
@@ -1030,10 +1021,6 @@ pub trait WeightInfo {
 
 impl WeightInfo for () {
     fn register_relayer() -> Weight {
-        Weight::from_parts(10_000, 0)
-    }
-    
-    fn set_admin_key() -> Weight {
         Weight::from_parts(10_000, 0)
     }
     

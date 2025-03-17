@@ -208,6 +208,7 @@ pub const MICROUOMI: Balance = 1_000_000_000_000;
 pub const MILLIUOMI: Balance = 1_000 * MICROUOMI;
 pub const UOMI: Balance = 1_000 * MILLIUOMI;
 
+
 pub const STORAGE_BYTE_FEE: Balance = 100 * MICROUOMI;
 
 /// Charge fee for stored bytes and items.
@@ -1886,87 +1887,39 @@ impl_runtime_apis! {
             contract_address: Vec<u8>,
             event_data: Vec<u8>,
             signature: sp_core::sr25519::Signature
-        ) -> Hash {
-            use frame_system::offchain::SubmitTransaction;
-            use pallet_relayer_orchestration::{Call};
+        ) -> Result<UncheckedExtrinsic, sp_runtime::RuntimeString> { 
+            use pallet_relayer_orchestration::Call;
+
             
-            // Converti i dati in BoundedVec
+            // First unwrap the conversions, then use the values directly
             let chain_id_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
-                ::try_from(chain_id.clone()) {
-                Ok(bounded) => bounded,
-                Err(_) => return Hash::default(),
-            };
-            
-            let contract_address_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
-                ::try_from(contract_address.clone()) {
-                Ok(bounded) => bounded,
-                Err(_) => return Hash::default(),
-            };
-            
-            let event_data_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
-                ::try_from(event_data.clone()) {
-                Ok(bounded) => bounded,
-                Err(_) => return Hash::default(),
-            };
-      
-            
-            // Invia la transazione unsigned
-           let call = Call::submit_event_unsigned { 
-                relayer: relayer.clone(), 
-                chain_id: chain_id_bounded.clone(),  
-                block_number, 
-                contract_address: contract_address_bounded.clone(),  
-                event_data: event_data_bounded.clone(), 
-                signature 
-            };
-            
-            match SubmitTransaction::<Runtime, Call<Runtime>>::submit_unsigned_transaction(call.into()) {
-                Ok(_) => {
-                    // Calcola hash dell'evento per restituirlo al chiamante
-                    // Creando un mock dell'evento per calcolare l'hash
-                    let timestamp = PalletRelayerOrchestration::now();
-                    let verifiers = vec![relayer].try_into().unwrap_or_default();
-                    
-                    let event: pallet_relayer_orchestration::ChainEvent<Runtime> = pallet_relayer_orchestration::ChainEvent {
-                        chain_id: chain_id_bounded,
-                        block_number,
-                        contract_address: contract_address_bounded,
-                        event_data: event_data_bounded,
-                        timestamp,
-                        verifications: 1,
-                        verifiers,
+                    ::try_from(chain_id.clone()) {
+                        Ok(bounded) => bounded,
+                        Err(_) => return Err("Chain ID too long".into()),
                     };
-                    
-                    <Runtime as frame_system::Config>::Hashing::hash_of(&event)
-                },
-                Err(_) => Hash::default(),
-            }
-        }
-        
-        fn batch_submit_events(
-            relayer: AccountId,
-            events: Vec<pallet_relayer_orchestration::RelayerEventInput>,
-            signature: sp_core::sr25519::Signature
-        ) -> Vec<Hash> {
-            // Per implementare batch_submit_events, possiamo semplicemente iterare e chiamare submit_event per ogni evento
-            let mut hashes = Vec::new();
-            
-            for event in events {
-                let hash = Self::submit_event(
-                    relayer.clone(),
-                    event.chain_id,
-                    event.block_number,
-                    event.contract_address,
-                    event.event_data,
-                    signature.clone() // Idealmente dovresti generare una firma per ciascun evento, ma per semplicità riutilizziamo la stessa
-                );
                 
-                if hash != Hash::default() {
-                    hashes.push(hash);
-                }
-            }
+            let contract_address_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
+                    ::try_from(contract_address.clone()) {
+                        Ok(bounded) => bounded,
+                        Err(_) => return Err("Contract address too long".into()),
+                    };
+                
+            let event_data_bounded = match BoundedVec::<u8, <Runtime as pallet_relayer_orchestration::Config>::MaxDataSize>
+                    ::try_from(event_data.clone()) {
+                        Ok(bounded) => bounded,
+                        Err(_) => return Err("Event data too long".into()),
+                    };
             
-            hashes
+            Ok(UncheckedExtrinsic::new_unsigned(
+                Call::submit_event_unsigned { 
+                    relayer: relayer.clone(), 
+                    chain_id: chain_id_bounded,  
+                    block_number, 
+                    contract_address: contract_address_bounded,  
+                    event_data: event_data_bounded, 
+                    signature 
+                }.into()
+            ))
         }
     
         fn get_events(
@@ -1989,40 +1942,28 @@ impl_runtime_apis! {
             relayer: AccountId,
             public_key: sp_core::sr25519::Public,
             validator_signature: sp_core::sr25519::Signature
-        ) -> bool {
-            use frame_system::offchain::SubmitTransaction;
-            use pallet_relayer_orchestration::Call;
-            
-            // Invia una transazione unsigned per registrare il relayer
-            let call = Call::register_relayer_unsigned { 
-                relayer: relayer.clone(),
-                public_key,
-                validator_signature,
-            };
-            
-            match SubmitTransaction::<Runtime, Call<Runtime>>::submit_unsigned_transaction(call.into()) {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+        ) -> UncheckedExtrinsic {
+            UncheckedExtrinsic::new_unsigned(
+                pallet_relayer_orchestration::Call::<Runtime>::register_relayer_unsigned {
+                    relayer: relayer.clone(),
+                    public_key,
+                    validator_signature,
+                }.into()
+            )
         }
         
         fn remove_relayer(
             relayer: AccountId,
             validator_signature: sp_core::sr25519::Signature
-        ) -> bool {
-            use frame_system::offchain::SubmitTransaction;
+        ) -> UncheckedExtrinsic {
             use pallet_relayer_orchestration::Call;
             
-            // Invia una transazione unsigned per rimuovere il relayer
-            let call = Call::remove_relayer_unsigned { 
-                relayer: relayer.clone(),
-                validator_signature,
-            };
-            
-            match SubmitTransaction::<Runtime, Call<Runtime>>::submit_unsigned_transaction(call.into()) {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            UncheckedExtrinsic::new_unsigned(
+                Call::remove_relayer_unsigned { 
+                    relayer: relayer.clone(),
+                    validator_signature,
+            }.into()
+            )
         }
         
         
@@ -2036,26 +1977,6 @@ impl_runtime_apis! {
             PalletRelayerOrchestration::is_relayer(&relayer)
         }
         
-        // Metodi validator-specific semplificati
-        fn validator_submit_event(
-            relayer: AccountId,
-            chain_id: Vec<u8>,
-            block_number: u64,
-            contract_address: Vec<u8>,
-            event_data: Vec<u8>,
-            validator_signature: sp_core::sr25519::Signature
-        ) -> Hash {
-            // Usa la firma del validatore per verificare
-            // Questa è semplicemente una versione più conveniente di submit_event
-            Self::submit_event(
-                relayer,
-                chain_id,
-                block_number,
-                contract_address,
-                event_data,
-                validator_signature
-            )
-        }
     }
 
     impl sp_api::Metadata<Block> for Runtime {
