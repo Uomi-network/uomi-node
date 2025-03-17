@@ -223,6 +223,10 @@ pub mod pallet {
 
             ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
+            // threshold needs to be an integer value between 50 and 100%
+            ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
+            ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
+
             // Create new DKG session
             let session = DKGSession {
                 nft_id,

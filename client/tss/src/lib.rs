@@ -2885,6 +2885,9 @@ where
                                             .get_dkg_session_threshold(hash, id)
                                             .unwrap();
 
+                                        // t is a percentage value, convert it to the actual threshold value
+                                        let t = (t as f64 * n as f64 / 100.0) as u16;
+
                                         let participants = self
                                             .client
                                             .runtime_api()
@@ -2915,6 +2918,9 @@ where
                                             .runtime_api()
                                             .get_dkg_session_threshold(hash, id)
                                             .unwrap();
+
+                                        // t is a percentage value, convert it to the actual threshold value
+                                        let t = (t as f64 * n as f64 / 100.0) as u16;
 
                                         let participants = self
                                             .client
@@ -2954,6 +2960,10 @@ where
                                             .runtime_api()
                                             .get_dkg_session_threshold(hash, dkg_session_id)
                                             .unwrap();
+
+                                        
+                                        // t is a percentage value, convert it to the actual threshold value
+                                        let t = (t as f64 * n as f64 / 100.0) as u16;
 
                                         let participants = self
                                             .client

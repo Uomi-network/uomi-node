@@ -143,6 +143,7 @@ impl CreateSignedTransaction<UomiCall<Test>> for Test {
 impl crate::pallet::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type MaxNumberOfShares = MaxNumberOfShares;
+    type SignatureVerifier = crate::pallet::Verifier;
 }
 
 impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
