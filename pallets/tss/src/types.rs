@@ -1,9 +1,5 @@
-use frame_support::{parameter_types, BoundedVec, pallet_prelude::{Encode, Decode,TypeInfo, MaxEncodedLen}};
-use frame_system::pallet_prelude::BlockNumberFor;
+use frame_support::{parameter_types, BoundedVec};
 
-use sp_core::U256;
-
-use crate::Config;
 
 const MAX_KEY_SIZE: u32 = 64;
 const MAX_SHARE_SIZE: u32 = 128;
