@@ -85,10 +85,6 @@ impl ECDSAManager {
         n: usize,
         keys: Option<String>,
     ) -> Option<()> {   
-        let params = Parameters {
-            threshold: t.into(),
-            share_count: n.into(),
-        };
         let reshare = ReshareKeyPhase::new(party_id, party_ids, new_party_ids, t, keys);
 
         if let Err(error) = reshare {
