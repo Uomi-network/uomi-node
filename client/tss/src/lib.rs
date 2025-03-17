@@ -11,7 +11,7 @@ use std::{
     num::TryFromIntError,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll}, thread::sleep, time::Duration
+    task::{Context, Poll}, thread::sleep, time::Duration, u16
 };
 
 use dkghelpers::{FileStorage, MemoryStorage, Storage, StorageType};
@@ -162,6 +162,7 @@ pub enum TSSRuntimeEvent {
         TSSParticipant,
         Vec<u8>,
     ), // Session info from runtime is now available
+    ValidatorIdAssigned(TSSParticipant, u32)
 }
 
 struct TssValidator {
@@ -226,11 +227,11 @@ impl<B: BlockT> Validator<B> for TssValidator {
 }
 
 // ===== PeerMapper =====
-
 struct PeerMapper {
     peers: HashMap<PeerId, TSSPublic>,
     sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
     sessions_participants_u16: Arc<Mutex<HashMap<SessionId, HashMap<u16, TSSPublic>>>>,
+    validator_ids: Arc<Mutex<HashMap<TSSPublic, u32>>>,
 }
 
 impl PeerMapper {
@@ -241,8 +242,10 @@ impl PeerMapper {
             peers: HashMap::new(),
             sessions_participants,
             sessions_participants_u16: Arc::new(Mutex::new(HashMap::new())),
+            validator_ids: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+    
     pub fn _get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
         self.peers.get(peer_id)
     }
@@ -253,6 +256,7 @@ impl PeerMapper {
             .find_map(|(key, val)| if val == account_id { Some(key) } else { None })
     }
 
+    // Modified to use validator ID as identifier where possible
     pub fn get_peer_id_from_identifier(
         &mut self,
         session_id: &SessionId,
@@ -331,7 +335,6 @@ impl PeerMapper {
             return None;
         }
 
-
         for (_, (key, val)) in session.unwrap().iter().enumerate() {
             if val == account_id {
                 return Some(*key);
@@ -342,11 +345,22 @@ impl PeerMapper {
         return None;
     }
 
+    // Modified to use validator ID if available
     pub fn get_identifier_from_account_id(
         &mut self,
         session_id: &SessionId,
         account_id: &TSSPublic,
     ) -> Option<Identifier> {
+        // First try to get the validator ID
+        let validator_id = self.get_validator_id(account_id);
+        
+        if let Some(id) = validator_id {
+            // If we have a validator ID, convert it to Identifier
+            let identifier: Identifier = u16::try_from(id).unwrap_or(u16::MAX).try_into().unwrap();
+            return Some(identifier);
+        }
+        
+        // If no validator ID is found, fall back to the original method
         let handle = self.sessions_participants.lock().unwrap();
         let session = handle.get(session_id);
 
@@ -371,6 +385,7 @@ impl PeerMapper {
         return None;
     }
 
+    // Modified to use validator IDs
     pub fn create_session(&mut self, session_id: SessionId, participants: Vec<TSSParticipant>) {
         let mut sessions_participants = self.sessions_participants.lock().unwrap();
         let mut sessions_participants_u16 = self.sessions_participants_u16.lock().unwrap();
@@ -383,11 +398,19 @@ impl PeerMapper {
             .or_insert(empty_hash_map());
 
         for (index, val) in participants.iter().enumerate() {
-            entry_sessions_participants.insert(
-                u16::try_from(index + 1).unwrap().try_into().unwrap(),
-                val.to_vec(),
-            );
+            // Try to get validator ID for this participant
+            let validator_id = self.get_validator_id(&val.to_vec())
+                .unwrap_or_else(|| (index + 1) as u32); // Fall back to index+1 if no validator ID
+            
+            // Convert validator_id to Identifier
+            
+            let identifier: Identifier = u16::try_from(validator_id).unwrap_or_default().try_into().unwrap();
+ 
+            
+            entry_sessions_participants.insert(identifier, val.to_vec());
             entry_sessions_participants_u16.insert(u16::try_from(index + 1).unwrap(), val.to_vec());
+            
+            log::info!("[TSS] Added participant with validator ID {} to session {}", validator_id, session_id);
         }
 
         drop(sessions_participants_u16);
@@ -397,6 +420,32 @@ impl PeerMapper {
     pub fn add_peer(&mut self, peer_id: PeerId, public_key_data: TSSPublic) {
         log::info!("Adding Peer {:?} with public key {:?}", peer_id, public_key_data);
         self.peers.insert(peer_id, public_key_data);
+    }
+
+    pub fn get_validator_id(&self, public_key: &TSSPublic) -> Option<u32> {
+        let validator_ids = self.validator_ids.lock().unwrap();
+        let id = validator_ids.get(public_key).cloned();
+        drop(validator_ids);
+        id
+    }
+
+    pub fn _get_validator_account_from_id(&mut self, id: u32) -> Option<TSSPublic> {
+        let validator_ids = self.validator_ids.lock().unwrap();
+        let account = validator_ids.iter().find_map(|(key, val)| {
+            if *val == id {
+                Some(key.clone())
+            } else {
+                None
+            }
+        });
+        drop(validator_ids);
+        account
+    }
+
+    pub fn set_validator_id(&mut self, public_key: TSSPublic, id: u32) {
+        let mut validator_ids = self.validator_ids.lock().unwrap();
+        validator_ids.insert(public_key, id);
+        drop(validator_ids);
     }
 }
 
@@ -2711,6 +2760,9 @@ impl<B: BlockT> SessionManager<B> {
                     log::error!("[TSS] Failed to process signing session {}: {:?}", id, e);
                 }
             }
+            TSSRuntimeEvent::ValidatorIdAssigned(account_id, id) => {
+                self.on_new_validator_id_assigned(account_id.to_vec(), id);
+            }
         }
     }
 
@@ -2760,6 +2812,11 @@ impl<B: BlockT> SessionManager<B> {
         self.ecdsa_create_sign_phase(id, participants, message);
         
         Ok(())
+    }
+
+    fn on_new_validator_id_assigned(&mut self, account_id: TSSPublic, id: u32) {
+        let mut peer_mapper_handle = self.peer_mapper.lock().unwrap();
+        peer_mapper_handle.set_validator_id(account_id, id);
     }
 }
 
@@ -2924,6 +2981,13 @@ where
                                         }
                                     }
 
+                                    RuntimeEvent::Tss(TssEvent::ValidatorIdAssigned(account_id, id)) => {
+                                        if let Err(e) = self.sender.unbounded_send(
+                                            TSSRuntimeEvent::ValidatorIdAssigned(account_id.into(), id),
+                                        ) {
+                                            log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);
+                                        }
+                                    }
                                     _ => (),
                                 },
                                 Err(e) => {
