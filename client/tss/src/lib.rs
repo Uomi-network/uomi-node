@@ -2961,9 +2961,14 @@ where
                                             .get_dkg_session_participants(hash, dkg_session_id)
                                             .unwrap_or(Vec::new());
 
+                                        let message = self
+                                            .client
+                                            .runtime_api()
+                                            .get_signing_session_message(hash, dkg_session_id)
+                                            .unwrap_or(Vec::new());
+
                                         // TODO: add the function in the pallet for these three:
                                         let coordinator = participants[0];
-                                        let message = hex::decode("788b0eb4bdd12ebc0600f47910acf3ff458264584920a7a465cd3d548c1d1cc5").unwrap();
                                         let id = dkg_session_id;
 
                                         // let the session manager now about the new Signing Session
@@ -2974,7 +2979,7 @@ where
                                                 n,
                                                 participants,
                                                 coordinator,
-                                                message.to_vec(),
+                                                message.concat()
                                             ),
                                         ) {
                                             log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);
