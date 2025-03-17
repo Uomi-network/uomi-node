@@ -82,7 +82,7 @@ impl ECDSAManager {
         party_ids: Vec<String>,
         new_party_ids: Vec<String>,
         t: usize,
-        n: usize,
+        _n: usize,
         keys: Option<String>,
     ) -> Option<()> {   
         let reshare = ReshareKeyPhase::new(party_id, party_ids, new_party_ids, t, keys);

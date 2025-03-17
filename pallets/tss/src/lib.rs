@@ -12,7 +12,7 @@ use frame_support::pallet_prelude::*;
 pub mod types;
 
 use frame_support::inherent::{InherentIdentifier, IsFatalError};
-use frame_system::ensure_signed;
+use frame_system::{ensure_signed, ensure_none};
 use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use scale_info::TypeInfo;
@@ -60,7 +60,7 @@ pub mod pallet {
 
     use frame_system::offchain::CreateSignedTransaction;
 
-    use crate::types::{MaxMessageSize, MaxNumberOfShares, NftId, Signature};
+    use crate::types::{MaxMessageSize, NftId, Signature};
 
     use super::*;
     #[pallet::pallet]
@@ -254,7 +254,8 @@ pub mod pallet {
             payload: UpdateValidatorsPayload<T>,
             _signature: T::Signature,
         ) -> DispatchResult {
-            ensure_signed(origin)?;
+            ensure_none(origin)?;
+
 
             let new_validators = payload.validators;
             
@@ -455,33 +456,33 @@ pub mod pallet {
 
     // }
 
-    #[pallet::validate_unsigned]
-    impl<T: Config> ValidateUnsigned for Pallet<T> {
-        type Call = Call<T>;
+        #[pallet::validate_unsigned]
+        impl<T: Config> ValidateUnsigned for Pallet<T> {
+            type Call = Call<T>;
 
-        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-            // log::info!("[TSS] Validating unsigned");
-            match call {
-                // Handle inherent extrinsics
-                Call::update_validators { .. } => {
-                    // log::info!("[TSS] We like this");
+            fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+                // log::info!("[TSS] Validating unsigned");
+                match call {
+                    // Handle inherent extrinsics
+                    Call::update_validators { .. } => {
+                        log::info!("[TSS] We like this");
 
-                    return ValidTransaction::with_tag_prefix("TssPallet")
-                        .priority(TransactionPriority::MAX)
-                        .and_provides(INHERENT_IDENTIFIER)
-                        .longevity(64)
-                        .propagate(true)
-                        .build();
-                }
+                        return ValidTransaction::with_tag_prefix("TssPallet")
+                            .priority(TransactionPriority::MAX)
+                            .and_provides(call.encode())
+                            .longevity(64)
+                            .propagate(true)
+                            .build();
+                    }
 
-                // Reject all other unsigned calls
-                _ => {
-                    // log::info!("[TSS] We DO NOT like this");
-                    return InvalidTransaction::Call.into();
+                    // Reject all other unsigned calls
+                    _ => {
+                        log::info!("[TSS] We DO NOT like this");
+                        return InvalidTransaction::Call.into();
+                    }
                 }
             }
         }
-    }
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
@@ -548,7 +549,6 @@ pub mod pallet {
             // Return weight for this operation (minimal)
             T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1) 
         }
-    
     }
 
     impl<T: Config> Pallet<T> {
@@ -594,6 +594,7 @@ pub mod pallet {
             NextValidatorId::<T>::put(next_id + 1);
             
             // Emit event, maybe the client can use it?
+            log::info!("[TSS] Validator ID assigned: {:?}", validator);
             Self::deposit_event(Event::ValidatorIdAssigned(validator, next_id));
             
             Ok(())
