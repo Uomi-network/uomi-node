@@ -2578,7 +2578,7 @@ impl_runtime_apis! {
             }  
             return Vec::new();
         }
-        fn get_signing_session_message(session_id: u64) -> Vec<[u8; 32]> {
+        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
             Vec::new()
         }
         fn get_dkg_session_old_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
