@@ -2594,5 +2594,22 @@ impl_runtime_apis! {
 
             return Vec::new();
         }
+        fn get_validator_id(account_id: [u8; 32]) -> Option<u32> {
+            // Convert [u8; 32] to AccountId
+            let account = AccountId::from(account_id);
+            // Call the pallet function
+            pallet_tss::pallet::Pallet::<Runtime>::get_validator_id(&account)
+        }
+        
+        fn get_validator_by_id(id: u32) -> Option<[u8; 32]> {
+            pallet_tss::pallet::Pallet::<Runtime>::get_validator_from_id(id).map(|account| account.into())
+        }
+        
+        fn get_all_validator_ids() -> Vec<(u32, [u8; 32])> {
+            // Collect all validator ID mappings
+            pallet_tss::pallet::ValidatorIds::<Runtime>::iter()
+                .map(|(account, id)| (id, account.into()))
+                .collect()
+        }
     }
 }

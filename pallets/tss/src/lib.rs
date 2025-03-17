@@ -16,6 +16,7 @@ use frame_system::ensure_signed;
 use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use scale_info::TypeInfo;
+use frame_system::offchain::SendUnsignedTransaction;
 
 pub use pallet::*;
 use sp_std::vec;
@@ -162,6 +163,23 @@ pub mod pallet {
     #[pallet::getter(fn next_session_id)]
     pub type NextSessionId<T: Config> = StorageValue<_, SessionId, ValueQuery>;
 
+
+    #[pallet::storage]
+    #[pallet::getter(fn validator_ids)]
+    pub type ValidatorIds<T: Config> = 
+        StorageMap<_, Blake2_128Concat, T::AccountId, u32, OptionQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn id_to_validator)]
+    pub type IdToValidator<T: Config> = 
+        StorageMap<_, Blake2_128Concat, u32, T::AccountId, OptionQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn next_validator_id)]
+    pub type NextValidatorId<T: Config> = StorageValue<_, u32, ValueQuery>;
+
+
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -172,6 +190,7 @@ pub mod pallet {
         DKGCompleted(SessionId, Key),          // Aggregated public key
         SigningCompleted(SessionId, Signature), // Final aggregated signature
         SignatureSubmitted(SessionId),          // When signature is stored
+        ValidatorIdAssigned(T::AccountId, u32), // Validator account, ID
     }
 
     #[pallet::error]
@@ -238,11 +257,14 @@ pub mod pallet {
             ensure_signed(origin)?;
 
             let new_validators = payload.validators;
+            
+            // Assign IDs to any new validators
+            for validator in new_validators.clone() {
+                Self::assign_validator_id(validator)?;
+            }
+            
             ActiveValidators::<T>::put(BoundedVec::try_from(new_validators.clone()).unwrap());
 
-            // log::info!("[TSS] Stored new validators");
-
-            // Self::deposit_event(Event::ValidatorsUpdated(new_validators));
             Ok(())
         }
 
@@ -464,41 +486,127 @@ pub mod pallet {
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn offchain_worker(n: BlockNumberFor<T>) {
-            // log::info!("[TSS] Block number {:?}", n);
-
+            // Check for new validators every 10 blocks
             if n % 10u32.into() != 0u32.into() {
                 return;
             }
-
-            // log::info!("[TSS] Checking if there's need for new set of validators {:?}", n);
-
-            let signer = Signer::<T, T::AuthorityId>::all_accounts();
-
-            if !signer.can_sign() {
-                log::error!("TSS: No accounts available to sign update_validators");
-                return;
+    
+            // Get current validators from staking pallet
+            let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
+                .map(|(account_id, _)| account_id)
+                .collect();
+            
+            // Check if there are any new validators that need IDs
+            let mut new_validators = Vec::new();
+            for validator in current_validators.iter() {
+                if !ValidatorIds::<T>::contains_key(validator) {
+                    new_validators.push(validator.clone());
+                }
             }
-
-            let new_validators: sp_std::vec::Vec<T::AccountId> =
-                pallet_uomi_engine::Pallet::<T>::get_active_validators();
-
+            
+            if !new_validators.is_empty() {
+                log::info!("[TSS] Found {} new validators that need IDs", new_validators.len());
+                
+                let signer = Signer::<T, T::AuthorityId>::all_accounts();
+                if !signer.can_sign() {
+                    log::error!("TSS: No accounts available to sign update_validators");
+                    return;
+                }
+                
+                // Include both existing and new validators in the update
+                let all_validators = current_validators;
+                
+                // Send unsigned transaction with signed payload
+                let _ = signer.send_unsigned_transaction(
+                    |acct| UpdateValidatorsPayload::<T> {
+                        validators: all_validators.clone(),
+                        public: acct.public.clone(),
+                    },
+                    |payload, signature| Call::update_validators { payload, signature }
+                );
+            }
+            
+            // Rest of your existing offchain worker logic
             let stored_validators = ActiveValidators::<T>::get();
-            // log::info!("[TSS] Current validators lentgh {:?}, while new validators length {:?}", stored_validators.len(), new_validators.len());
-
             if stored_validators.len() > 0 {
                 return;
             }
+    
+            // If no active validators are set, initialize them
+            log::info!("[TSS] Setting new validators at block {:?}", n);
+            // Your existing code for setting validators...
+        }
+    
+        // Add on_initialize hook to handle validator initialization
+        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+            // Check if validator IDs have been initialized
+            if NextValidatorId::<T>::get() == 0 {
+                // Initialize with ID 1
+                NextValidatorId::<T>::put(1);
+            }
+            
+            // Return weight for this operation (minimal)
+            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1) 
+        }
+    
+    }
 
-            // log::info!("[TSS] Setting new validators {:?}", n);
+    impl<T: Config> Pallet<T> {
+        pub fn initialize_validator_ids() -> DispatchResult {
+            // Get all validators from pallet_staking
+            let validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
+                .map(|(account_id, _)| account_id)
+                .collect();
+            
+            let mut next_id = 1u32; // Start IDs from 1
+            
+            // Assign IDs to validators that don't have one yet
+            for validator in validators {
+                if !ValidatorIds::<T>::contains_key(&validator) {
+                    ValidatorIds::<T>::insert(&validator, next_id);
+                    IdToValidator::<T>::insert(next_id, validator.clone());
+                    Self::deposit_event(Event::ValidatorIdAssigned(validator, next_id));
+                    next_id += 1;
+                }
+            }
 
-            // //send unsigned transaction with signed payload
-            // let _ = signer.send_unsigned_transaction(
-            //     |acct| UpdateValidatorsPayload::<T> {
-            //         validators: new_validators.clone(),
-            //         public: acct.public.clone(),
-            //     },
-            //     |payload, signature| Call::update_validators { payload, signature }
-            // );
+            // Update the next validator ID
+            NextValidatorId::<T>::put(next_id);
+            
+            Ok(())
+        }
+
+        // Add this function to assign an ID to a new validator
+        pub fn assign_validator_id(validator: T::AccountId) -> DispatchResult {
+            // Check if the validator already has an ID
+            if ValidatorIds::<T>::contains_key(&validator) {
+                return Ok(());
+            }
+            
+            // Get the next ID
+            let next_id = Self::next_validator_id();
+            
+            // Assign the ID
+            ValidatorIds::<T>::insert(&validator, next_id);
+            IdToValidator::<T>::insert(next_id, validator.clone());
+            
+            // Increment the next ID
+            NextValidatorId::<T>::put(next_id + 1);
+            
+            // Emit event, maybe the client can use it?
+            Self::deposit_event(Event::ValidatorIdAssigned(validator, next_id));
+            
+            Ok(())
+        }
+
+        // Helper public function used in runtime impl.
+        pub fn get_validator_id(validator: &T::AccountId) -> Option<u32> {
+            ValidatorIds::<T>::get(validator)
+        }
+
+        // Helper public function used in runtime impl.
+        pub fn get_validator_from_id(id: u32) -> Option<T::AccountId> {
+            IdToValidator::<T>::get(id)
         }
     }
 }
@@ -511,5 +619,9 @@ sp_api::decl_runtime_apis! {
         fn get_dkg_session_participants_count(id: SessionId) -> u16;
         fn get_dkg_session_old_participants(id: SessionId) -> Vec<[u8; 32]>;
         fn get_signing_session_message(id: SessionId) -> Vec<[u8; 32]>;
+
+        fn get_validator_id(account_id: [u8; 32]) -> Option<u32>;
+        fn get_validator_by_id(id: u32) -> Option<[u8; 32]>;
+        fn get_all_validator_ids() -> Vec<(u32, [u8; 32])>;
     }
 }
