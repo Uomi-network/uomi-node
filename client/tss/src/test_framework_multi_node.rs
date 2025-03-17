@@ -93,7 +93,7 @@ mod tests {
         let node = network.node_mut(&peer_id);
 
         let session_id: SessionId = 1;
-        let t = 60;
+        let t = 3;
         let n = 5;
 
         let result =
@@ -113,7 +113,7 @@ mod tests {
         let node = network.node_mut(&peer_id);
 
         let session_id: SessionId = 2;
-        let t = 60;
+        let t = 3;
         let n = 5;
 
         // First, call add_session_data in a valid way:
@@ -282,10 +282,10 @@ mod tests {
         let node = network.node_mut(&peer_id);
 
         let session_id: SessionId = 3;
-        let t = 67;
+        let t = 2;
         let n = 3;
 
-        let event = TSSRuntimeEvent::DKGSessionInfoReady(session_id, 67, n, participants.clone());
+        let event = TSSRuntimeEvent::DKGSessionInfoReady(session_id, t, n, participants.clone());
 
         assert_eq!(
             false,
@@ -513,7 +513,7 @@ mod tests {
         let nodes_count = 10;
 
         let session_id: SessionId = 7;
-        let t = 80;
+        let t = 8;
         let n: u16 = nodes_count.try_into().unwrap();
 
         let mut network = setup_test_network(nodes_count);
@@ -822,7 +822,7 @@ mod tests {
         let nodes_count = 3;
         let session_id: SessionId = 9;
         let dkg_session_id: SessionId = session_id; // DKG and Signing use the same session ID for simplicity in this test
-        let t = 67;
+        let t = 2;
         let n: u16 = nodes_count.try_into().unwrap();
 
         let mut network = setup_test_network(nodes_count);
@@ -1008,7 +1008,7 @@ mod tests {
         let nodes_count = 3;
         let session_id: SessionId = 9;
         let dkg_session_id: SessionId = session_id; // DKG and Signing use the same session ID for simplicity in this test
-        let t = 67;
+        let t = 2;
         let n: u16 = nodes_count.try_into().unwrap();
 
         let mut network = setup_test_network(nodes_count);
