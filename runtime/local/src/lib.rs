@@ -500,7 +500,6 @@ impl pallet_election_provider_multi_phase::MinerConfig for Runtime {
     }
 }
 
-
 parameter_types! {
     pub const CandidacyBond: Balance = 10 * UOMI;
     // 1 storage item created, key size is 32 bytes, value size is 16+16.
@@ -542,7 +541,6 @@ impl pallet_elections_phragmen::Config for Runtime {
     type WeightInfo = pallet_elections_phragmen::weights::SubstrateWeight<Runtime>;
 }
 
-
 impl pallet_election_provider_multi_phase::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
@@ -578,7 +576,6 @@ impl pallet_election_provider_multi_phase::Config for Runtime {
     type WeightInfo = pallet_election_provider_multi_phase::weights::SubstrateWeight<Self>;
 }
 
-
 // voter bags
 parameter_types! {
     pub const BagThresholds: &'static [u64] = &voter_bags::THRESHOLDS;
@@ -596,14 +593,12 @@ impl pallet_bags_list::Config<VoterBagsListInstance> for Runtime {
     type WeightInfo = pallet_bags_list::weights::SubstrateWeight<Runtime>;
 }
 
-
 parameter_types! {
     pub const ImOnlineUnsignedPriority: TransactionPriority = TransactionPriority::MAX;
     pub const MaxKeys: u32 = 10_000;
     pub const MaxPeerInHeartbeats: u32 = 10_000;
     pub const MaxPeerDataEncodingSize: u32 = 1_000;
 }
-
 
 impl pallet_im_online::Config for Runtime {
 	type AuthorityId = ImOnlineId;

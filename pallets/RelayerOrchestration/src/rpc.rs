@@ -6,7 +6,7 @@ use jsonrpsee::{
 };
 use sp_api::ProvideRuntimeApi;
 use sp_blockchain::HeaderBackend;
-use sp_runtime::{traits::Block as BlockT};
+use sp_runtime::traits::Block as BlockT;
 use std::sync::Arc;
 use codec::{Encode, Decode};
 use sp_core::sr25519;
@@ -51,6 +51,7 @@ where
     ) -> RpcResult<bool> {
         let api = self.client.runtime_api();
         let at_hash = at.unwrap_or_else(|| self.client.info().best_hash);
+        log::info!("submit_event: relayer: {:?}, chain_id: {:?}, block_number: {:?}, contract_address: {:?}, event_data: {:?}, signature: {:?}", relayer, chain_id, block_number, contract_address, event_data, signature);
 
         let extrinsic = api.submit_event(
             at_hash,
@@ -226,8 +227,6 @@ where
     }
     
 }
-
-
 
 #[rpc(client, server)]
 pub trait RelayerOrchestrationApi<BlockHash, AccountId, Hash> {

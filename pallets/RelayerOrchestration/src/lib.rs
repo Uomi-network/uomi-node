@@ -8,7 +8,7 @@ use frame_support::{
 };
 use sp_runtime::Saturating;
 use sp_std::fmt::Debug;
-use frame_system::{ensure_root, ensure_none, pallet_prelude::*};
+use frame_system::{ensure_root, ensure_none, pallet_prelude::*, ensure_signed};
 use scale_info::TypeInfo;
 use sp_runtime::{
     traits::{Hash, Verify, IdentifyAccount},
@@ -516,17 +516,15 @@ pub mod pallet {
                         return InvalidTransaction::BadProof.into();
                     }
 
-                    let unique_id = T::Hashing::hash_of(&(
-                        relayer.clone(),
-                        &chain_id,
-                        block_number,
-                        &contract_address
-                    ));
+                    if !Self::address_is_active_validator(relayer) {
+                        return InvalidTransaction::BadProof.into();
+                    }
+
                     
                     ValidTransaction::with_tag_prefix("RelayerOrchestration")
                         .priority(TransactionPriority::max_value())
                         .and_provides(
-                            unique_id
+                            call.encode()
                         )
                         .longevity(64_u64)
                         .propagate(true)
@@ -560,35 +558,7 @@ pub mod pallet {
                         .longevity(64_u64)
                         .propagate(true)
                         .build()
-                }
-                Call::remove_relayer_unsigned { relayer, validator_signature } => {
-                    // Verifica che il relayer esista
-                    if !Self::is_relayer(relayer) {
-                        return InvalidTransaction::BadProof.into();
-                    }
-                    
-                    // Verifica che il relayer sia anche un validatore
-                    if !Self::address_is_active_validator(relayer) {
-                        return InvalidTransaction::BadProof.into();
-                    }
-                    
-                    // Verifica che la firma sia valida
-                    let public_key = Self::get_relayer_public_key(relayer).ok_or(InvalidTransaction::BadProof)?;
-                    let payload = (b"remove_relayer", relayer.clone()).encode();
-                    let account_id = public_key.clone().into_account();
-                    
-                    if !validator_signature.verify(payload.as_slice(), &account_id) {
-                        return InvalidTransaction::BadProof.into();
-                    }
-                    
-                    ValidTransaction::with_tag_prefix("RelayerOrchestration")
-                        .priority(TransactionPriority::max_value())
-                        .and_provides(relayer)
-                        .longevity(64_u64)
-                        .propagate(true)
-                        .build()
                 },
-                
                 _ => InvalidTransaction::Call.into(),
             }
         }
@@ -606,10 +576,10 @@ pub mod pallet {
             block_number: u64,
             contract_address: BoundedVec<u8, T::MaxDataSize>,
             event_data: BoundedVec<u8, T::MaxDataSize>,
-            _signature: T::Signature,
+            signature: T::Signature,
         ) -> DispatchResult {
             ensure_none(origin)?;
-            
+
             // Verifica che il relayer sia anche un validatore
             ensure!(Self::address_is_active_validator(&relayer), Error::<T>::NotValidator);
             
@@ -620,13 +590,20 @@ pub mod pallet {
                 &contract_address,
                 &event_data
             );
-            
+                
+            log::info!("New event: {:?}", event_hash);
+            log::info!("signature data: {:?}", signature);
+                
             // Verifica se l'evento esiste già e lo crea se necessario
             if !ChainEvents::<T>::contains_key(&event_hash) {
+                log::info!("inside IF");
                 // Create the event
                 let timestamp = Self::now();
                 let verifiers = BoundedVec::<T::AccountId, T::MaxRelayers>::try_from(vec![relayer.clone()])
-                    .map_err(|_| Error::<T>::TooManyRelayers)?;
+                    .map_err(|_| {
+                        log::info!("Too many relayers init");
+                        Error::<T>::TooManyRelayers
+                    })?;
                 
                 let event = ChainEvent {
                     chain_id: chain_id.clone(),
@@ -647,30 +624,41 @@ pub mod pallet {
                     &chain_id,
                     &contract_address,
                     |events| -> Result<(), Error<T>> {
-                        events.try_push(event_hash).map_err(|_| Error::<T>::TooManyRelayers)?;
+                        events.try_push(event_hash).map_err(|_| {
+                            Error::<T>::TooManyRelayers
+                        })?;
                         Ok(())
                     }
                 )?;
                 
                 // Aggiungi l'evento alla lista dei pendenti
                 PendingEvents::<T>::try_mutate(|events| -> Result<(), Error<T>> {
-                    events.try_push(event_hash).map_err(|_| Error::<T>::TooManyRelayers)?;
+                    events.try_push(event_hash).map_err(|_| {
+                        log::info!("TooManyRelayers");
+                        Error::<T>::TooManyRelayers
+                    })?;
                     Ok(())
                 })?;
             } else {
-                // L'evento esiste già, aggiorna i validatori
                 ChainEvents::<T>::try_mutate(event_hash, |maybe_event| -> Result<(), Error<T>> {
-                    let event = maybe_event.as_mut().ok_or(Error::<T>::EventDoesNotExist)?;
+                    let event = maybe_event.as_mut().ok_or({
+                        log::info!("EventDoesNotExist");
+                        Error::<T>::EventDoesNotExist
+                    })?;
                     
                     // Verifica che questo validatore non abbia già verificato l'evento
                     if !event.verifiers.contains(&relayer) {
                         event.verifications += 1;
-                        event.verifiers.try_push(relayer.clone()).map_err(|_| Error::<T>::TooManyRelayers)?;
+                        event.verifiers.try_push(relayer.clone()).map_err(|_| {
+                            log::info!("TooManyRelayers existing");
+                            Error::<T>::TooManyRelayers
+                        })?;
                     }
                     
                     Ok(())
                 })?;
             }
+            log::info!("Event submitted: {:?}", event_hash);
             
             // Registra questo validatore come testimone dell'evento
             ValidatorEventWitnesses::<T>::insert(event_hash, relayer.clone(), true);
@@ -695,28 +683,21 @@ pub mod pallet {
             // Verifica che la chiave pubblica del relayer corrisponda alla chiave che ha generato la firma
             let payload = (b"register_relayer", relayer.clone(), public_key.clone()).encode();
             let account_id = public_key.clone().into_account();
-            log::info!("2");
             
             // Verifica che la firma sia creata dalla stessa chiave che si vuole registrare
             ensure!(validator_signature.verify(payload.as_slice(), &account_id), Error::<T>::InvalidSignature);
-            log::info!("3");
             // Verifica se relayer esiste già
             ensure!(!Relayers::<T>::contains_key(&relayer), Error::<T>::RelayerAlreadyExists);
-            log::info!("4");
             //verifica che il relayer sia anche un validator in pallet-staking
             let is_validator = Self::address_is_active_validator(&relayer);
             ensure!(is_validator, Error::<T>::NotValidator);
-            log::info!("5");
             // Verifica limite relayers
             let count = RelayerCount::<T>::get();
             ensure!(count < T::MaxRelayers::get(), Error::<T>::TooManyRelayers);
-            log::info!("6");
             // Registra il relayer
             Relayers::<T>::insert(&relayer, public_key);
             RelayerCount::<T>::put(count + 1);
-            log::info!("7");
             Self::deposit_event(Event::RelayerAdded(relayer));
-            log::info!("8");
             Ok(())
         }
         
@@ -724,29 +705,22 @@ pub mod pallet {
         #[pallet::weight(<T as pallet::Config>::WeightInfo::remove_relayer())]
         pub fn remove_relayer_unsigned(
             origin: OriginFor<T>,
-            relayer: T::AccountId,
-            validator_signature: T::Signature,
         ) -> DispatchResult {
-            ensure_none(origin)?;
+            let who = ensure_signed(origin)?;
             
             // Verifica che il relayer esista
-            ensure!(Relayers::<T>::contains_key(&relayer), Error::<T>::RelayerDoesNotExist);
-            
-            // Ottieni la chiave pubblica del relayer
-            let public_key = Relayers::<T>::get(&relayer).ok_or(Error::<T>::RelayerDoesNotExist)?;
-            
-            // Crea e verifica il payload
-            let payload = (b"remove_relayer", relayer.clone()).encode();
-            let account_id = public_key.clone().into_account();
-            
-            // Verifica che la firma provenga dalla stessa chiave registrata come relayer
-            ensure!(validator_signature.verify(payload.as_slice(), &account_id), Error::<T>::InvalidSignature);
+            ensure!(Relayers::<T>::contains_key(&who), Error::<T>::RelayerDoesNotExist);
             
             // Rimuovi il relayer
-            Relayers::<T>::remove(&relayer);
-            RelayerCount::<T>::mutate(|count| *count -= 1);
+            Relayers::<T>::remove(&who);
+            RelayerCount::<T>::mutate_exists(|count| {
+                if let Some(c) = count {
+                    *c -= 1;
+                }
+            });
             
-            Self::deposit_event(Event::RelayerRemoved(relayer));
+            
+            Self::deposit_event(Event::RelayerRemoved(who));
             Ok(())
         }
 
