@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use scale_info::prelude::string::String;
 
 use frame_election_provider_support::{
@@ -10,7 +12,7 @@ use frame_support::{
     traits::EstimateNextSessionRotation, weights::Weight,
 };
 use frame_system::offchain::{CreateSignedTransaction, SendTransactionTypes, SigningTypes};
-use pallet_babe;
+use pallet_babe::{self, AuthorityId};
 use pallet_ipfs::{
     self,
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
@@ -18,11 +20,12 @@ use pallet_ipfs::{
 use pallet_session::{SessionHandler, ShouldEndSession};
 use pallet_staking::TestBenchmarkingConfig;
 use sp_core::{
-    sr25519::{Public, Signature},
-    ConstU128, ConstU16, ConstU32, ConstU64, Get, H256, U256,
+    offchain::{testing::TestOffchainExt, OffchainDbExt, OffchainWorkerExt}, sr25519::{self, Public, Signature, CRYPTO_ID}, ConstU128, ConstU16, ConstU32, ConstU64, Get, Pair, H256, U256
 };
 
-use pallet_uomi_engine::Call as UomiCall;
+use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
+
+use pallet_uomi_engine::{crypto::CRYPTO_KEY_TYPE, Call as UomiCall};
 use sp_runtime::{
     curve::PiecewiseLinear,
     testing::{TestXt, UintAuthorityId},
@@ -31,7 +34,7 @@ use sp_runtime::{
 };
 use sp_staking::currency_to_vote::SaturatingCurrencyToVote;
 
-use crate::types::MaxNumberOfShares;
+use crate::{runtime_decl_for_tss_api::ID, types::MaxNumberOfShares};
 
 // TYPES
 pub type Balance = u128; // needed in System
@@ -144,6 +147,8 @@ impl crate::pallet::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type MaxNumberOfShares = MaxNumberOfShares;
     type SignatureVerifier = crate::pallet::Verifier;
+
+    type AuthorityId = crate::crypto::AuthId;
 }
 
 impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
@@ -355,16 +360,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     .assimilate_storage(&mut t)
     .unwrap();
 
-    // pallet_babe::GenesisConfig::<Test> {
-    //     authorities: vec![],
-    //     epoch_config: sp_consensus_babe::BabeEpochConfiguration {
-    //         c: (1, 4),
-    //         allowed_slots: sp_consensus_babe::AllowedSlots::PrimarySlots,
-    //     },
-    //     _config: PhantomData,
-    // }
-    // .assimilate_storage(&mut t)
-    // .unwrap();
+
 
     t.into()
 }

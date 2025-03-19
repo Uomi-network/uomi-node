@@ -1,27 +1,30 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 use scale_info::prelude::*;
+use sp_runtime::KeyTypeId;
 
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
 mod tests;
 
-use sp_std::prelude::*;
 use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
+use sp_std::prelude::*;
 pub mod types;
 
 use frame_support::inherent::{InherentIdentifier, IsFatalError};
-use frame_system::{ensure_signed, ensure_none};
+use frame_system::offchain::SendUnsignedTransaction;
 use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
+use frame_system::{ensure_none, ensure_signed};
 use scale_info::TypeInfo;
-use frame_system::offchain::SendUnsignedTransaction;
 
 pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
 use types::{Key, SessionId};
+
+
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
 pub struct EmptyInherent;
@@ -55,12 +58,46 @@ impl<T: SigningTypes + Config> SignedPayload<T> for UpdateValidatorsPayload<T> {
     }
 }
 
+pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
+
+//////////////////////////////////////////////////////////////////////////////////
+// CRYPTO MODULE /////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+pub mod crypto {
+    use crate::CRYPTO_KEY_TYPE;
+    use sp_core::sr25519::Signature as Sr25519Signature;
+    use sp_runtime::app_crypto::{ app_crypto, sr25519 };
+    use sp_runtime::{ traits::Verify, MultiSignature, MultiSigner };
+
+
+    app_crypto!(sr25519, CRYPTO_KEY_TYPE);
+
+    pub struct AuthId;
+
+    // implemented for ocw-runtime
+    impl frame_system::offchain::AppCrypto<MultiSigner, MultiSignature> for AuthId {
+        type RuntimeAppPublic = Public;
+        type GenericSignature = sp_core::sr25519::Signature;
+        type GenericPublic = sp_core::sr25519::Public;
+    }
+
+    // implemented for mock runtime in test
+    impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature>
+    for AuthId {
+        type RuntimeAppPublic = Public;
+        type GenericSignature = sp_core::sr25519::Signature;
+        type GenericPublic = sp_core::sr25519::Public;
+    }
+}
+
+
 #[frame_support::pallet]
 pub mod pallet {
 
-    use frame_system::offchain::CreateSignedTransaction;
+    use frame_system::offchain::{AppCrypto, CreateSignedTransaction};
+    use sp_runtime::traits::Verify;
 
-    use crate::types::{MaxMessageSize, NftId, Signature};
+    use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
 
     use super::*;
     #[pallet::pallet]
@@ -79,19 +116,34 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         #[pallet::constant]
         type MaxNumberOfShares: Get<u32>;
-        type SignatureVerifier: SignatureVerification<Key>;
+        type SignatureVerifier: SignatureVerification<PublicKey>;
 
-        // type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
+        type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
     }
 
-    pub trait SignatureVerification<Key> {
-        fn verify(key: &Key, message: &[u8], sig: &Signature) -> bool;
+    pub trait SignatureVerification<PublicKey> {
+        fn verify(key: &PublicKey, message: &[u8], sig: &Signature) -> bool;
     }
 
-    pub struct Verifier{}
-    impl SignatureVerification<Key> for Verifier {
-        fn verify(_key: &Key, _message: &[u8], _sig: &Signature) -> bool {
-            true
+    pub struct Verifier {}
+    impl SignatureVerification<PublicKey> for Verifier {
+        fn verify(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
+            // Convert PublicKey to [u8; 33] for ECDSA public key
+            let pubkey_bytes: [u8; 33] = match key.as_slice().try_into() {
+                Ok(bytes) => bytes,
+                Err(_) => return false, // Public key must be exactly 33 bytes
+            };
+            let pubkey = sp_core::ecdsa::Public(pubkey_bytes);
+    
+            // Convert Signature to [u8; 65] for ECDSA signature
+            let signature_bytes: [u8; 65] = match sig.as_slice().try_into() {
+                Ok(bytes) => bytes,
+                Err(_) => return false, // Signature must be exactly 65 bytes
+            };
+            let signature = sp_core::ecdsa::Signature(signature_bytes);
+    
+            // Verify the signature; it hashes the message internally with blake2_256
+            signature.verify(message, &pubkey)
         }
     }
 
@@ -126,18 +178,12 @@ pub mod pallet {
     }
 
     #[pallet::storage]
-    pub type AggregatedPublicKeys<T: Config> = StorageMap<
-        _, 
-        Blake2_128Concat, SessionId, 
-        Key, 
-        OptionQuery
-    >;
+    pub type AggregatedPublicKeys<T: Config> =
+        StorageMap<_, Blake2_128Concat, SessionId, PublicKey, OptionQuery>;
 
     #[pallet::storage]
-    pub type PendingDKGUpdates<T: Config> = StorageValue<
-        _, 
-        BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
-    >;
+    pub type PendingDKGUpdates<T: Config> =
+        StorageValue<_, BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>>;
 
     // Add a new storage item for signing sessions
     #[pallet::storage]
@@ -147,7 +193,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn get_tss_key)]
-    pub type TSSKey<T: Config> = StorageValue<_, Key, ValueQuery>;
+    pub type TSSKey<T: Config> = StorageValue<_, PublicKey, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn active_validators)]
@@ -163,22 +209,19 @@ pub mod pallet {
     #[pallet::getter(fn next_session_id)]
     pub type NextSessionId<T: Config> = StorageValue<_, SessionId, ValueQuery>;
 
-
     #[pallet::storage]
     #[pallet::getter(fn validator_ids)]
-    pub type ValidatorIds<T: Config> = 
+    pub type ValidatorIds<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, OptionQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn id_to_validator)]
-    pub type IdToValidator<T: Config> = 
+    pub type IdToValidator<T: Config> =
         StorageMap<_, Blake2_128Concat, u32, T::AccountId, OptionQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn next_validator_id)]
     pub type NextValidatorId<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -187,10 +230,10 @@ pub mod pallet {
         DKGSessionCreated(SessionId),
         DKGReshareSessionCreated(SessionId),
         SigningSessionCreated(SessionId, SessionId), // Signing session ID, DKG session ID
-        DKGCompleted(SessionId, Key),          // Aggregated public key
-        SigningCompleted(SessionId, Signature), // Final aggregated signature
-        SignatureSubmitted(SessionId),          // When signature is stored
-        ValidatorIdAssigned(T::AccountId, u32), // Validator account, ID
+        DKGCompleted(SessionId, PublicKey),                // Aggregated public key
+        SigningCompleted(SessionId, Signature),      // Final aggregated signature
+        SignatureSubmitted(SessionId),               // When signature is stored
+        ValidatorIdAssigned(T::AccountId, u32),      // Validator account, ID
     }
 
     #[pallet::error]
@@ -206,8 +249,7 @@ pub mod pallet {
         AggregatedKeyAlreadySubmitted,
         StaleDkgSession,
         InvalidSessionState,
-        SigningSessionNotFound
-
+        SigningSessionNotFound,
     }
 
     #[pallet::call]
@@ -258,16 +300,16 @@ pub mod pallet {
             payload: UpdateValidatorsPayload<T>,
             _signature: T::Signature,
         ) -> DispatchResult {
+            println!("update_validators is being called");
             ensure_none(origin)?;
 
-
             let new_validators = payload.validators;
-            
+
             // Assign IDs to any new validators
             for validator in new_validators.clone() {
                 Self::assign_validator_id(validator)?;
             }
-            
+
             ActiveValidators::<T>::put(BoundedVec::try_from(new_validators.clone()).unwrap());
 
             Ok(())
@@ -275,7 +317,11 @@ pub mod pallet {
 
         #[pallet::weight(10_000)]
         #[pallet::call_index(2)]
-        pub fn create_signing_session(origin: OriginFor<T>, nft_id: NftId, message: BoundedVec<u8, MaxMessageSize>) -> DispatchResult {
+        pub fn create_signing_session(
+            origin: OriginFor<T>,
+            nft_id: NftId,
+            message: BoundedVec<u8, MaxMessageSize>,
+        ) -> DispatchResult {
             let _who = ensure_signed(origin)?;
 
             // Find the DKG session with this NFT ID
@@ -323,31 +369,31 @@ pub mod pallet {
         pub fn submit_dkg_result(
             origin: OriginFor<T>,
             session_id: SessionId,
-            aggregated_key: Key,
+            aggregated_key: PublicKey,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            
-            let mut session = DkgSessions::<T>::get(session_id)
-                .ok_or(Error::<T>::DkgSessionNotFound)?;
-    
+
+            let mut session =
+                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
             // Verify submitter was part of DKG session
             ensure!(
                 session.participants.contains(&who),
                 Error::<T>::UnauthorizedParticipation
             );
-    
+
             // Store aggregated key
             AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
             session.state = SessionState::DKGComplete;
             DkgSessions::<T>::insert(session_id, session);
-    
-            // Update TSS key if this is the latest session
+
+            // Update TSS key if this is the latest session.
             TSSKey::<T>::put(aggregated_key.clone());
-    
+
             Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
             Ok(())
         }
-    
+
         #[pallet::call_index(4)]
         #[pallet::weight(10_000)]
         pub fn submit_aggregated_signature(
@@ -356,30 +402,30 @@ pub mod pallet {
             signature: Signature,
         ) -> DispatchResult {
             let _who = ensure_signed(origin)?; // Could add participant check
-            
-            let mut session = SigningSessions::<T>::get(session_id)
-                .ok_or(Error::<T>::SigningSessionNotFound)?;
-    
+
+            let mut session =
+                SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
+
             ensure!(
                 session.state == SessionState::SigningInProgress,
                 Error::<T>::InvalidSessionState
             );
-    
+
             // Verify signature against stored message and TSS key
             let public_key = TSSKey::<T>::get();
             ensure!(
                 verify_signature::<T>(&public_key, &session.message, &signature),
                 Error::<T>::InvalidSignature
             );
-    
+
             session.aggregated_sig = Some(signature.clone());
             session.state = SessionState::SigningComplete;
             SigningSessions::<T>::insert(session_id, session);
-    
+
             Self::deposit_event(Event::SigningCompleted(session_id, signature));
             Ok(())
         }
-        
+
         #[pallet::weight(10_000)]
         #[pallet::call_index(5)]
         pub fn create_reshare_dkg_session(
@@ -390,10 +436,13 @@ pub mod pallet {
         ) -> DispatchResult {
             let _who = ensure_signed(origin)?;
 
-
             ensure!(threshold > 0, Error::<T>::InvalidThreshold);
-            // Create new DKG session
 
+            // threshold needs to be an integer value between 50 and 100%
+            ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
+            ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
+
+            // Create new reshare DKG session
             let session = DKGSession {
                 nft_id,
                 participants: BoundedVec::try_from(
@@ -416,7 +465,7 @@ pub mod pallet {
             Ok(())
         }
     }
-    fn verify_signature<T:Config>(key: &Key, message: &[u8], sig: &Signature) -> bool {
+    fn verify_signature<T: Config>(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
         T::SignatureVerifier::verify(key, message, sig)
     }
 
@@ -460,33 +509,33 @@ pub mod pallet {
 
     // }
 
-        #[pallet::validate_unsigned]
-        impl<T: Config> ValidateUnsigned for Pallet<T> {
-            type Call = Call<T>;
+    #[pallet::validate_unsigned]
+    impl<T: Config> ValidateUnsigned for Pallet<T> {
+        type Call = Call<T>;
 
-            fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-                // log::info!("[TSS] Validating unsigned");
-                match call {
-                    // Handle inherent extrinsics
-                    Call::update_validators { .. } => {
-                        log::info!("[TSS] We like this");
+        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            // log::info!("[TSS] Validating unsigned");
+            match call {
+                // Handle inherent extrinsics
+                Call::update_validators { .. } => {
+                    println!("[TSS] We like this");
 
-                        return ValidTransaction::with_tag_prefix("TssPallet")
-                            .priority(TransactionPriority::MAX)
-                            .and_provides(call.encode())
-                            .longevity(64)
-                            .propagate(true)
-                            .build();
-                    }
+                    return ValidTransaction::with_tag_prefix("TssPallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(call.encode())
+                        .longevity(64)
+                        .propagate(true)
+                        .build();
+                }
 
-                    // Reject all other unsigned calls
-                    _ => {
-                        log::info!("[TSS] We DO NOT like this");
-                        return InvalidTransaction::Call.into();
-                    }
+                // Reject all other unsigned calls
+                _ => {
+                    println!("[TSS] We DO NOT like this");
+                    return InvalidTransaction::Call.into();
                 }
             }
         }
+    }
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
@@ -495,12 +544,11 @@ pub mod pallet {
             if n % 10u32.into() != 0u32.into() {
                 return;
             }
-    
+
             // Get current validators from staking pallet
             let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
                 .map(|(account_id, _)| account_id)
                 .collect();
-            
             // Check if there are any new validators that need IDs
             let mut new_validators = Vec::new();
             for validator in current_validators.iter() {
@@ -510,38 +558,42 @@ pub mod pallet {
             }
             
             if !new_validators.is_empty() {
-                log::info!("[TSS] Found {} new validators that need IDs", new_validators.len());
-                
-                let signer = Signer::<T, T::AuthorityId>::all_accounts();
+                log::info!(
+                    "[TSS] Found {} new validators that need IDs",
+                    new_validators.len()
+                );
+
+                let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+                println!("Can sign? {:?}", signer.can_sign());
+
                 if !signer.can_sign() {
                     log::error!("TSS: No accounts available to sign update_validators");
                     return;
                 }
-                
+
                 // Include both existing and new validators in the update
                 let all_validators = current_validators;
-                
+
                 // Send unsigned transaction with signed payload
                 let _ = signer.send_unsigned_transaction(
                     |acct| UpdateValidatorsPayload::<T> {
                         validators: all_validators.clone(),
                         public: acct.public.clone(),
                     },
-                    |payload, signature| Call::update_validators { payload, signature }
+                    |payload, signature| Call::update_validators { payload, signature },
                 );
             }
-            
+
             // Rest of your existing offchain worker logic
             let stored_validators = ActiveValidators::<T>::get();
             if stored_validators.len() > 0 {
                 return;
             }
-    
+
             // If no active validators are set, initialize them
             log::info!("[TSS] Setting new validators at block {:?}", n);
-            // Your existing code for setting validators...
         }
-    
+
         // Add on_initialize hook to handle validator initialization
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
             // Check if validator IDs have been initialized
@@ -549,9 +601,9 @@ pub mod pallet {
                 // Initialize with ID 1
                 NextValidatorId::<T>::put(1);
             }
-            
+
             // Return weight for this operation (minimal)
-            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1) 
+            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
         }
     }
 
@@ -561,9 +613,9 @@ pub mod pallet {
             let validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
                 .map(|(account_id, _)| account_id)
                 .collect();
-            
+
             let mut next_id = 1u32; // Start IDs from 1
-            
+
             // Assign IDs to validators that don't have one yet
             for validator in validators {
                 if !ValidatorIds::<T>::contains_key(&validator) {
@@ -576,7 +628,7 @@ pub mod pallet {
 
             // Update the next validator ID
             NextValidatorId::<T>::put(next_id);
-            
+
             Ok(())
         }
 
@@ -586,21 +638,22 @@ pub mod pallet {
             if ValidatorIds::<T>::contains_key(&validator) {
                 return Ok(());
             }
-            
+
             // Get the next ID
             let next_id = Self::next_validator_id();
             
+
             // Assign the ID
             ValidatorIds::<T>::insert(&validator, next_id);
             IdToValidator::<T>::insert(next_id, validator.clone());
-            
+
             // Increment the next ID
             NextValidatorId::<T>::put(next_id + 1);
-            
+
             // Emit event, maybe the client can use it?
             log::info!("[TSS] Validator ID assigned: {:?}", validator);
             Self::deposit_event(Event::ValidatorIdAssigned(validator, next_id));
-            
+
             Ok(())
         }
 
@@ -616,6 +669,7 @@ pub mod pallet {
     }
 }
 
+
 sp_api::decl_runtime_apis! {
     pub trait TssApi {
         fn get_dkg_session_threshold(id: SessionId) -> u32;
@@ -630,3 +684,5 @@ sp_api::decl_runtime_apis! {
         fn get_all_validator_ids() -> Vec<(u32, [u8; 32])>;
     }
 }
+
+
