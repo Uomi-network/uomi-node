@@ -5,14 +5,12 @@ use crate::{
     CRYPTO_KEY_TYPE,
 };
 use frame_support::{assert_ok, traits::OffchainWorker};
-use frame_system::offchain;
 use sp_core::{
     offchain::{
         testing::{TestOffchainExt, TestTransactionPoolExt},
         OffchainDbExt, OffchainWorkerExt, TransactionPoolExt,
     },
     sr25519::{self, Signature},
-    testing::SR25519,
     Pair,
 };
 use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
