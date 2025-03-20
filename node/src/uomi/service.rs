@@ -28,10 +28,10 @@ use sc_executor::NativeElseWasmExecutor;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker};
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use uomi_runtime::Runtime;
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 use ipfs_manager::IpfsManager;
-
-
+use tss::{get_config, setup_gossip};
 #[cfg(not(feature = "manual-seal"))]
 use sc_consensus_babe::{BabeLink, BabeWorkerHandle, SlotProportion};
 
@@ -128,7 +128,7 @@ sc_service::PartialComponents<
             telemetry.as_ref().map(|(_, telemetry)| telemetry.handle()),
             executor,
             true,
-        )?;
+        )?;  
     let client = Arc::new(client);
     let telemetry = telemetry.map(|(worker, telemetry)| {
         task_manager
@@ -152,7 +152,7 @@ sc_service::PartialComponents<
         telemetry.as_ref().map(|x| x.handle()),
     )?;
     let frontier_backend = crate::rpc::open_frontier_backend(client.clone(), config)?;
-  
+
     #[cfg(feature = "manual-seal")]
     let import_queue = sc_consensus_manual_seal::import_queue(
         Box::new(client.clone()),
@@ -232,8 +232,8 @@ pub fn build_babe_grandpa_import_queue(
                     slot_duration,
                 );
 
-            
-            
+
+
 
             Ok((slot, timestamp))
         },
@@ -253,9 +253,8 @@ pub fn start_node(
 ) -> Result<TaskManager, ServiceError> {
 
     let ipfs_manager = Arc::new(IpfsManager::new().map_err(|e| ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e)))?);
-
     ipfs_manager.start_daemon().map_err(|e| ServiceError::Other(format!("Failed to start IPFS daemon: {}", e)))?;
-   
+
     let sc_service::PartialComponents {
         client,
         backend,
@@ -274,6 +273,9 @@ pub fn start_node(
                 frontier_backend,
             ),
     } = new_partial(&config)?;
+
+
+
     task_manager.spawn_essential_handle().spawn_blocking(
         "ipfs-manager",
         None,
@@ -294,12 +296,15 @@ pub fn start_node(
     );
     
     let mut net_config = sc_network::config::FullNetworkConfiguration::new(&config.network);
-    
+
     let (grandpa_protocol_config, grandpa_notification_service) =
         sc_consensus_grandpa::grandpa_peers_set_config(protocol_name.clone());
     net_config.add_notification_protocol(grandpa_protocol_config);
 
-    
+    let (tss_protocol_config, tss_notification_service, tss_protocol_name) = get_config();
+    net_config.add_notification_protocol(tss_protocol_config);
+
+
     let (network, system_rpc_tx, tx_handler_controller, network_starter, sync_service) =
         sc_service::build_network(sc_service::BuildNetworkParams {
             config: &config,
@@ -312,6 +317,8 @@ pub fn start_node(
             warp_sync_params: None,
             block_relay: None,
         })?;
+
+
 
     if config.offchain_worker.enabled {
         task_manager.spawn_handle().spawn(
@@ -451,10 +458,13 @@ pub fn start_node(
                 *timestamp,
                 slot_duration,
             );
-        
-       
+
+
         Ok((slot, timestamp))
     };
+
+    let c = client.clone();
+
 
     let rpc_extensions_builder = {
         let client = client.clone();
@@ -520,6 +530,7 @@ pub fn start_node(
         })
     };
 
+
     let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
         network: network.clone(),
         client: client.clone(),
@@ -567,7 +578,7 @@ pub fn start_node(
                             *timestamp,
                             slot_duration.clone(),
                         );
-                    
+
                     Ok((slot, timestamp))
                 },
             },
@@ -599,7 +610,7 @@ pub fn start_node(
                             &parent,
                         )?;
 
-               
+
                     Ok((slot, timestamp, storage_proof))
                 }
             },
@@ -648,8 +659,8 @@ pub fn start_node(
         let grandpa_config = sc_consensus_grandpa::GrandpaParams {
             config: grandpa_config,
             link: grandpa_link,
-            network,
-            sync: Arc::new(sync_service),
+            network:network.clone(),
+            sync: Arc::new(sync_service.clone()),
             notification_service: grandpa_notification_service,
             voting_rule: sc_consensus_grandpa::VotingRulesBuilder::default().build(),
             prometheus_registry,
@@ -667,7 +678,24 @@ pub fn start_node(
         );
     }
 
+    
+    task_manager.spawn_essential_handle().spawn_blocking(
+        "tss-p2p",
+        None,
+        setup_gossip(
+            c, 
+            network, 
+            sync_service, 
+            tss_notification_service, 
+            tss_protocol_name, 
+            keystore_container,
+            PhantomData::<Block>,
+            PhantomData::<pallet_tss::Event<Runtime>>
+        ).unwrap(),
+    );
+
+
     network_starter.start_network();
+
     Ok(task_manager)
 }
-
