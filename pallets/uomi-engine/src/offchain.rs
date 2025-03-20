@@ -545,7 +545,7 @@ impl<T: Config> Pallet<T> {
     }
     
     fn offchain_worker_call_ai_send_request(body: String) -> Result<Data, DispatchError> {
-        let url = "http://2.228.138.42:8888/run";
+        let url = "http://127.0.0.1:8888/run";
 
         let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
         request = request
