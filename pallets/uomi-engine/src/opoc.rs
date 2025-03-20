@@ -7,6 +7,7 @@ use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
     consts::MAX_INPUTS_MANAGED_PER_BLOCK,
+    consts::TEMP_BLOCK_FOR_NEW_OPOC,
     ipfs::IpfsInterface,
     types::{ BlockNumber, Data, RequestId },
     Config,
@@ -20,6 +21,7 @@ use crate::{
     Outputs,
     Pallet,
     Event,
+    NodesOpocL0Inferences,
 };
 
 impl<T: Config> Pallet<T> {
@@ -815,6 +817,13 @@ impl<T: Config> Pallet<T> {
             // remove all outputs from NodesOutputs
             for (account_id, _) in NodesOutputs::<T>::iter_prefix(request_id) {
                 NodesOutputs::<T>::remove(request_id, account_id);
+            }
+            // remove all inferences from NodesOpocL0Inferences
+            let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
+            if current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing
+                for (account_id, _) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) {
+                    NodesOpocL0Inferences::<T>::remove(request_id, account_id);
+                }
             }
         }
 

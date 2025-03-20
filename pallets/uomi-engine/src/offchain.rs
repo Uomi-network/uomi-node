@@ -13,14 +13,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION, TEMP_BLOCK_FOR_NEW_OPOC},
     ipfs::IpfsInterface,
     payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
     {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels, NodesOpocL0Inferences},
 };
-
-const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1; // 2000000; // For finney update. remove on turing
 
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiRequestWithProof {
