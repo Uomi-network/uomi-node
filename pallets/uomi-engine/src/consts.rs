@@ -10,4 +10,4 @@ pub const MAX_INPUTS_MANAGED_PER_BLOCK:usize = 100;
 // This is the maximum number of blocks that a node have to complete an update of it's running version.
 pub const MAX_BLOCKS_TO_WAIT_NODE_UPDATE:u32 = 100;
 
-pub const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 2000000; // For finney update. remove on turing
+pub const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1950000; // For finney update. remove on turing

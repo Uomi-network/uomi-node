@@ -24,7 +24,7 @@ use sp_std::vec;
 use sp_std::vec::Vec;
 use types::{Key, SessionId};
 
-
+const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1950000; // For finney update. remove on turing
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
 pub struct EmptyInherent;
@@ -539,69 +539,77 @@ pub mod pallet {
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn offchain_worker(n: BlockNumberFor<T>) {
-            // Check for new validators every 10 blocks
-            if n % 10u32.into() != 0u32.into() {
-                return;
-            }
-
-            // Get current validators from staking pallet
-            let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
-                .map(|(account_id, _)| account_id)
-                .collect();
-            // Check if there are any new validators that need IDs
-            let mut new_validators = Vec::new();
-            for validator in current_validators.iter() {
-                if !ValidatorIds::<T>::contains_key(validator) {
-                    new_validators.push(validator.clone());
-                }
-            }
-            
-            if !new_validators.is_empty() {
-                log::info!(
-                    "[TSS] Found {} new validators that need IDs",
-                    new_validators.len()
-                );
-
-                let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
-
-                if !signer.can_sign() {
-                    log::error!("TSS: No accounts available to sign update_validators");
+            let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
+            if current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing
+                // Check for new validators every 10 blocks
+                if n % 10u32.into() != 0u32.into() {
                     return;
                 }
 
-                // Include both existing and new validators in the update
-                let all_validators = current_validators;
+                // Get current validators from staking pallet
+                let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
+                    .map(|(account_id, _)| account_id)
+                    .collect();
+                // Check if there are any new validators that need IDs
+                let mut new_validators = Vec::new();
+                for validator in current_validators.iter() {
+                    if !ValidatorIds::<T>::contains_key(validator) {
+                        new_validators.push(validator.clone());
+                    }
+                }
+                
+                if !new_validators.is_empty() {
+                    log::info!(
+                        "[TSS] Found {} new validators that need IDs",
+                        new_validators.len()
+                    );
 
-                // Send unsigned transaction with signed payload
-                let _ = signer.send_unsigned_transaction(
-                    |acct| UpdateValidatorsPayload::<T> {
-                        validators: all_validators.clone(),
-                        public: acct.public.clone(),
-                    },
-                    |payload, signature| Call::update_validators { payload, signature },
-                );
-            }
+                    let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
 
-            // Rest of your existing offchain worker logic
-            let stored_validators = ActiveValidators::<T>::get();
-            if stored_validators.len() > 0 {
-                return;
-            }
+                    if !signer.can_sign() {
+                        log::error!("TSS: No accounts available to sign update_validators");
+                        return;
+                    }
 
-            // If no active validators are set, initialize them
-            log::info!("[TSS] Setting new validators at block {:?}", n);
+                    // Include both existing and new validators in the update
+                    let all_validators = current_validators;
+
+                    // Send unsigned transaction with signed payload
+                    let _ = signer.send_unsigned_transaction(
+                        |acct| UpdateValidatorsPayload::<T> {
+                            validators: all_validators.clone(),
+                            public: acct.public.clone(),
+                        },
+                        |payload, signature| Call::update_validators { payload, signature },
+                    );
+                }
+
+                // Rest of your existing offchain worker logic
+                let stored_validators = ActiveValidators::<T>::get();
+                if stored_validators.len() > 0 {
+                    return;
+                }
+
+                // If no active validators are set, initialize them
+                log::info!("[TSS] Setting new validators at block {:?}", n);
+            }            
         }
 
         // Add on_initialize hook to handle validator initialization
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-            // Check if validator IDs have been initialized
-            if NextValidatorId::<T>::get() == 0 {
-                // Initialize with ID 1
-                NextValidatorId::<T>::put(1);
-            }
+            let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
+            if current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing
+                // Check if validator IDs have been initialized
+                if NextValidatorId::<T>::get() == 0 {
+                    // Initialize with ID 1
+                    NextValidatorId::<T>::put(1);
+                }
 
-            // Return weight for this operation (minimal)
-            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
+                // Return weight for this operation (minimal)
+                T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
+            } else {
+                T::DbWeight::get().reads(0) + T::DbWeight::get().writes(0)
+            }
         }
     }
 
