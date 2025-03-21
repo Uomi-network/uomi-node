@@ -261,6 +261,7 @@ pub mod pallet {
             nft_id: NftId,
             threshold: u32,
         ) -> DispatchResult {
+            // JACOPO QUA!!!
             let _who = ensure_signed(origin)?;
 
             ensure!(threshold > 0, Error::<T>::InvalidThreshold);
@@ -321,6 +322,7 @@ pub mod pallet {
             nft_id: NftId,
             message: BoundedVec<u8, MaxMessageSize>,
         ) -> DispatchResult {
+            // JACOPO QUA!!!
             let _who = ensure_signed(origin)?;
 
             // Find the DKG session with this NFT ID
@@ -370,26 +372,26 @@ pub mod pallet {
             session_id: SessionId,
             aggregated_key: PublicKey,
         ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
+            // let who = ensure_signed(origin)?;
 
-            let mut session =
-                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+            // let mut session =
+            //     DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
-            // Verify submitter was part of DKG session
-            ensure!(
-                session.participants.contains(&who),
-                Error::<T>::UnauthorizedParticipation
-            );
+            // // Verify submitter was part of DKG session
+            // ensure!(
+            //     session.participants.contains(&who),
+            //     Error::<T>::UnauthorizedParticipation
+            // );
 
-            // Store aggregated key
-            AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
-            session.state = SessionState::DKGComplete;
-            DkgSessions::<T>::insert(session_id, session);
+            // // Store aggregated key
+            // AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
+            // session.state = SessionState::DKGComplete;
+            // DkgSessions::<T>::insert(session_id, session);
 
-            // Update TSS key if this is the latest session.
-            TSSKey::<T>::put(aggregated_key.clone());
+            // // Update TSS key if this is the latest session.
+            // TSSKey::<T>::put(aggregated_key.clone());
 
-            Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+            // Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
             Ok(())
         }
 
@@ -400,28 +402,28 @@ pub mod pallet {
             session_id: SessionId,
             signature: Signature,
         ) -> DispatchResult {
-            let _who = ensure_signed(origin)?; // Could add participant check
+            // let _who = ensure_signed(origin)?; // Could add participant check
 
-            let mut session =
-                SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
+            // let mut session =
+            //     SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
 
-            ensure!(
-                session.state == SessionState::SigningInProgress,
-                Error::<T>::InvalidSessionState
-            );
+            // ensure!(
+            //     session.state == SessionState::SigningInProgress,
+            //     Error::<T>::InvalidSessionState
+            // );
 
-            // Verify signature against stored message and TSS key
-            let public_key = TSSKey::<T>::get();
-            ensure!(
-                verify_signature::<T>(&public_key, &session.message, &signature),
-                Error::<T>::InvalidSignature
-            );
+            // // Verify signature against stored message and TSS key
+            // let public_key = TSSKey::<T>::get();
+            // ensure!(
+            //     verify_signature::<T>(&public_key, &session.message, &signature),
+            //     Error::<T>::InvalidSignature
+            // );
 
-            session.aggregated_sig = Some(signature.clone());
-            session.state = SessionState::SigningComplete;
-            SigningSessions::<T>::insert(session_id, session);
+            // session.aggregated_sig = Some(signature.clone());
+            // session.state = SessionState::SigningComplete;
+            // SigningSessions::<T>::insert(session_id, session);
 
-            Self::deposit_event(Event::SigningCompleted(session_id, signature));
+            // Self::deposit_event(Event::SigningCompleted(session_id, signature));
             Ok(())
         }
 
@@ -433,34 +435,34 @@ pub mod pallet {
             threshold: u32,
             old_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
         ) -> DispatchResult {
-            let _who = ensure_signed(origin)?;
+            // let _who = ensure_signed(origin)?;
 
-            ensure!(threshold > 0, Error::<T>::InvalidThreshold);
+            // ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
-            // threshold needs to be an integer value between 50 and 100%
-            ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
-            ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
+            // // threshold needs to be an integer value between 50 and 100%
+            // ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
+            // ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
 
-            // Create new reshare DKG session
-            let session = DKGSession {
-                nft_id,
-                participants: BoundedVec::try_from(
-                    pallet_staking::Validators::<T>::iter()
-                        .map(|(account_id, _)| account_id)
-                        .collect::<Vec<T::AccountId>>(),
-                )
-                .unwrap(),
-                threshold,
-                state: SessionState::DKGCreated,
-                old_participants: Some(old_participants),
-            };
+            // // Create new reshare DKG session
+            // let session = DKGSession {
+            //     nft_id,
+            //     participants: BoundedVec::try_from(
+            //         pallet_staking::Validators::<T>::iter()
+            //             .map(|(account_id, _)| account_id)
+            //             .collect::<Vec<T::AccountId>>(),
+            //     )
+            //     .unwrap(),
+            //     threshold,
+            //     state: SessionState::DKGCreated,
+            //     old_participants: Some(old_participants),
+            // };
 
-            // Generate random session ID
-            let session_id = Self::get_next_session_id();
+            // // Generate random session ID
+            // let session_id = Self::get_next_session_id();
 
-            // Store the session
-            DkgSessions::<T>::insert(session_id, session);
-            Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
+            // // Store the session
+            // DkgSessions::<T>::insert(session_id, session);
+            // Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
             Ok(())
         }
     }
