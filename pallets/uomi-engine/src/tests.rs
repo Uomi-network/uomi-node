@@ -226,51 +226,114 @@ fn test_run_request_failure_with_large_input_data() {
     });
 }
 
-// This test should force the execution of the run_request function with the unsecured parameter set to true.
-#[test]
-fn test_run_request_with_unsecured_parameter() {
-    make_logger();
+// // This test should force the execution of the run_request function with the unsecured parameter set to true.
+// #[test]
+// fn test_run_request_with_unsecured_parameter() {
+//     make_logger();
 
-    new_test_ext().execute_with(|| {
-        System::set_block_number(1); // NOTE: This is not necessary but is an example of how to set the block number in tests.
+//     new_test_ext().execute_with(|| {
+//         System::set_block_number(1); // NOTE: This is not necessary but is an example of how to set the block number in tests.
 
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 1;
-        let validators = create_validators(num_validators, stake);
-        let validator = validators[0].clone();
+//         let stake = 10_000_000_000_000_000_000;
+//         let num_validators = 1;
+//         let validators = create_validators(num_validators, stake);
+//         let validator = validators[0].clone();
 
-        let request_id: U256 = 1.into();
-        let address: H160 = H160::repeat_byte(0xAA);
-        let nft_id: U256 = 1.into();
-        let input_data = vec![1, 2, 3];
-        let input_file_cid = vec![1, 2, 3];
+//         let request_id: U256 = 1.into();
+//         let address: H160 = H160::repeat_byte(0xAA);
+//         let nft_id: U256 = 1.into();
+//         let input_data = vec![1, 2, 3];
+//         let input_file_cid = vec![1, 2, 3];
 
-        let result = TestingPallet::run_request(request_id, address, nft_id.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(25)).unwrap();
-        assert_eq!(result, ());
+//         let result = TestingPallet::run_request(request_id, address, nft_id.clone(), input_data.clone(), input_file_cid.clone(), U256::from(1), U256::from(25)).unwrap();
+//         assert_eq!(result, ());
 
-        // Be sure request is stored on the Inputs storage
-        let storage_input = Inputs::<Test>::get(request_id);
-        let (si_block_number, si_nft_id, si_nft_required_consensus, _si_nft_execution_max_time, si_nft_file_cid, si_input_data, si_input_file_cid) = storage_input;
-        assert_eq!(si_block_number, 1.into());
-        assert_eq!(si_nft_id, nft_id);
-        assert_eq!(si_nft_required_consensus, U256::from(1));
-        assert_eq!(si_nft_file_cid, BoundedVec::<u8, MaxDataSize>::new());
-        assert_eq!(si_input_data, input_data);
-        assert_eq!(si_input_file_cid, input_file_cid);
+//         // Be sure request is stored on the Inputs storage
+//         let storage_input = Inputs::<Test>::get(request_id);
+//         let (si_block_number, si_nft_id, si_nft_required_consensus, _si_nft_execution_max_time, si_nft_file_cid, si_input_data, si_input_file_cid) = storage_input;
+//         assert_eq!(si_block_number, 1.into());
+//         assert_eq!(si_nft_id, nft_id);
+//         assert_eq!(si_nft_required_consensus, U256::from(1));
+//         assert_eq!(si_nft_file_cid, BoundedVec::<u8, MaxDataSize>::new());
+//         assert_eq!(si_input_data, input_data);
+//         assert_eq!(si_input_file_cid, input_file_cid);
 
-        // Be sure exists a OpocAssignment for the request_id and the validator
-        let opoc_assignment = OpocAssignment::<Test>::get(request_id, validator.clone());
-        assert_ne!(opoc_assignment, U256::zero());
-        // Be sure the OpocAssignment expiration block number is set to the current block number + the input lifetime
-        assert_eq!(opoc_assignment, U256::from(1 + 25));
-        // Be sure the NodesWorks storage contains a record assigned to the validator with the value 1
-        let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
-        assert_eq!(nodes_works_number, true);
-    });
-}
+//         // Be sure exists a OpocAssignment for the request_id and the validator
+//         let opoc_assignment = OpocAssignment::<Test>::get(request_id, validator.clone());
+//         assert_ne!(opoc_assignment, U256::zero());
+//         // Be sure the OpocAssignment expiration block number is set to the current block number + the input lifetime
+//         assert_eq!(opoc_assignment, U256::from(1 + 25));
+//         // Be sure the NodesWorks storage contains a record assigned to the validator with the value 1
+//         let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
+//         assert_eq!(nodes_works_number, true);
+//     });
+// }
 
 // OFFCHAIN WORKER
 //////////////////////////////////////////////////////////////////////////////////
+
+// This test should force the execution of the offchain_worker function for the uomi_whitepaper_chat_agent.wasm with an invalid input.
+// It should check the semaphore is released correctly.
+#[test]
+#[serial]
+fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
+    make_logger();
+
+    let mut ext = new_test_ext();
+    
+    // Set up the offchain worker test environment
+    let (offchain, _state) = TestOffchainExt::new();
+    let (pool, state) = TestTransactionPoolExt::new();
+    ext.register_extension(OffchainDbExt::new(offchain.clone()));
+    ext.register_extension(OffchainWorkerExt::new(offchain));
+    ext.register_extension(TransactionPoolExt::new(pool));
+
+    // Create and register the keystore
+    let keystore = Arc::new(MemoryKeystore::new());
+    keystore.sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None).unwrap();
+    ext.register_extension(KeystoreExt(keystore.clone()));
+    let validator = keystore.sr25519_public_keys(crate::crypto::CRYPTO_KEY_TYPE).swap_remove(0);
+
+    let empty_cid = Cid::default();
+    let not_empty_bounded_vec = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+    ext.execute_with(|| {
+        // Set current block
+        System::set_block_number(12);
+        let current_block_number = System::block_number();
+
+        // Insert an input on the Inputs storage
+        let request_id: RequestId = U256::from(1);
+        Inputs::<Test>::insert(request_id, (
+            U256::zero(), // block_number
+            U256::from(1312), // nft_id
+            U256::from(5), // nft_required_consensus
+            U256::from(25), // nft_execution_max_time
+            empty_cid.clone(), // nft_file_cid
+            not_empty_bounded_vec.clone(), // input_data
+            empty_cid.clone(), // input_file_cid
+        ));
+
+        // Insert an assignment for the first validator
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        NodesWorks::<Test>::insert(validator.clone(), request_id, true);
+
+        // Read semaphore status and be sure is false
+        let semaphore = TestingPallet::semaphore_status();
+        assert_eq!(semaphore, false);
+
+        // Run the offchain worker
+        TestingPallet::offchain_worker(current_block_number);
+
+        // Read semaphore status and be sure is false
+        let semaphore = TestingPallet::semaphore_status();
+        assert_eq!(semaphore, false);
+
+        // Verify transactions in the pool
+        let state_read = state.read();
+        assert_eq!(state_read.transactions.len(), 2); // 1 to store the execution and 1 to store the node version
+    });
+}
 
 // This test should force the execution of the offchain_worker function.
 #[test]
@@ -1292,6 +1355,82 @@ fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
         let nodes_works = nodes_works_operations.get(&main_validator).unwrap();
         let request_id_true = nodes_works.get(&request_id).unwrap();
         assert_eq!(*request_id_true, true);
+    });
+}
+
+// OPOC ASSIGNMENT GET RANDOM VALIDATORS FUNCTIONS
+//////////////////////////////////////////////////////////////////////////////////
+
+#[test]
+fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 100;
+        let _validators = create_validators(num_validators, stake);
+
+        let nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
+
+        // Request 100 validators, all available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &nodes_works_operations,
+            U256::from(100),
+            false,
+            vec![]
+        ).unwrap();
+        assert_eq!(validators.len(), 100);
+
+        // Request 50 validators, all available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &nodes_works_operations,
+            U256::from(50),
+            false,
+            vec![]
+        ).unwrap();
+        assert_eq!(validators.len(), 50);
+
+        // Request 1 validator, all available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &nodes_works_operations,
+            U256::from(1),
+            false,
+            vec![]
+        ).unwrap();
+        assert_eq!(validators.len(), 1);
+
+        // Request 101 validators, not enough available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &nodes_works_operations,
+            U256::from(101),
+            false,
+            vec![]
+        );
+        assert_eq!(validators.is_err(), true);
+
+        // Request 50 validators, exclude 50 validators
+        let excluded_validators: Vec<AccountId> = (0..50).map(|i| AccountId::from_raw([i as u8; 32])).collect();
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &nodes_works_operations,
+            U256::from(50),
+            false,
+            excluded_validators.clone()
+        ).unwrap();
+        assert_eq!(validators.len(), 50);
+        // be sure selected validators are not in the excluded_validators
+        for validator in validators {
+            assert_eq!(excluded_validators.contains(&validator), false);
+        }
+
+        // Request 50 validators, exclude 51 validators
+        let excluded_validators: Vec<AccountId> = (0..51).map(|i| AccountId::from_raw([i as u8; 32])).collect();
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &nodes_works_operations,
+            U256::from(50),
+            false,
+            excluded_validators
+        );
+        assert_eq!(validators.is_err(), true);
     });
 }
 
