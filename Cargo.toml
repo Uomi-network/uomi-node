@@ -153,6 +153,7 @@ sc-cli = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release
 try-runtime-cli = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
 frame-benchmarking-cli = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
 ipfs-manager = { path = "./client/ipfs-manager" }
+tss = { path = "./client/tss" }
 # Substrate pallets
 # (wasm)
 pallet-assets = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0", default-features = false }
@@ -255,6 +256,7 @@ pallet-unified-accounts = { path = "./pallets/unified-accounts", default-feature
 pallet-collective-proxy = { path = "./pallets/collective-proxy", default-features = false }
 pallet-uomi-engine = { path = "./pallets/uomi-engine", default-features = false }
 pallet-ipfs = { path = "./pallets/ipfs", default-features = false }
+pallet-tss = { path = "./pallets/tss", default-features = false }
 
 uomi-primitives = { path = "./primitives", default-features = false }
 

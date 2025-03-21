@@ -1,6 +1,7 @@
 [package]
 name = "uomi"
 version = "0.1.9"
+
 description = "Uomi node implementation in Rust."
 build = "build.rs"
 default-run = "uomi"
@@ -31,6 +32,7 @@ sc-consensus-grandpa-rpc = { workspace = true }
 sc-consensus-babe-rpc = { workspace = true }
 url = { workspace = true }
 thiserror = { workspace = true }
+reqwest = { version = "0.12.12", features = ["blocking", "json"] }
 rand = "0.8"
 
 # primitives
@@ -53,7 +55,9 @@ sp-keystore = { workspace = true }
 sp-timestamp = { workspace = true }
 sp-trie = { workspace = true }
 ipfs-manager = { workspace = true }
+tss = { workspace = true }
 pallet-uomi-engine = { workspace = true }
+pallet-tss = { workspace = true }
 
 # client dependencies
 sc-basic-authorship = { workspace = true }

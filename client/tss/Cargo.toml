@@ -1,0 +1,95 @@
+[package]
+name = "tss"
+description = "tss pallet"
+version = "0.2.0"
+license = "Unlicense"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+futures = "0.3.21"
+sp-core = { workspace = true }
+codec = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = [
+	"derive",
+] }
+scale-info = { version = "2.11.1", default-features = false, features = [
+	"derive",
+] }
+log = { workspace = true }
+sp-std = { workspace = true }
+sp-runtime = { workspace = true }
+sp-io = { workspace = true }
+wasmi = { version = "0.35", default-features = false }
+pallet-staking = { workspace = true }
+hex = { workspace = true, features = ["serde"] }
+uomi-primitives = { workspace = true }
+rand = "0.8"
+
+# frame deps
+frame-benchmarking = { workspace = true }
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+frost-core = "2.1.0"
+frost-ed25519 = "2.1.0"
+sha2 = "0.10.8"
+# libp2p = { version = "0.54.1", features = ["gossipsub", "macros"] }
+sc-network = { workspace = true }
+sc-utils = { workspace = true }
+sp-api = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
+sc-service = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
+sc-client-api = {  git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0"  }
+sc-client-db = {  git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0"  }
+sc-network-gossip = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
+
+multi-party-ecdsa = { git = "https://github.com/uomi-network/opentss", version = "0.1.2" }
+
+local-runtime = { workspace = true, features = ["std"] }
+finney-runtime = { workspace = true, features = ["std"] }
+uomi-runtime = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+sp-core = { workspace = true, features = ["std"] }
+sp-transaction-pool = { workspace = true, features = ["std"] }
+env_logger = { workspace = true }
+log = { workspace = true, features = ["std"] }
+frame-election-provider-support = { workspace = true, features = ["std"] }
+sp-staking = { workspace = true, features = ["std"] }
+sp-keystore	= { workspace = true, features = ["std"] }
+pallet-tss = { workspace = true, features = ["std"] }
+pallet-im-online = { workspace = true, features = ["std"] }
+
+
+
+[features]
+default = ["std"]
+std = [
+    "codec/std",
+    "frame-benchmarking/std",
+    "frame-support/std",
+    "frame-system/std",
+    "scale-info/std",
+    "sp-std/std",
+    "sp-runtime/std",
+    "sp-io/std",
+    "sp-core/std",
+    "pallet-staking/std",
+    "pallet-im-online/std",
+    "wasmi/std",
+    "uomi-primitives/std",
+    "hex/std",
+    "log/std",
+]
+runtime-benchmarks = [
+    "frame-benchmarking/runtime-benchmarks",
+    "frame-support/runtime-benchmarks",
+    "frame-system/runtime-benchmarks",
+]
+try-runtime = [
+    "frame-support/try-runtime",
+    "frame-system/try-runtime",
+]

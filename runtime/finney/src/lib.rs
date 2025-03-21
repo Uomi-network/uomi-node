@@ -100,6 +100,7 @@ pub use uomi_primitives::{AccountId, Signature};
 pub use pallet_staking::StakerStatus;
 pub use pallet_uomi_engine;
 pub use pallet_ipfs;
+pub use pallet_tss;
 
 pub use crate::precompiles::WhitelistedCalls;
 #[cfg(feature = "std")]
@@ -445,6 +446,14 @@ impl pallet_session::Config for Runtime {
     type Keys = SessionKeys;
     type WeightInfo = pallet_session::weights::SubstrateWeight<Runtime>;
 }
+
+impl pallet_tss::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxNumberOfShares = pallet_tss::types::MaxNumberOfShares;
+    type SignatureVerifier = pallet_tss::pallet::Verifier;
+    type AuthorityId = pallet_tss::crypto::AuthId;
+}
+
 
 // election provider
 parameter_types! {
@@ -1678,7 +1687,8 @@ construct_runtime!(
         Ipfs: pallet_ipfs = 111,
         Session: pallet_session = 120,
         Historical: pallet_session_historical = 121,
-        Staking: pallet_staking = 122
+        Staking: pallet_staking = 122,
+        Tss: pallet_tss = 123
 
 
     }
@@ -2522,6 +2532,92 @@ impl_runtime_apis! {
                 select,
             );
             Executive::try_execute_block(block, state_root_check, signature_check, select).expect("execute-block failed")
+        }
+    }
+
+    impl pallet_tss::TssApi<Block> for Runtime {
+        fn get_dkg_session_threshold(session_id: u64) -> u32 {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+                return session.threshold;
+            }  
+
+            return u32::MAX;
+        }
+
+        fn get_dkg_session_participant_index(session_id: u64, account_id: [u8; 32]) -> u32 {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+                for (index, item) in session.participants.into_iter().enumerate() {
+
+                    if item == account_id.into() {
+                        return index.try_into().unwrap();
+                    }
+                }
+            }
+
+            return u32::MAX;
+        }
+
+        
+        fn get_dkg_session_participants_count(session_id: u64) -> u16 {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+                return u16::try_from(session.participants.len()).unwrap();
+            }  
+
+            return u16::MAX;
+        }
+
+        fn get_dkg_session_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+
+                let mut to_return = sp_std::prelude::Vec::<[u8; 32]>::new();
+
+                for el in session.participants.into_iter() {
+                    to_return.push(el.into());
+                }
+
+                return to_return;
+            }  
+            return Vec::new();
+        }
+        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
+            Vec::new()
+        }
+        fn get_dkg_session_old_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
+
+                let mut to_return = sp_std::prelude::Vec::<[u8; 32]>::new();
+
+                if session.old_participants.is_none() {
+                    return Vec::new();
+                }
+                
+                let old_participants = session.old_participants.unwrap();
+
+                for el in old_participants.into_iter() {
+                    to_return.push(el.into());
+                }
+
+                return to_return;
+            }
+
+            return Vec::new();
+        }
+        fn get_validator_id(account_id: [u8; 32]) -> Option<u32> {
+            // Convert [u8; 32] to AccountId
+            let account = AccountId::from(account_id);
+            // Call the pallet function
+            pallet_tss::pallet::Pallet::<Runtime>::get_validator_id(&account)
+        }
+        
+        fn get_validator_by_id(id: u32) -> Option<[u8; 32]> {
+            pallet_tss::pallet::Pallet::<Runtime>::get_validator_from_id(id).map(|account| account.into())
+        }
+        
+        fn get_all_validator_ids() -> Vec<(u32, [u8; 32])> {
+            // Collect all validator ID mappings
+            pallet_tss::pallet::ValidatorIds::<Runtime>::iter()
+                .map(|(account, id)| (id, account.into()))
+                .collect()
         }
     }
 }

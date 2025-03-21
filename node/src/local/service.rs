@@ -21,16 +21,21 @@
 use fc_consensus::FrontierBlockImport;
 use fc_rpc_core::types::{FeeHistoryCache, FilterPool};
 use futures::{FutureExt, StreamExt};
-use sc_client_api::{Backend, BlockBackend, BlockchainEvents};
-use sc_consensus_grandpa::SharedVoterState;
+use ipfs_manager::IpfsManager;
+use local_runtime::RuntimeEvent;
+use sc_client_api::{
+    Backend, BlockBackend, BlockchainEvents
+};
 use sc_consensus::BoxBlockImport;
+use sc_consensus_grandpa::SharedVoterState;
 use sc_executor::NativeElseWasmExecutor;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker};
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
-use ipfs_manager::IpfsManager;
-
+use std::{
+    collections::BTreeMap,marker::PhantomData, sync::Arc, time::Duration,
+};
+use tss::{get_config, setup_gossip};
 #[cfg(not(feature = "manual-seal"))]
 use sc_consensus_babe::{BabeLink, BabeWorkerHandle, SlotProportion};
 
@@ -40,7 +45,7 @@ use crate::{evm_tracing_types::EthApi as EthApiCmd, rpc::tracing};
 pub use local_runtime::RuntimeApi;
 
 use uomi_primitives::*;
-
+use sc_network::service::traits::NetworkStateInfo;
 
 /// The minimum period of blocks on which justifications will be
 /// imported and generated.
@@ -90,7 +95,7 @@ type GrandpaLinkHalf<C> = sc_consensus_grandpa::LinkHalf<Block, C, FullSelectCha
 pub fn new_partial(
     config: &Configuration,
 ) -> Result<
-sc_service::PartialComponents<
+    sc_service::PartialComponents<
         FullClient,
         FullBackend,
         FullSelectChain,
@@ -106,8 +111,7 @@ sc_service::PartialComponents<
         ),
     >,
     ServiceError,
->
-{
+> {
     let build_import_queue = build_babe_grandpa_import_queue;
     let telemetry = config
         .telemetry_endpoints
@@ -123,7 +127,7 @@ sc_service::PartialComponents<
     let executor = sc_service::new_native_or_wasm_executor(&config);
 
     let (client, backend, keystore_container, task_manager) =
-    sc_service::new_full_parts_record_import::<Block, RuntimeApi, _>(
+        sc_service::new_full_parts_record_import::<Block, RuntimeApi, _>(
             config,
             telemetry.as_ref().map(|(_, telemetry)| telemetry.handle()),
             executor,
@@ -152,7 +156,7 @@ sc_service::PartialComponents<
         telemetry.as_ref().map(|x| x.handle()),
     )?;
     let frontier_backend = crate::rpc::open_frontier_backend(client.clone(), config)?;
-  
+
     #[cfg(feature = "manual-seal")]
     let import_queue = sc_consensus_manual_seal::import_queue(
         Box::new(client.clone()),
@@ -190,7 +194,6 @@ sc_service::PartialComponents<
     })
 }
 
-
 pub fn build_babe_grandpa_import_queue(
     client: Arc<FullClient>,
     config: &Configuration,
@@ -200,7 +203,11 @@ pub fn build_babe_grandpa_import_queue(
     select_chain: FullSelectChain,
     offchain_tx_pool_factory: OffchainTransactionPoolFactory<Block>,
 ) -> Result<
-    ((BasicImportQueue, BabeWorkerHandle<Block>), BoxBlockImport<Block>, BabeLink<Block>),
+    (
+        (BasicImportQueue, BabeWorkerHandle<Block>),
+        BoxBlockImport<Block>,
+        BabeLink<Block>,
+    ),
     ServiceError,
 > {
     // TODO should we use this instead of babe block import?
@@ -232,9 +239,6 @@ pub fn build_babe_grandpa_import_queue(
                     slot_duration,
                 );
 
-            
-            
-
             Ok((slot, timestamp))
         },
         spawner: &task_manager.spawn_essential_handle(),
@@ -251,10 +255,15 @@ pub fn start_node(
     config: Configuration,
     #[cfg(feature = "evm-tracing")] evm_tracing_config: crate::evm_tracing_types::EvmTracingConfig,
 ) -> Result<TaskManager, ServiceError> {
+    // Load the AI service status by calling localhost:8888/status and get the json response
+    let ipfs_manager =
+        Arc::new(IpfsManager::new().map_err(|e| {
+            ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e))
+        })?);
+    ipfs_manager
+        .start_daemon()
+        .map_err(|e| ServiceError::Other(format!("Failed to start IPFS daemon: {}", e)))?;
 
-    let ipfs_manager = Arc::new(IpfsManager::new().map_err(|e| ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e)))?);
-    ipfs_manager.start_daemon().map_err(|e| ServiceError::Other(format!("Failed to start IPFS daemon: {}", e)))?;
-    
     let sc_service::PartialComponents {
         client,
         backend,
@@ -264,14 +273,7 @@ pub fn start_node(
         select_chain,
         transaction_pool,
         other:
-            (
-                mut telemetry,
-                block_import,
-                babe_link,
-                worker_handle,
-                grandpa_link,
-                frontier_backend,
-            ),
+            (mut telemetry, block_import, babe_link, worker_handle, grandpa_link, frontier_backend),
     } = new_partial(&config)?;
 
     task_manager.spawn_essential_handle().spawn_blocking(
@@ -299,6 +301,8 @@ pub fn start_node(
         sc_consensus_grandpa::grandpa_peers_set_config(protocol_name.clone());
     net_config.add_notification_protocol(grandpa_protocol_config);
 
+    let (tss_protocol_config, tss_notification_service, tss_protocol_name) = get_config();
+    net_config.add_notification_protocol(tss_protocol_config);
 
     let (network, system_rpc_tx, tx_handler_controller, network_starter, sync_service) =
         sc_service::build_network(sc_service::BuildNetworkParams {
@@ -370,8 +374,6 @@ pub fn start_node(
                 trace: None,
             }
         };
-
-
 
     // Frontier offchain DB task. Essential.
     // Maps emulated ethereum data to substrate native data.
@@ -452,10 +454,9 @@ pub fn start_node(
                 slot_duration,
             );
 
-        
-       
         Ok((slot, timestamp))
     };
+    let c = client.clone();
 
     let rpc_extensions_builder = {
         let client = client.clone();
@@ -472,53 +473,55 @@ pub fn start_node(
             Some(shared_authority_set.clone()),
         );
 
-        Box::new(move |deny_unsafe, subscription: sc_rpc::SubscriptionTaskExecutor| {
-            let shared_voter_state = sc_consensus_grandpa::SharedVoterState::empty();
-            let deps = crate::rpc::FullDeps {
-                client: client.clone(),
-                select_chain: select_chain.clone(),
-                pool: transaction_pool.clone(),
-                graph: transaction_pool.pool().clone(),
-                network: network.clone(),
-                sync: sync.clone(),
-                is_authority,
-                deny_unsafe,
-                frontier_backend: frontier_backend.clone(),
-                filter_pool: filter_pool.clone(),
-                fee_history_limit: FEE_HISTORY_LIMIT,
-                fee_history_cache: fee_history_cache.clone(),
-                block_data_cache: block_data_cache.clone(),
-                overrides: overrides.clone(),
-                enable_evm_rpc: true, // enable EVM RPC for dev node by default
-                pending_create_inherent_data_providers: pending_create_inherent_data_providers,
-                babe: crate::rpc::BabeDeps {
-                    keystore: keystore.clone(),
-                    worker_handle: worker_handle.clone(),
-                },
-                grandpa: crate::rpc::GrandpaDeps {
-                    shared_voter_state,
-                    shared_authority_set: shared_authority_set.clone(),
-                    justification_stream: justification_stream.clone(),
-                    subscription_executor: subscription.clone(),
-                    finality_provider: finality_provider.clone(),
-                },
-                #[cfg(feature = "manual-seal")]
-                command_sink: Some(command_sink.clone()),
-            };
+        Box::new(
+            move |deny_unsafe, subscription: sc_rpc::SubscriptionTaskExecutor| {
+                let shared_voter_state = sc_consensus_grandpa::SharedVoterState::empty();
+                let deps = crate::rpc::FullDeps {
+                    client: client.clone(),
+                    select_chain: select_chain.clone(),
+                    pool: transaction_pool.clone(),
+                    graph: transaction_pool.pool().clone(),
+                    network: network.clone(),
+                    sync: sync.clone(),
+                    is_authority,
+                    deny_unsafe,
+                    frontier_backend: frontier_backend.clone(),
+                    filter_pool: filter_pool.clone(),
+                    fee_history_limit: FEE_HISTORY_LIMIT,
+                    fee_history_cache: fee_history_cache.clone(),
+                    block_data_cache: block_data_cache.clone(),
+                    overrides: overrides.clone(),
+                    enable_evm_rpc: true, // enable EVM RPC for dev node by default
+                    pending_create_inherent_data_providers: pending_create_inherent_data_providers,
+                    babe: crate::rpc::BabeDeps {
+                        keystore: keystore.clone(),
+                        worker_handle: worker_handle.clone(),
+                    },
+                    grandpa: crate::rpc::GrandpaDeps {
+                        shared_voter_state,
+                        shared_authority_set: shared_authority_set.clone(),
+                        justification_stream: justification_stream.clone(),
+                        subscription_executor: subscription.clone(),
+                        finality_provider: finality_provider.clone(),
+                    },
+                    #[cfg(feature = "manual-seal")]
+                    command_sink: Some(command_sink.clone()),
+                };
 
-            crate::rpc::create_full(
-                deps,
-                subscription,
-                pubsub_notification_sinks.clone(),
-                #[cfg(feature = "evm-tracing")]
-                crate::rpc::EvmTracingConfig {
-                    tracing_requesters: tracing_requesters.clone(),
-                    trace_filter_max_count: evm_tracing_config.ethapi_trace_max_count,
-                    enable_txpool: ethapi_cmd.contains(&EthApiCmd::TxPool),
-                },
-            )
-            .map_err::<ServiceError, _>(Into::into)
-        })
+                crate::rpc::create_full(
+                    deps,
+                    subscription,
+                    pubsub_notification_sinks.clone(),
+                    #[cfg(feature = "evm-tracing")]
+                    crate::rpc::EvmTracingConfig {
+                        tracing_requesters: tracing_requesters.clone(),
+                        trace_filter_max_count: evm_tracing_config.ethapi_trace_max_count,
+                        enable_txpool: ethapi_cmd.contains(&EthApiCmd::TxPool),
+                    },
+                )
+                .map_err::<ServiceError, _>(Into::into)
+            },
+        )
     };
 
     let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
@@ -568,7 +571,7 @@ pub fn start_node(
                             *timestamp,
                             slot_duration.clone(),
                         );
-                    
+
                     Ok((slot, timestamp))
                 },
             },
@@ -600,9 +603,6 @@ pub fn start_node(
                             &parent,
                         )?;
 
-                    
-
-               
                     Ok((slot, timestamp, storage_proof))
                 }
             },
@@ -616,9 +616,11 @@ pub fn start_node(
         let babe = sc_consensus_babe::start_babe(babe_config)?;
 
         // we spawn the future on a background thread managed by service.
-        task_manager
-            .spawn_essential_handle()
-            .spawn_blocking("babe-proposer", Some("block-authoring"), babe);
+        task_manager.spawn_essential_handle().spawn_blocking(
+            "babe-proposer",
+            Some("block-authoring"),
+            babe,
+        );
     }
 
     // if the node isn't actively participating in consensus then it doesn't
@@ -651,8 +653,8 @@ pub fn start_node(
         let grandpa_config = sc_consensus_grandpa::GrandpaParams {
             config: grandpa_config,
             link: grandpa_link,
-            network,
-            sync: Arc::new(sync_service),
+            network: network.clone(),
+            sync: Arc::new(sync_service.clone()),
             notification_service: grandpa_notification_service,
             voting_rule: sc_consensus_grandpa::VotingRulesBuilder::default().build(),
             prometheus_registry,
@@ -670,8 +672,23 @@ pub fn start_node(
         );
     }
 
+    task_manager.spawn_essential_handle().spawn_blocking(
+        "tss-p2p",
+        None,
+        setup_gossip(
+            c,
+            network,
+            sync_service,
+            tss_notification_service,
+            tss_protocol_name,
+            keystore_container,
+            PhantomData::<Block>,
+            PhantomData::<RuntimeEvent>,
+        )
+        .unwrap(),
+    );
+
     network_starter.start_network();
 
     Ok(task_manager)
 }
-
