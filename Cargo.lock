@@ -3252,7 +3252,7 @@ dependencies = [
 
 [[package]]
 name = "finney-runtime"
-version = "0.1.7"
+version = "0.1.9"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -5673,7 +5673,7 @@ dependencies = [
 
 [[package]]
 name = "local-runtime"
-version = "0.1.7"
+version = "0.1.9"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -6049,10 +6049,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
+name = "mini-internal"
+version = "0.1.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6c74ab4f1a0c0ab045260ee4727b23c00cc17e5eff5095262d08eef8c3c8d49"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.87",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "miniserde"
+version = "0.1.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08ec68bf2ad170a53a6efa92c3df7187968d6e475fe7a935725868154074ca0f"
+dependencies = [
+ "itoa",
+ "mini-internal",
+ "ryu",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -8471,6 +8493,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "log",
+ "miniserde",
  "pallet-babe",
  "pallet-balances",
  "pallet-election-provider-multi-phase",
@@ -15443,7 +15466,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uomi"
-version = "0.1.7"
+version = "0.1.9"
 dependencies = [
  "async-trait",
  "clap",
@@ -15572,7 +15595,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.1.7"
+version = "0.1.9"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",

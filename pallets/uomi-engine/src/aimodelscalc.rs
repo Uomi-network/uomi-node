@@ -74,8 +74,11 @@ impl<T: Config> Pallet<T> {
     
         let qwen2_5: Data = b"Qwen/Qwen2.5-32B-Instruct-GPTQ-Int4".to_vec().try_into().unwrap();
         let temp2_5: Data = b"Temp2.5/Temp".to_vec().try_into().unwrap();
+        let mistral_24b: Data = b"casperhansen/mistral-small-24b-instruct-2501-awq".to_vec().try_into().unwrap();
+        let qwen_qwq_32b: Data = b"Qwen/QwQ-32B-AWQ".to_vec().try_into().unwrap();
+        let dobby3_1_8b: Data = b"SentientAGI/Dobby-Mini-Unhinged-Llama-3.1-8B".to_vec().try_into().unwrap();
+        let sana_1600m: Data = b"Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers".to_vec().try_into().unwrap();
 
-        // Version 2
         let mut version_2 = BTreeMap::new();
         version_2.insert(AiModelKey::from(1), qwen2_5.clone());
         map.insert(2 as u32, version_2);
@@ -87,7 +90,14 @@ impl<T: Config> Pallet<T> {
         let mut version_4 = BTreeMap::new();
         version_4.insert(AiModelKey::from(1), qwen2_5.clone());
         map.insert(4 as u32, version_4);
-    
+
+        let mut version_5 = BTreeMap::new();
+        version_5.insert(AiModelKey::from(1), mistral_24b.clone());
+        version_5.insert(AiModelKey::from(2), qwen_qwq_32b.clone());
+        version_5.insert(AiModelKey::from(3), dobby3_1_8b.clone());
+        version_5.insert(AiModelKey::from(100), sana_1600m.clone());
+        map.insert(5 as u32, version_5);
+
         // Free for future releases...
     
         map

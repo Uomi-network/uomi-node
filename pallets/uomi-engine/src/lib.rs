@@ -22,7 +22,6 @@ pub use pallet::*; // Re-export pallet items so that they can be accessed from t
 pub mod weights;
 pub use weights::*;
 
-use sp_runtime::traits::Convert;
 use frame_support::pallet_prelude::DispatchClass;
 use codec::{Decode, Encode};
 use frame_support::{
@@ -155,6 +154,12 @@ pub mod pallet {
             account_id: T::AccountId, // The account ID of the validator.
             version: Version, // The version of the node.
         },
+        NodeOpocL0InferenceReceived {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+            inference_index: u32, // The inference index.
+            inference_proof: Data, // The inference proof.
+        },
     }
 
     // Errors
@@ -217,6 +222,7 @@ pub mod pallet {
         ValueQuery
     >;
 
+    // NodesVersions storage is used to store the versions of the nodes.
     #[pallet::storage]
     pub type NodesVersions<T: Config> = StorageMap<
         _,
@@ -225,6 +231,21 @@ pub mod pallet {
         Version, // version
         ValueQuery
     >;
+
+    // NodesOpocL0Inferences storage is used to store the inferences executed by the opoc at level 0.
+	#[pallet::storage]
+	pub type NodesOpocL0Inferences<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+        T::AccountId, // account_id
+        (
+            u32, // inference_index
+            Data, // inference_proof
+        ),
+        ValueQuery
+	>;
 
     // Inputs storage is used to store the inputs of the requests received by the run_request function.
 	#[pallet::storage]
@@ -378,6 +399,20 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
+                Call::store_nodes_opoc_l0_inferences { .. } => {
+                    // Existing validation for store_nodes_versions
+                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+                        log::info!("UOMI-ENGINE: Rejecting store_nodes_opoc_l0_inferences unsigned transaction from external origin");
+                        return InvalidTransaction::BadSigner.into()
+                    }
+
+                    ValidTransaction::with_tag_prefix("UomiEnginePallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(&call)
+                        .longevity(64_u64)
+                        .propagate(true)
+                        .build()
+                },
                 _ => {
                     log::info!("Invalid unsigned call");
                     InvalidTransaction::Call.into()
@@ -483,7 +518,7 @@ pub mod pallet {
 
         #[pallet::call_index(3)]
         #[pallet::weight(0)]
-        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult {
+        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
             log::info!("UOMI-ENGINE: Cleaning up inputs");
             let _ = ensure_signed(origin)?;
             
@@ -498,8 +533,43 @@ pub mod pallet {
 
         #[pallet::call_index(4)]
         #[pallet::weight(0)]
-        pub fn temporary_function(origin: OriginFor<T>) -> DispatchResult {
+        pub fn temporary_function(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
             let _ = ensure_none(origin)?;
+            Ok(())
+        }
+
+        #[pallet::call_index(5)]
+        #[pallet::weight(0)]
+        pub fn store_nodes_opoc_l0_inferences(
+            origin: OriginFor<T>, 
+            payload: payloads::PayloadNodesOpocL0Inferences<T::Public>,
+            _signature: T::Signature
+        ) -> DispatchResult {
+            log::info!("UOMI-ENGINE: Storing opoc l0 inferences onchain");
+            ensure_none(origin)?;
+            let payloads::PayloadNodesOpocL0Inferences { public, request_id, inference_index, inference_proof } = payload;
+            let public_account_id = public.into_account();
+            log::info!("UOMI-ENGINE: Storing version for account ID: {:?}", public_account_id);
+
+            if !Self::address_is_active_validator(&public_account_id) {
+                log::info!("UOMI-ENGINE: Only validators can call this function");
+                return Err("Only validators can call this function".into());
+            }
+
+            // check if another inference with the same request_id, account_id and inference_index already exists
+            let inference_already_exists = |request_id: U256, account_id: &T::AccountId, inference_index: u32| -> bool {
+                NodesOpocL0Inferences::<T>::contains_key(request_id, account_id) && NodesOpocL0Inferences::<T>::get(request_id, account_id).0 == inference_index
+            };
+            if inference_already_exists(request_id, &public_account_id, inference_index) {
+                log::info!("UOMI-ENGINE: Inference already exists");
+                return Err("Inference already exists".into());
+            }
+
+            log::info!("UOMI-ENGINE: Stored inference for request ID: {:?}", request_id);
+            NodesOpocL0Inferences::<T>::insert(request_id, public_account_id.clone(), (inference_index, inference_proof.clone()));
+
+            Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof });
+
             Ok(())
         }
     }

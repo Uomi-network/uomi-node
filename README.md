@@ -126,11 +126,18 @@ curl -H "Content-Type: application/json" \
 http://localhost:9945 
 
 curl -H "Content-Type: application/json" \
--d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["uomi", "Charlie//stash", "0x1e07379407fecc4b89eb7dbd287c2c781cfb1907a96947a3eb18e4f8e7198625"]}' \
+-d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["uomi", "//Charlie", "0x1e07379407fecc4b89eb7dbd287c2c781cfb1907a96947a3eb18e4f8e7198625"]}' \
 http://localhost:9946 
 
 curl -H "Content-Type: application/json" \
--d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["ipfs", "Charlie//stash", "0x1e07379407fecc4b89eb7dbd287c2c781cfb1907a96947a3eb18e4f8e7198625"]}' \
+-d '{"id": 1, "jsonrpc":"2.0", "method": "author_insertKey", "params":["ipfs", "//Charlie", "0x1e07379407fecc4b89eb7dbd287c2c781cfb1907a96947a3eb18e4f8e7198625"]}' \
 http://localhost:9946
 ```
 
+Rotate key
+
+```bash
+curl -H "Content-Type: application/json" \
+-d '{"id": 1, "jsonrpc":"2.0", "method": "author_rotateKeys", "params":[]}' \
+http://localhost:9946
+```

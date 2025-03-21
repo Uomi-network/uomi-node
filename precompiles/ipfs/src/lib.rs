@@ -82,7 +82,7 @@ impl<R> IpfsPrecompile<R>
         let sender: H160 = caller.into();
 
         //check if sender is 0x61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2
-        let agent_address = H160::from_slice(&hex::decode("61D99C81c841eE0D1A1a5F5EAACc8A8D259741A2").expect("Invalid hex"));
+        let agent_address = H160::from_slice(&hex::decode("1734a76d43761555FA2F8E77160a43FB5b97A925").expect("Invalid hex"));
         if sender != agent_address {
             let message: &str = "Only the ipfs contract can call this function";
             return Err(revert(message))

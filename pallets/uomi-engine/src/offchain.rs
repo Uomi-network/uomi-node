@@ -8,18 +8,42 @@ use sp_std::{
     vec::Vec,
 };
 use scale_info::prelude::string::String;
-use scale_info::prelude::format;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION, TEMP_BLOCK_FOR_NEW_OPOC},
     ipfs::IpfsInterface,
-    payloads::{PayloadNodesOutputs, PayloadNodesVersions},
+    payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
-    {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels},
+    {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels, NodesOpocL0Inferences},
 };
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiRequestWithProof {
+    model: String,
+    input: String,
+    proof: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiRequestWithoutProof {
+    model: String,
+    input: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiResponse {
+    result: bool,
+    response: String,
+    proof: String
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiResponseCleaned {
+    response: String,
+}
 
 impl<T: Config> Pallet<T> {
     pub fn semaphore_status() -> bool {
@@ -82,8 +106,11 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
 
         // Load request data from Inputs storage
-        let (block_number, nft_id, _nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
+        let (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
         log::info!("UOMI-ENGINE: Request data loaded with block number: {:?}, nft_id: {:?} and nft_execution_max_time: {:?}", block_number, nft_id, nft_execution_max_time);
+
+        // Detect the level of opoc the execution should have
+        let opoc_level = Self::offchain_detect_opoc_level(&request_id, &nft_required_consensus);
 
         // Load wasm associated to the request nft_id
         let wasm = match Self::offchain_load_wasm_from_nft_id(&nft_id, &nft_file_cid) {
@@ -102,7 +129,7 @@ impl<T: Config> Pallet<T> {
         log::info!("UOMI-ENGINE: Wasm loaded with length: {:?}", wasm.len());
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_execution_max_time) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, opoc_level, request_id) {
             Ok(output_data) => {
                 log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
                 // Store the output data
@@ -206,7 +233,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
 
@@ -275,22 +302,6 @@ impl<T: Config> Pallet<T> {
             *caller.data_mut() = buffer;
         };
 
-        let call_ai = move |mut caller: wasmtime::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
-            let mut buffer = vec![0u8; len as usize];
-            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
-            let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer) {
-                Ok(output) => output,
-                Err(error) => {
-                    log::error!("Error calling the AI: {:?}", error);
-                    Vec::new()
-                }
-            };
-            let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
-            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
-        };
-
         let get_cid_file = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
             let mut buffer = vec![0u8; len as usize];
@@ -313,17 +324,38 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
-        let console_log = move |mut caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
+        let console_log = move |caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
             // Do nothing, function exposed to help wasm debugging
+        };
+
+        // NOTE: The call_ai function is "special". It needs to track the number of calls and count them by incrementing a counter.
+        // This is required to permit us to log the executions and store them on OpocL0Inferences (on Opoc level 0) or read them from OpocL0Inferences (on Opoc level 1/2).
+        let call_ai_counter = std::sync::RwLock::new(0u32);
+        let call_ai = move |mut caller: wasmtime::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+            *call_ai_counter.write().unwrap() += 1;
+
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            let model = AiModelKey::from(model as u32);
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, opoc_level, *call_ai_counter.read().unwrap(), request_id) {
+                Ok(output) => output,
+                Err(error) => {
+                    log::error!("Error calling the AI: {:?}", error);
+                    Vec::new()
+                }
+            };
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
         let mut linker = wasmtime::Linker::new(&engine);
         linker.func_wrap("env", "get_input_file", get_input_file).unwrap();
         linker.func_wrap("env", "get_input_data", get_input_data).unwrap();
         linker.func_wrap("env", "set_output", set_output).unwrap();
-        linker.func_wrap("env", "call_ai", call_ai).unwrap();
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
+        linker.func_wrap("env", "call_ai", call_ai).unwrap();
 
         let instance = match linker.instantiate(&mut store, &module) {
             Ok(instance) => instance,
@@ -364,196 +396,6 @@ impl<T: Config> Pallet<T> {
         }
     }
 
-    // BACKUP IMPLEMENTATION WITH WASMI
-    // Need wasmi = { version = "0.35", default-features = false } on Cargo.toml
-    // #[cfg(feature = "std")]
-    // pub fn wasmi_offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmi::Error> {
-    //     // Convert input_data to a Vec<u8>
-    //     let input_data_as_vec = input_data.to_vec();
-
-    //     // Calculate the timeout for the execution of the request
-    //     // The timeout should be calculated as expiration_block_number - current_block
-    //     // If timeout is > nft_execution_max_time - 2, timeout should be nft_execution_max_time - 2
-    //     // NOTE: We calculate time after the wasm loading to avoid the wasm loading time to be counted in the timeout.
-    //     let current_block = <frame_system::Pallet<T>>::block_number();
-    //     let timeout_blocks_max = nft_execution_max_time - U256::from(2);
-    //     let mut timeout_blocks = expiration_block_number - current_block;
-    //     if timeout_blocks > timeout_blocks_max {
-    //         timeout_blocks = nft_execution_max_time - U256::from(2);
-    //     }
-    //     let timeout_time = timeout_blocks * U256::from(BlockTime::get());
-    //     let timeout_time_ms = timeout_time.low_u64() as u64 * 1000;
-
-    //     type HostState = Vec<u8>;
-    //     let mut config = wasmi::Config::default();
-    //     config.consume_fuel(true);
-    //     let engine = wasmi::Engine::new(&config);
-    //     let module = wasmi::Module::new(&engine, &wasm[..])?;
-    //     let mut store = wasmi::Store::new(&engine, HostState::new());
-    //     let _ = store.set_fuel(100_000_000);
-
-    //     let get_input_data = wasmi::Func::wrap(
-    //         &mut store,
-    //         move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
-    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(input_data_as_vec.clone());
-
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-    
-    //             memory
-    //                 .write(&mut caller, ptr as usize, &data_to_write)
-    //                 .expect("Failed to write memory");
-    //         }
-    //     );
-
-    //     let get_input_file = wasmi::Func::wrap(
-    //         &mut store,
-    //         move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, _len: i32| {
-    //             let file = T::IpfsPallet::get_file(&input_file_cid).unwrap();
-    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
-
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-    
-    //             memory
-    //                 .write(&mut caller, ptr as usize, &data_to_write)
-    //                 .expect("Failed to write memory");
-    //         }
-    //     );
-
-    //     let set_output = wasmi::Func::wrap(
-    //         &mut store,
-    //         |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-    
-    //             let mut buffer = vec![0u8; len as usize];
-    //             memory
-    //                 .read(&caller, ptr as usize, &mut buffer)
-    //                 .expect("Failed to read memory");
-    
-    //             *caller.data_mut() = buffer;
-    //         }
-    //     );
-
-    //     let call_ai = wasmi::Func::wrap(
-    //         &mut store,
-    //         move |mut caller: wasmi::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-
-    //             let mut buffer = vec![0u8; len as usize];
-
-    //             memory
-    //                 .read(&caller, ptr as usize, &mut buffer)
-    //                 .expect("Failed to read memory");
-
-    //             let model = AiModelKey::from(model as u32);
-
-    //             let output = Self::offchain_worker_call_ai(model, block_number, buffer).unwrap();
-    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(output);
-
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-
-    //             memory
-    //                 .write(&mut caller, output_ptr as usize, &data_to_write)
-    //                 .expect("Failed to write memory");
-    //         }
-    //     );
-
-    //     let get_cid_file = wasmi::Func::wrap(
-    //         &mut store,
-    //         move |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-
-    //             let mut buffer = vec![0u8; len as usize];
-
-    //             memory
-    //                 .read(&caller, ptr as usize, &mut buffer)
-    //                 .expect("Failed to read memory");
-
-    //             let cid = Cid::try_from(buffer).unwrap();
-                
-    //             let file = Self::offcahin_worker_get_cid_file(cid, block_number).unwrap();
-    //             let data_to_write = Self::offchain_worker_generate_data_for_wasm(file);
-
-    //             let memory = caller
-    //                 .get_export("memory")
-    //                 .and_then(wasmi::Extern::into_memory)
-    //                 .expect("Failed to get memory export");
-
-    //             memory
-    //                 .write(&mut caller, output_ptr as usize, &data_to_write)
-    //                 .expect("Failed to write memory");
-    //         }
-    //     );
-
-    //     let console_log = wasmi::Func::wrap(
-    //         &mut store,
-    //         |_caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| {
-    //             // Do nothing, function exposed to help wasm debugging
-    //         }
-    //     );
-
-    //     let mut linker: wasmi::Linker<Vec<u8>> = wasmi::Linker::new(&engine);
-    //     linker.define("env", "get_input_data", get_input_data)?;
-    //     linker.define("env", "get_input_file", get_input_file)?;
-    //     linker.define("env", "set_output", set_output)?;
-    //     linker.define("env", "call_ai", call_ai)?;
-    //     linker.define("env", "get_cid_file", get_cid_file)?;
-    //     linker.define("env", "console_log", console_log)?;
-
-    //     let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
-    //     let wasm_run = instance.get_typed_func::<(), ()>(&store, "run")?;
-
-    //     // // Create a channel to communicate between threads
-    //     // let (tx, rx) = std::sync::mpsc::channel();
-
-    //     // // Run the function in a separate thread with same Externalities-provided environment
-    //     // std::thread::spawn(move || {
-    //     //     wasm_run.call(&mut store, ()).unwrap();
-    //     //     tx.send(store.into_data()).unwrap();
-    //     // });
-
-    //     // // Wait for timeout_time_ms or until the function completes
-    //     // let store_data = match rx.recv_timeout(std::time::Duration::from_millis(timeout_time_ms)) {
-    //     //     Ok(store_data) => {
-    //     //         log::info!("WASM execution completed successfully");
-    //     //         store_data
-    //     //     },
-    //     //     Err(_) => {
-    //     //         log::error!("WASM execution timeout");
-    //     //         return Err(wasmi::Error::new("WASM execution timeout"));
-    //     //     },
-    //     // };
-
-    //     // Run the function
-    //     wasm_run.call(&mut store, ())?;
-    //     let store_data = store.into_data();
-
-    //     // Convert the store_data to a BoundedVec. If the store_data is too big, it will be converted to an empty BoundedVec
-    //     let store_data_bounded: Data = store_data
-    //         .clone()
-    //         .try_into()
-    //         .unwrap_or_else(|_| Data::default());
-
-    //     Ok(store_data_bounded)        
-    // }
-
     fn offchain_worker_generate_data_for_wasm(data: Vec<u8>) -> Vec<u8> {
         let data_len = data.len();
         let mut wasm_data = Vec::new();
@@ -565,12 +407,17 @@ impl<T: Config> Pallet<T> {
         wasm_data
     }
 
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>) -> Result<Vec<u8>, DispatchError> {
+    #[cfg(feature = "std")]
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
         }
-    
+
+        if model >= U256::from(100) && required_consensus > U256::from(1) { // Models with id > 100 (example image generation) can not be called with security (consensus > 1)
+            return Err(DispatchError::Other("Model can not be called by agents with required consensus > 1"));
+        }
+
         let (local_name, previous_local_name, available_from_block_number) = AIModels::<T>::get(&model);
         let final_local_name = if block_number < available_from_block_number {
             previous_local_name
@@ -582,7 +429,6 @@ impl<T: Config> Pallet<T> {
             return Err(DispatchError::Other("Error getting the model name from the AiModels storage - final_local_name is empty"));
         }
 
-        let url = "http://localhost:8888/run";
         let input_data = String::from_utf8(input).map_err(|_| {
             log::error!("UOMI-ENGINE: Invalid UTF-8 in input data");
             DispatchError::Other("Invalid UTF-8 in input data")
@@ -592,15 +438,114 @@ impl<T: Config> Pallet<T> {
             log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
             DispatchError::Other("Invalid UTF-8 in final local name")
         })?;
+ 
+        let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
+        if current_block_number < TEMP_BLOCK_FOR_NEW_OPOC.into() || opoc_level < 1 { // For finney update. remove on turing
+            let body_data = CallAiRequestWithoutProof {
+                model: model.clone(),
+                input: input_data.clone(),
+            };
+            let body = miniserde::json::to_string(&body_data);
 
-        fn escape_json_string(s: &str) -> String {
-            s.replace('\\', "\\\\")  // First escape backslashes
-             .replace('\"', "\\\"")  // Then escape quotes
-             .replace('\n', "\\n")   // Handle newlines
-             .replace('\r', "\\r")   // Handle carriage returns
-             .replace('\t', "\\t")   // Handle tabs
+            let output = Self::offchain_worker_call_ai_send_request(body)?;
+            let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
+                DispatchError::Other("Invalid UTF-8 in output data")
+            })?;
+            let output_string = output_string.trim();
+            let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
+                log::error!("UOMI-ENGINE: Error parsing output data to JSON");
+                DispatchError::Other("Error parsing output data to JSON")
+            })?;
+            let output_json_cleaned = CallAiResponseCleaned {
+                response: output_json.response,
+            };
+            let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
+            let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert output to Data type");
+                DispatchError::Other("Failed to convert output")
+            })?;
+
+            if !output_json.proof.is_empty() && current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing {
+                // Store the inference on OpocL0Inferences
+                let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
+                if !signer.can_sign() {
+                    log::error!("No accounts available to sign the transaction");
+                    return Err(DispatchError::Other("No accounts available to sign"));
+                }
+
+                // Convert output_proof to a Data
+                let output_proof: Data = output_json.proof.as_bytes().to_vec().try_into().map_err(|_| {
+                    log::error!("UOMI-ENGINE: Failed to convert output proof to Data type");
+                    DispatchError::Other("Failed to convert output proof")
+                })?;
+
+                let _ = signer.send_unsigned_transaction(
+                    |acct| PayloadNodesOpocL0Inferences { 
+                        request_id: request_id.clone(), 
+                        inference_index: counter,
+                        inference_proof: output_proof.clone(),
+                        public: acct.public.clone(),
+                    },
+                    |payload, signature| Call::store_nodes_opoc_l0_inferences { 
+                        payload, 
+                        signature 
+                    },
+                );
+            }
+
+            Ok(output.to_vec())
+        } else {
+            let mut proof: Data = Data::default();
+            for (_account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
+                let (inference_index, inference_proof) = inference_data;
+                if inference_index == counter {
+                    proof = inference_proof;
+                    break;
+                }
+            }
+
+            let body = if proof.is_empty() {
+                let body_data = CallAiRequestWithoutProof {
+                    model: model.clone(),
+                    input: input_data.clone(),
+                };
+                miniserde::json::to_string(&body_data)
+            } else {
+                let body_data = CallAiRequestWithProof {
+                    model: model.clone(),
+                    input: input_data.clone(),
+                    proof: String::from_utf8(proof.to_vec()).unwrap_or_default(),
+                };
+                miniserde::json::to_string(&body_data)
+            };
+
+            let output = Self::offchain_worker_call_ai_send_request(body)?;
+            let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
+                DispatchError::Other("Invalid UTF-8 in output data")
+            })?;
+
+            let output_string = output_string.trim();
+            let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
+                log::error!("UOMI-ENGINE: Error parsing output data to JSON");
+                DispatchError::Other("Error parsing output data to JSON")
+            })?;
+            let output_json_cleaned = CallAiResponseCleaned {
+                response: output_json.response,
+            };
+            let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
+            let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert output to Data type");
+                DispatchError::Other("Failed to convert output")
+            })?;
+
+            Ok(output.to_vec())
         }
-        let body: String = format!("{{\"model\": \"{}\", \"input\": \"{}\"}}", model, escape_json_string(&input_data));
+    }
+    
+    fn offchain_worker_call_ai_send_request(body: String) -> Result<Data, DispatchError> {
+        let url = "http://127.0.0.1:8888/run";
 
         let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
         request = request
@@ -639,7 +584,7 @@ impl<T: Config> Pallet<T> {
             DispatchError::Other("Failed to convert response body")
         })?;
 
-        Ok(output.to_vec())
+        Ok(output)
     }
 
     fn offcahin_worker_get_cid_file(cid: Cid, block_number: BlockNumber) -> Result<Vec<u8>, DispatchError> {
@@ -712,5 +657,29 @@ impl<T: Config> Pallet<T> {
         );
 
         Ok(())
+    }
+
+    fn offchain_detect_opoc_level(request_id: &RequestId, nft_required_consensus: &U256) -> u8 {
+        let opoc_assignments_of_level_0 = 1 as usize;
+        let opoc_assignments_of_level_1 = nft_required_consensus.as_u32() as usize;
+
+        let opoc_assignment_count = OpocAssignment::<T>::iter_prefix(*request_id).count();
+
+        let opoc_level = match opoc_assignment_count {
+            0 => { // NOTE: This case should never happen, but check to avoid runtime error
+                u8::from(0)
+            },
+            x if x == opoc_assignments_of_level_0 => {
+                u8::from(0)
+            },
+            x if x == opoc_assignments_of_level_1 => {
+                u8::from(1)
+            },
+            _ => {
+                u8::from(2)
+            },
+        };
+
+        opoc_level
     }
 }
