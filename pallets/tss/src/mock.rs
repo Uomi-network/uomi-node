@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use scale_info::prelude::string::String;
 
 use frame_election_provider_support::{
@@ -12,7 +10,7 @@ use frame_support::{
     traits::EstimateNextSessionRotation, weights::Weight,
 };
 use frame_system::offchain::{CreateSignedTransaction, SendTransactionTypes, SigningTypes};
-use pallet_babe::{self, AuthorityId};
+use pallet_babe::{self};
 use pallet_ipfs::{
     self,
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
@@ -20,12 +18,12 @@ use pallet_ipfs::{
 use pallet_session::{SessionHandler, ShouldEndSession};
 use pallet_staking::TestBenchmarkingConfig;
 use sp_core::{
-    offchain::{testing::TestOffchainExt, OffchainDbExt, OffchainWorkerExt}, sr25519::{self, Public, Signature, CRYPTO_ID}, ConstU128, ConstU16, ConstU32, ConstU64, Get, Pair, H256, U256
+     sr25519::{Public, Signature}, ConstU128, ConstU16, ConstU32, ConstU64, Get, H256, U256
 };
 
-use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
 
-use pallet_uomi_engine::{crypto::CRYPTO_KEY_TYPE, Call as UomiCall};
+
+use pallet_uomi_engine::Call as UomiCall;
 use sp_runtime::{
     curve::PiecewiseLinear,
     testing::{TestXt, UintAuthorityId},
@@ -34,7 +32,7 @@ use sp_runtime::{
 };
 use sp_staking::currency_to_vote::SaturatingCurrencyToVote;
 
-use crate::{runtime_decl_for_tss_api::ID, types::MaxNumberOfShares};
+use crate::types::MaxNumberOfShares;
 
 // TYPES
 pub type Balance = u128; // needed in System
