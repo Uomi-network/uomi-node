@@ -18,6 +18,7 @@ use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
 use scale_info::TypeInfo;
+use sp_core::crypto::Ss58Codec;
 
 pub use pallet::*;
 use sp_std::vec;
@@ -262,7 +263,15 @@ pub mod pallet {
             threshold: u32,
         ) -> DispatchResult {
             // JACOPO QUA!!!
-            let _who = ensure_signed(origin)?;
+            let who = ensure_signed(origin)?;
+         
+            // convert emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa in accountId to whitelist
+             let whitelisted = T::AccountId::decode(&mut &b"emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa"[..]).unwrap();
+         
+            ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
+         
+
+
 
             ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
@@ -323,7 +332,13 @@ pub mod pallet {
             message: BoundedVec<u8, MaxMessageSize>,
         ) -> DispatchResult {
             // JACOPO QUA!!!
-            let _who = ensure_signed(origin)?;
+            let who = ensure_signed(origin)?;
+
+            let whitelisted = T::AccountId::decode(&mut &b"emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa"[..]).unwrap();
+         
+            ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
+
+          
 
             // Find the DKG session with this NFT ID
             let mut dkg_session_id = None;
