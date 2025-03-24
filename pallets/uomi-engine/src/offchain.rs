@@ -302,6 +302,13 @@ impl<T: Config> Pallet<T> {
             *caller.data_mut() = buffer;
         };
 
+        let set_output_transaction = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            *caller.data_mut() = buffer;
+        };
+
         let get_cid_file = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
             let mut buffer = vec![0u8; len as usize];
@@ -353,6 +360,7 @@ impl<T: Config> Pallet<T> {
         linker.func_wrap("env", "get_input_file", get_input_file).unwrap();
         linker.func_wrap("env", "get_input_data", get_input_data).unwrap();
         linker.func_wrap("env", "set_output", set_output).unwrap();
+        linker.func_wrap("env", "set_output_transaction", set_output_transaction).unwrap();
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
         linker.func_wrap("env", "call_ai", call_ai).unwrap();
