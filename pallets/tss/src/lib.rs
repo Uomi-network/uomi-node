@@ -350,6 +350,9 @@ pub mod pallet {
                 Error::<T>::UnauthorizedParticipation
             );
 
+            ensure!(!AggregatedPublicKeys::<T>::contains_key(session_id), Error::<T>::AggregatedKeyAlreadySubmitted);
+            ensure!(session.state == SessionState::DKGCreated, Error::<T>::InvalidSessionState);
+
             // Store aggregated key
             AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
             session.state = SessionState::DKGComplete;
@@ -430,12 +433,7 @@ pub mod pallet {
             // Create new reshare DKG session
             let session = DKGSession {
                 nft_id,
-                participants: BoundedVec::try_from(
-                    pallet_staking::Validators::<T>::iter()
-                        .map(|(account_id, _)| account_id)
-                        .collect::<Vec<T::AccountId>>(),
-                )
-                .unwrap(),
+                participants: Self::active_validators(),
                 threshold,
                 state: SessionState::DKGCreated,
                 old_participants: Some(old_participants),

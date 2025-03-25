@@ -860,3 +860,136 @@ fn test_fetch_nodes_outputs_from_uomi_engine_valid_json() {
     });
 
 }
+
+#[test]
+fn test_session_expired_after_update() {
+    new_test_ext().execute_with(|| {
+        // Create a DKG session first
+        let session_id = TestingPallet::next_session_id();
+
+        // Add some validators:
+        let validator1 = create_test_account(Some([1u8; 32]));
+        let validator2 = create_test_account(Some([2u8; 32]));        
+        let validator3 = create_test_account(Some([3u8; 32]));
+
+        assert_ok!(TestingPallet::update_validators(RuntimeOrigin::none(), UpdateValidatorsPayload { 
+            validators: vec![validator1, validator2, validator3], public: create_test_account(None) }, 
+            Signature::from_raw([0; 64])
+        ));
+
+        // Create the DKG
+        assert_ok!(TestingPallet::create_dkg_session(
+            RuntimeOrigin::signed(create_test_account(None)),
+            vec![1].try_into().unwrap(),
+            60
+        ));
+
+        // Check that the session was created
+        assert!(TestingPallet::get_dkg_session(session_id).is_some());
+
+        // Submit the DKG result
+        let aggregated_key = [1u8; 32];
+        let submitter = create_test_account(Some([1u8; 32]));
+        let mut session = TestingPallet::get_dkg_session(session_id).unwrap();
+        session.participants.try_push(submitter.clone()).unwrap();
+        DkgSessions::<Test>::insert(session_id, session);
+
+        assert_ok!(TestingPallet::submit_dkg_result(
+            RuntimeOrigin::signed(submitter.clone()),
+            session_id,
+            BoundedVec::truncate_from(aggregated_key.to_vec())
+        ));
+
+        // Check that the session state was updated
+        let updated_session = TestingPallet::get_dkg_session(session_id).unwrap();
+        assert_eq!(updated_session.state, pallet::SessionState::DKGComplete);
+
+        let validator4 = create_test_account(Some([4u8; 32]));
+        
+        // Set the new validators array:
+        assert_ok!(TestingPallet::update_validators(RuntimeOrigin::none(), UpdateValidatorsPayload { 
+            validators: vec![validator1, validator2, validator3, validator4], public: create_test_account(None) }, 
+            Signature::from_raw([0; 64])
+        ));
+
+
+
+        // Create a new DKG session
+        let new_session_id = TestingPallet::next_session_id();
+        assert_ok!(TestingPallet::create_reshare_dkg_session(
+            RuntimeOrigin::signed(create_test_account(None)),
+            vec![1].try_into().unwrap(),
+            60,
+            BoundedVec::truncate_from(vec![validator1, validator2, validator3])
+        ));
+
+        // Check that the new session was created
+        assert!(TestingPallet::get_dkg_session(new_session_id).is_some());
+
+        // Submit the DKG Result
+        let aggregated_key = [1u8; 32];
+        
+        assert_ok!(TestingPallet::submit_dkg_result(
+            RuntimeOrigin::signed(submitter.clone()),
+            new_session_id,
+            BoundedVec::truncate_from(aggregated_key.to_vec())
+        ));
+
+        // Check that the old session is now expired
+        let old_session = TestingPallet::get_dkg_session(session_id).unwrap();
+        assert_eq!(old_session.state, SessionState::DKGExpired);
+    });
+}
+
+#[test]
+fn test_error_submit_dkg_result_twice() {
+    new_test_ext().execute_with(|| {
+        // Create a DKG session first
+        let session_id = TestingPallet::next_session_id();
+
+        // Add some validators:
+        let validator1 = create_test_account(Some([1u8; 32]));
+        let validator2 = create_test_account(Some([2u8; 32]));        
+        let validator3 = create_test_account(Some([3u8; 32]));
+
+        assert_ok!(TestingPallet::update_validators(RuntimeOrigin::none(), UpdateValidatorsPayload { 
+            validators: vec![validator1, validator2, validator3], public: create_test_account(None) }, 
+            Signature::from_raw([0; 64])
+        ));
+
+        // Create the DKG
+        assert_ok!(TestingPallet::create_dkg_session(
+            RuntimeOrigin::signed(create_test_account(None)),
+            vec![1].try_into().unwrap(),
+            60
+        ));
+
+        // Check that the session was created
+        assert!(TestingPallet::get_dkg_session(session_id).is_some());
+
+        let aggregated_key = [1u8; 32];
+
+        // Submit the DKG result
+        assert_ok!(TestingPallet::submit_dkg_result(
+            RuntimeOrigin::signed(validator1.clone()),
+            session_id,
+            BoundedVec::truncate_from(aggregated_key.to_vec())
+        ));
+
+        // Check that the session state was updated
+        let updated_session = TestingPallet::get_dkg_session(session_id).unwrap();
+        assert_eq!(updated_session.state, pallet::SessionState::DKGComplete);
+
+        // Try to submit again
+        assert_eq!(
+            TestingPallet::submit_dkg_result(
+                RuntimeOrigin::signed(validator1.clone()),
+                session_id,
+                BoundedVec::truncate_from(aggregated_key.to_vec())
+            ),
+            Err(pallet::Error::<Test>::AggregatedKeyAlreadySubmitted.into())
+        );
+
+        
+    });
+}
