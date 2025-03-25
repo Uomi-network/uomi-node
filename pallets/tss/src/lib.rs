@@ -18,12 +18,14 @@ use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
 use scale_info::TypeInfo;
-use sp_core::crypto::Ss58Codec;
+
+
+use miniserde::{json, Serialize, Deserialize};
 
 pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
-use types::{Key, SessionId};
+use types::SessionId;
 
 const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1950000; // For finney update. remove on turing
 
@@ -96,9 +98,12 @@ pub mod crypto {
 pub mod pallet {
 
     use frame_system::offchain::{AppCrypto, CreateSignedTransaction};
+    use pallet_uomi_engine::NodesOutputs;
+    use sp_core::U256;
     use sp_runtime::traits::Verify;
+    use types::SigningMessage;
 
-    use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
+    use crate::types::{MaxMessageSize, MaxSignRequestsPerBlock, NftId, PublicKey, Signature};
 
     use super::*;
     #[pallet::pallet]
@@ -153,6 +158,7 @@ pub mod pallet {
         DKGCreated,
         DKGInProgress,
         DKGComplete,
+        DKGExpired,
         SigningInProgress,
         SigningComplete,
     }
@@ -173,9 +179,10 @@ pub mod pallet {
     pub struct SigningSession {
         pub dkg_session_id: SessionId,
         pub nft_id: NftId,
-        pub message: BoundedVec<u8, MaxMessageSize>, // Store message to sign
+        pub request_id: U256,
+        pub message: SigningMessage,
         pub state: SessionState,
-        pub aggregated_sig: Option<Signature>, // Store final aggregated signature
+        pub aggregated_sig: Option<Signature>,
     }
 
     #[pallet::storage]
@@ -263,16 +270,8 @@ pub mod pallet {
             threshold: u32,
         ) -> DispatchResult {
             // JACOPO QUA!!!
-            let who = ensure_signed(origin)?;
+            let _who = ensure_signed(origin)?;
          
-            // convert emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa in accountId to whitelist
-             let whitelisted = T::AccountId::decode(&mut &b"emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa"[..]).unwrap();
-         
-            ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
-         
-
-
-
             ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
             // threshold needs to be an integer value between 50 and 100%
@@ -282,12 +281,7 @@ pub mod pallet {
             // Create new DKG session
             let session = DKGSession {
                 nft_id,
-                participants: BoundedVec::try_from(
-                    pallet_staking::Validators::<T>::iter()
-                        .map(|(account_id, _)| account_id)
-                        .collect::<Vec<T::AccountId>>(),
-                )
-                .unwrap(),
+                participants: Self::active_validators(),
                 threshold,
                 state: SessionState::DKGCreated,
                 old_participants: None,
@@ -329,55 +323,13 @@ pub mod pallet {
         pub fn create_signing_session(
             origin: OriginFor<T>,
             nft_id: NftId,
+            request_id: U256,
             message: BoundedVec<u8, MaxMessageSize>,
         ) -> DispatchResult {
             // JACOPO QUA!!!
-            let who = ensure_signed(origin)?;
+            let _who = ensure_signed(origin)?;
 
-            let whitelisted = T::AccountId::decode(&mut &b"emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa"[..]).unwrap();
-         
-            ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
-
-          
-
-            // Find the DKG session with this NFT ID
-            let mut dkg_session_id = None;
-            for (id, session) in DkgSessions::<T>::iter() {
-                if session.nft_id == nft_id {
-                    dkg_session_id = Some(id);
-                    break;
-                }
-            }
-
-            let dkg_session_id = dkg_session_id.ok_or(Error::<T>::DkgSessionNotFound)?;
-
-            // Ensure the DKG session is in the correct state
-            let dkg_session =
-                Self::get_dkg_session(dkg_session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
-            // ensure!(
-            //     dkg_session.state == SessionState::DKGComplete,
-            //     Error::<T>::DkgSessionNotReady
-            // );
-
-            // Create new Signing session
-            let session = SigningSession {
-                dkg_session_id,
-                nft_id,
-                message,
-                aggregated_sig: None,
-                state: SessionState::SigningInProgress,
-            };
-
-            // Generate session ID
-            let session_id = Self::get_next_session_id();
-
-            // Store the session
-            SigningSessions::<T>::insert(session_id, session);
-
-            // Emit event with both session IDs
-            Self::deposit_event(Event::SigningSessionCreated(session_id, dkg_session_id));
-
-            Ok(())
+            handle_create_signing_session::<T>(nft_id, request_id, BoundedVec::try_from(message).unwrap())
         }
 
         #[pallet::call_index(3)]
@@ -387,26 +339,43 @@ pub mod pallet {
             session_id: SessionId,
             aggregated_key: PublicKey,
         ) -> DispatchResult {
-            // let who = ensure_signed(origin)?;
+            let who = ensure_signed(origin)?;
 
-            // let mut session =
-            //     DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+            let mut session =
+                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
-            // // Verify submitter was part of DKG session
-            // ensure!(
-            //     session.participants.contains(&who),
-            //     Error::<T>::UnauthorizedParticipation
-            // );
+            // Verify submitter was part of DKG session
+            ensure!(
+                session.participants.contains(&who),
+                Error::<T>::UnauthorizedParticipation
+            );
 
-            // // Store aggregated key
-            // AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
-            // session.state = SessionState::DKGComplete;
-            // DkgSessions::<T>::insert(session_id, session);
+            // Store aggregated key
+            AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
+            session.state = SessionState::DKGComplete;
 
-            // // Update TSS key if this is the latest session.
-            // TSSKey::<T>::put(aggregated_key.clone());
+            // Find the current DKG Sessions for this NFT ID
+            let sessions = DkgSessions::<T>::iter()
+                .filter(|(_, s)| s.nft_id == session.nft_id)
+                .collect::<Vec<_>>();
 
-            // Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+            // And set them as Expired
+            for (id, _) in sessions {
+                if id != session_id {
+                    DkgSessions::<T>::mutate_exists(id, |s| {
+                        if let Some(s) = s {
+                            s.state = SessionState::DKGExpired;
+                        }
+                    });
+                }
+            }
+
+            DkgSessions::<T>::insert(session_id, session);
+
+            // Update TSS key if this is the latest session.
+            TSSKey::<T>::put(aggregated_key.clone());
+
+            Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
             Ok(())
         }
 
@@ -417,28 +386,28 @@ pub mod pallet {
             session_id: SessionId,
             signature: Signature,
         ) -> DispatchResult {
-            // let _who = ensure_signed(origin)?; // Could add participant check
+            let _who = ensure_signed(origin)?; // Could add participant check
 
-            // let mut session =
-            //     SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
+            let mut session =
+                SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
 
-            // ensure!(
-            //     session.state == SessionState::SigningInProgress,
-            //     Error::<T>::InvalidSessionState
-            // );
+            ensure!(
+                session.state == SessionState::SigningInProgress,
+                Error::<T>::InvalidSessionState
+            );
 
-            // // Verify signature against stored message and TSS key
-            // let public_key = TSSKey::<T>::get();
-            // ensure!(
-            //     verify_signature::<T>(&public_key, &session.message, &signature),
-            //     Error::<T>::InvalidSignature
-            // );
+            // Verify signature against stored message and TSS key
+            let public_key = TSSKey::<T>::get();
+            ensure!(
+                verify_signature::<T>(&public_key, &session.message, &signature),
+                Error::<T>::InvalidSignature
+            );
 
-            // session.aggregated_sig = Some(signature.clone());
-            // session.state = SessionState::SigningComplete;
-            // SigningSessions::<T>::insert(session_id, session);
+            session.aggregated_sig = Some(signature.clone());
+            session.state = SessionState::SigningComplete;
+            SigningSessions::<T>::insert(session_id, session);
 
-            // Self::deposit_event(Event::SigningCompleted(session_id, signature));
+            Self::deposit_event(Event::SigningCompleted(session_id, signature));
             Ok(())
         }
 
@@ -450,34 +419,34 @@ pub mod pallet {
             threshold: u32,
             old_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
         ) -> DispatchResult {
-            // let _who = ensure_signed(origin)?;
+            let _who = ensure_signed(origin)?;
 
-            // ensure!(threshold > 0, Error::<T>::InvalidThreshold);
+            ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
-            // // threshold needs to be an integer value between 50 and 100%
-            // ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
-            // ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
+            // threshold needs to be an integer value between 50 and 100%
+            ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
+            ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
 
-            // // Create new reshare DKG session
-            // let session = DKGSession {
-            //     nft_id,
-            //     participants: BoundedVec::try_from(
-            //         pallet_staking::Validators::<T>::iter()
-            //             .map(|(account_id, _)| account_id)
-            //             .collect::<Vec<T::AccountId>>(),
-            //     )
-            //     .unwrap(),
-            //     threshold,
-            //     state: SessionState::DKGCreated,
-            //     old_participants: Some(old_participants),
-            // };
+            // Create new reshare DKG session
+            let session = DKGSession {
+                nft_id,
+                participants: BoundedVec::try_from(
+                    pallet_staking::Validators::<T>::iter()
+                        .map(|(account_id, _)| account_id)
+                        .collect::<Vec<T::AccountId>>(),
+                )
+                .unwrap(),
+                threshold,
+                state: SessionState::DKGCreated,
+                old_participants: Some(old_participants),
+            };
 
-            // // Generate random session ID
-            // let session_id = Self::get_next_session_id();
+            // Generate random session ID
+            let session_id = Self::get_next_session_id();
 
-            // // Store the session
-            // DkgSessions::<T>::insert(session_id, session);
-            // Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
+            // Store the session
+            DkgSessions::<T>::insert(session_id, session);
+            Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
             Ok(())
         }
     }
@@ -620,6 +589,16 @@ pub mod pallet {
                     NextValidatorId::<T>::put(1);
                 }
 
+                let requests = fetch_nodes_outputs_from_uomi_engine::<T>();
+
+                for (request_id, nft_id, data)  in requests.iter() {
+                    let res = handle_create_signing_session::<T>(nft_id.clone(), request_id.clone(), BoundedVec::try_from(data.clone()).unwrap_or_default());
+                    if res.is_err() {
+                        // todo: what do we do?
+                    }
+                }
+                
+
                 // Return weight for this operation (minimal)
                 T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
             } else {
@@ -688,8 +667,93 @@ pub mod pallet {
             IdToValidator::<T>::get(id)
         }
     }
+
+    pub fn fetch_nodes_outputs_from_uomi_engine<T: Config>() -> BoundedVec<(U256, NftId, SigningMessage), MaxSignRequestsPerBlock> {
+        let mut requests = BoundedVec::<_, MaxSignRequestsPerBlock>::default();
+    
+        for (request_id, _, data) in NodesOutputs::<T>::iter() {
+            // Convert data to a JSON-like structure without using serde_json
+            if let Ok(parsed_data) = parse_json_data(&data) {
+                for value in parsed_data.transactions.iter() {
+                    if let Some(sign_request) = process_transaction::<T>(value, &request_id) {
+                        // Try to push, ignore if full
+                        let _ = requests.try_push(sign_request);
+                        if requests.is_full() {
+                            break;
+                        }
+                    }
+                }            
+            }
+        }
+        
+        requests
+    }
+
+    fn handle_create_signing_session<T: Config>(nft_id: NftId, request_id: U256, message:SigningMessage) -> DispatchResult {
+        // Find the DKG session with this NFT ID
+        let mut dkg_session_id = None;
+        for (id, session) in DkgSessions::<T>::iter() {
+            if session.nft_id == nft_id && session.state == SessionState::DKGComplete {
+                dkg_session_id = Some(id);
+                break;
+            }
+        }
+
+        let dkg_session_id = dkg_session_id.ok_or(Error::<T>::DkgSessionNotFound)?;
+
+        // Create new Signing session
+        let session = SigningSession {
+            dkg_session_id,
+            nft_id,
+            request_id,
+            message,
+            aggregated_sig: None,
+            state: SessionState::SigningInProgress,
+        };
+
+        // Generate session ID
+        let session_id = Pallet::<T>::get_next_session_id();
+
+        // Store the session
+        SigningSessions::<T>::insert(session_id, session);
+
+        // Emit event with both session IDs
+        Pallet::<T>::deposit_event(Event::SigningSessionCreated(session_id, dkg_session_id));
+
+        Ok(())
+    }
+    
+    fn parse_json_data(data: &[u8]) -> Result<AgentOutput, ()> {
+        let out: AgentOutput = json::from_str(String::from_utf8(data.to_vec()).unwrap().as_str()).unwrap_or_default();
+        return Ok(out);
+    }
+    
+    // Helper function to process individual Transactions
+    fn process_transaction<T: Config>(
+        value: &Transaction,
+        request_id: &U256, 
+    ) -> Option<(U256, NftId, SigningMessage)> {
+        Some((*request_id, BoundedVec::try_from(value.nft_id.clone()).unwrap_or_default(), BoundedVec::try_from(value.data.clone()).unwrap_or_default()))
+    }
+
+}
+#[derive(PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Debug)]
+enum Chain {
+    None,
+    Ethereum
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct Transaction {
+    chain_id: Chain,
+    is_transaction: bool,
+    data: Vec<u8>,
+    nft_id: Vec<u8>
 }
 
+#[derive(Deserialize, Debug, Default, Serialize)]
+struct AgentOutput {
+    pub(crate) transactions: Vec<Transaction>
+}
 
 sp_api::decl_runtime_apis! {
     pub trait TssApi {

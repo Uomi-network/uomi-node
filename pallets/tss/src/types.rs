@@ -8,6 +8,7 @@ const MAX_SIGNATURE_SIZE: u32 = 65;
 const MAX_NUMBER_OF_SHARES: u32 = 65_536;
 const MAX_MESSAGE_SIZE: u32 = 4096; // 4 KB
 const MAX_CID_SIZE: u32 = 59;
+const MAX_SIGN_REQUESTS_PER_BLOCK: u32 = 4096;
 
 parameter_types! {
     pub const MaxKeySize: u32 = MAX_KEY_SIZE;
@@ -17,7 +18,7 @@ parameter_types! {
     pub const MaxNumberOfShares: u32 = MAX_NUMBER_OF_SHARES;
     pub const MaxMessageSize: u32 = MAX_MESSAGE_SIZE;
     pub const MaxCidSize: u32 = MAX_CID_SIZE;
-
+    pub const MaxSignRequestsPerBlock: u32 = MAX_SIGN_REQUESTS_PER_BLOCK;
 }
 pub type Key = BoundedVec<u8, MaxKeySize>;
 pub type SessionId = u64;
@@ -27,4 +28,5 @@ pub type Share = BoundedVec<u8, MaxShareSize>;
 pub type PublicKey = BoundedVec<u8, MaxPublicKeySize>;
 pub type Signature = BoundedVec<u8, MaxSignatureSize>;
 pub type NftId = BoundedVec<u8, MaxCidSize>;
+pub type SigningMessage = BoundedVec<u8, MaxMessageSize>;
 

@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
 use crate::{
-    mock::*, pallet, types::MaxNumberOfShares, DkgSessions, UpdateValidatorsPayload,
-    CRYPTO_KEY_TYPE,
+    mock::*, pallet, types::MaxNumberOfShares, AgentOutput, DkgSessions, SessionState, Transaction, UpdateValidatorsPayload, CRYPTO_KEY_TYPE
 };
 use frame_support::{assert_ok, traits::OffchainWorker};
+use miniserde::json;
+use pallet_uomi_engine::NodesOutputs;
 use sp_core::{
     offchain::{
         testing::{TestOffchainExt, TestTransactionPoolExt},
         OffchainDbExt, OffchainWorkerExt, TransactionPoolExt,
     },
     sr25519::{self, Signature},
-    Pair,
+    Pair, U256,
 };
 use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
 use sp_runtime::{BoundedVec, Perbill};
@@ -292,6 +293,11 @@ fn test_submit_dkg_result_errors() {
 #[test]
 fn test_create_signing_session() {
     new_test_ext().execute_with(|| {
+
+        assert_ok!(TestingPallet::update_validators(RuntimeOrigin::none(), UpdateValidatorsPayload { validators: vec![
+            create_test_account(Some([1u8; 32])), 
+            create_test_account(Some([2u8; 32])), 
+            create_test_account(Some([3u8; 32]))], public: create_test_account(Some([4u8; 32])) }, Signature::from_raw([0; 64])));
         // Create a DKG session first
         let dkg_session_id = TestingPallet::next_session_id();
         assert_ok!(TestingPallet::create_dkg_session(
@@ -300,14 +306,23 @@ fn test_create_signing_session() {
             60
         ));
 
+        assert_eq!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().participants.len(),  3);
+        assert_ok!(TestingPallet::submit_dkg_result(
+            RuntimeOrigin::signed(create_test_account(Some([1u8; 32]))),
+            dkg_session_id,
+            BoundedVec::truncate_from(vec![1, 2, 3].to_vec())
+        ));
+
         // Check that the DKG session was created
         assert!(TestingPallet::get_dkg_session(dkg_session_id).is_some());
+        assert_eq!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().state,   SessionState::DKGComplete);
 
         // Create a signing session
         let message = BoundedVec::<u8, _>::try_from(vec![1, 2, 3]).unwrap();
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
             vec![1].try_into().unwrap(),
+            1.into(),
             message.clone()
         ));
 
@@ -346,6 +361,7 @@ fn test_create_signing_session_errors() {
             TestingPallet::create_signing_session(
                 RuntimeOrigin::signed(create_test_account(None)),
                 vec![2].try_into().unwrap(),
+                1.into(),
                 message.clone()
             ),
             Err(pallet::Error::<Test>::DkgSessionNotFound.into())
@@ -388,6 +404,7 @@ fn test_submit_aggregated_signature() {
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
             vec![1].try_into().unwrap(),
+            1.into(),
             message.clone()
         ));
 
@@ -441,6 +458,7 @@ fn test_submit_aggregated_signature_errors() {
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
             vec![1].try_into().unwrap(),
+            1.into(),
             message.clone()
         ));
 
@@ -504,6 +522,7 @@ fn test_signing_session_lifecycle() {
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
             vec![1].try_into().unwrap(),
+            1.into(),
             message.clone()
         ));
 
@@ -796,4 +815,48 @@ fn test_validator_id_assignment_and_retrieval() {
         assert_eq!(retrieved_validator2, validator2);
         assert_eq!(retrieved_validator3, validator3);
     });
+}
+
+#[test]
+fn test_fetch_nodes_outputs_from_uomi_engine_invalid_json() {
+    new_test_ext().execute_with(|| {
+        // store some outputs in NodeOutputs
+        NodesOutputs::<Test>::insert(U256::from(1), create_test_account(None), BoundedVec::truncate_from(b"invalid json string".to_vec()));
+
+        // check that there's one outputs
+        assert_eq!(NodesOutputs::<Test>::iter_keys().count(), 1);
+
+        // run the fetch nodes function to verify that there are zeo transaction with no error for invalid json
+        assert_eq!(crate::pallet::fetch_nodes_outputs_from_uomi_engine::<Test>().len(), 0);
+    });
+}
+
+#[test]
+fn test_fetch_nodes_outputs_from_uomi_engine_valid_json() {
+    new_test_ext().execute_with(|| {
+
+        // Create a mock AgentOutput
+        let out = AgentOutput {
+            transactions: vec![
+                Transaction {
+                    chain_id: crate::Chain::Ethereum,
+                    is_transaction: true,
+                    data: vec![1,2,3,4],
+                    nft_id:vec![1],
+                }
+            ]
+        };
+
+        let str = json::to_string(&out);
+
+        // Store some outputs in NodeOutputs
+        NodesOutputs::<Test>::insert(U256::from(1), create_test_account(None), BoundedVec::truncate_from(str.as_bytes().to_vec()));
+
+        // Check that there's one outputs
+        assert_eq!(NodesOutputs::<Test>::iter_keys().count(), 1);
+
+        // Run the fetch nodes function to verify that there are zeo transaction with no error for invalid json
+        assert_eq!(crate::pallet::fetch_nodes_outputs_from_uomi_engine::<Test>().len(), 1);
+    });
+
 }
