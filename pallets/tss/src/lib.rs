@@ -251,6 +251,7 @@ pub mod pallet {
         StaleDkgSession,
         InvalidSessionState,
         SigningSessionNotFound,
+        DecodingError,
     }
 
     #[pallet::call]
@@ -265,8 +266,15 @@ pub mod pallet {
             // JACOPO QUA!!!
             let who = ensure_signed(origin)?;
          
-            // convert emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa in accountId to whitelist
-             let whitelisted = T::AccountId::decode(&mut &b"emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa"[..]).unwrap();
+            // convert 5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL in accountId to whitelist
+            let raw_bytes = hex::decode("f49d2bc0033b1c3c3ede364a02096a2c05bbba0e39c4e0ea5f9e7d3abf2ba074")
+            .map_err(|_| Error::<T>::DecodingError)?;
+            
+            // Decodifica i bytes in un AccountId
+            let whitelisted = T::AccountId::decode(&mut &raw_bytes[..])
+                .map_err(|_| Error::<T>::DecodingError)?;
+
+
          
             ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
          
@@ -331,10 +339,17 @@ pub mod pallet {
             nft_id: NftId,
             message: BoundedVec<u8, MaxMessageSize>,
         ) -> DispatchResult {
-            // JACOPO QUA!!!
             let who = ensure_signed(origin)?;
 
-            let whitelisted = T::AccountId::decode(&mut &b"emTuud6bwR5tDfDbe8XWAAGuirYBvYJrc4uPUE51Ed3vrZ1oa"[..]).unwrap();
+            // Rimuovi il prefisso "0x" e converte la stringa hex in bytes
+            let raw_bytes = hex::decode("f49d2bc0033b1c3c3ede364a02096a2c05bbba0e39c4e0ea5f9e7d3abf2ba074")
+            .map_err(|_| Error::<T>::DecodingError)?;
+            
+
+            // Decodifica i bytes in un AccountId
+            let whitelisted = T::AccountId::decode(&mut &raw_bytes[..])
+                .map_err(|_| Error::<T>::DecodingError)?;
+    
          
             ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
 
