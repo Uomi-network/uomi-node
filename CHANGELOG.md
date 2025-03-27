@@ -6,7 +6,7 @@
 - feat: Added template for set output transaction function for agents
 - feat: added whitelisted user
 - fix: Changed TEMP_BLOCK_FOR_NEW_OPOC + added block check on TSS
-- fix: Disabled unsecure functions
+- fix: Disabled insecure functions
 - fix: Removed reqwest library
 - Merge pull request #3 from Uomi-network/feat/opocv2
 - Merge pull request #2 from Uomi-network/feature/tss-finney
