@@ -278,7 +278,7 @@ pub mod pallet {
                 // Handle existing submit_processed_pins validation
                 Call::submit_processed_pins { .. } => {
                     // Existing validation for submit_processed_pins
-                    if source == TransactionSource::External && current_block_number < 510000.into() {  // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+                    if source == TransactionSource::External {  // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         log::info!("IPFS: Rejecting submit_processed_pins unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }

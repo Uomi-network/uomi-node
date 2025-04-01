@@ -373,7 +373,7 @@ pub mod pallet {
                 },
                 Call::store_nodes_outputs { .. } => {
                     // Existing validation for store_nodes_outputs
-                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+                    if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         return InvalidTransaction::BadSigner.into()
                     }
 
@@ -386,7 +386,7 @@ pub mod pallet {
                 },
                 Call::store_nodes_versions { .. } => {
                     // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+                    if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         return InvalidTransaction::BadSigner.into()
                     }
     

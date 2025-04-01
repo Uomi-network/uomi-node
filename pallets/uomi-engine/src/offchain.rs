@@ -433,8 +433,7 @@ impl<T: Config> Pallet<T> {
             DispatchError::Other("Invalid UTF-8 in final local name")
         })?;
  
-        let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-        if current_block_number < TEMP_BLOCK_FOR_NEW_OPOC.into() || opoc_level < 1 { // For finney update. remove on turing
+        if opoc_level < 1 { // For finney update. remove on turing
             let body_data = CallAiRequestWithoutProof {
                 model: model.clone(),
                 input: input_data.clone(),
@@ -460,7 +459,7 @@ impl<T: Config> Pallet<T> {
                 DispatchError::Other("Failed to convert output")
             })?;
 
-            if !output_json.proof.is_empty() && current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing {
+            if !output_json.proof.is_empty() { 
                 // Store the inference on OpocL0Inferences
                 let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
                 if !signer.can_sign() {

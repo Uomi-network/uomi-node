@@ -567,69 +567,63 @@ pub mod pallet {
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn offchain_worker(n: BlockNumberFor<T>) {
             let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-            if current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing
-                // Check for new validators every 10 blocks
-                if n % 10u32.into() != 0u32.into() {
+            // Check for new validators every 10 blocks
+            if n % 10u32.into() != 0u32.into() {
+                return;
+            }
+
+            // Get current validators from staking pallet
+            let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
+                .map(|(account_id, _)| account_id)
+                .collect();
+            // Check if there are any new validators that need IDs
+            let mut new_validators = Vec::new();
+            for validator in current_validators.iter() {
+                if !ValidatorIds::<T>::contains_key(validator) {
+                    new_validators.push(validator.clone());
+                }
+            }
+            
+            if !new_validators.is_empty() {
+
+                let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+
+                if !signer.can_sign() {
+                    log::error!("TSS: No accounts available to sign update_validators");
                     return;
                 }
 
-                // Get current validators from staking pallet
-                let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
-                    .map(|(account_id, _)| account_id)
-                    .collect();
-                // Check if there are any new validators that need IDs
-                let mut new_validators = Vec::new();
-                for validator in current_validators.iter() {
-                    if !ValidatorIds::<T>::contains_key(validator) {
-                        new_validators.push(validator.clone());
-                    }
-                }
-                
-                if !new_validators.is_empty() {
+                // Include both existing and new validators in the update
+                let all_validators = current_validators;
 
-                    let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+                // Send unsigned transaction with signed payload
+                let _ = signer.send_unsigned_transaction(
+                    |acct| UpdateValidatorsPayload::<T> {
+                        validators: all_validators.clone(),
+                        public: acct.public.clone(),
+                    },
+                    |payload, signature| Call::update_validators { payload, signature },
+                );
+            }
 
-                    if !signer.can_sign() {
-                        log::error!("TSS: No accounts available to sign update_validators");
-                        return;
-                    }
+            // Rest of your existing offchain worker logic
+            let stored_validators = ActiveValidators::<T>::get();
+            if stored_validators.len() > 0 {
+                return;
+            }
 
-                    // Include both existing and new validators in the update
-                    let all_validators = current_validators;
-
-                    // Send unsigned transaction with signed payload
-                    let _ = signer.send_unsigned_transaction(
-                        |acct| UpdateValidatorsPayload::<T> {
-                            validators: all_validators.clone(),
-                            public: acct.public.clone(),
-                        },
-                        |payload, signature| Call::update_validators { payload, signature },
-                    );
-                }
-
-                // Rest of your existing offchain worker logic
-                let stored_validators = ActiveValidators::<T>::get();
-                if stored_validators.len() > 0 {
-                    return;
-                }
-            }            
         }
 
         // Add on_initialize hook to handle validator initialization
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-            let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-            if current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing
-                // Check if validator IDs have been initialized
-                if NextValidatorId::<T>::get() == 0 {
-                    // Initialize with ID 1
-                    NextValidatorId::<T>::put(1);
-                }
-
-                // Return weight for this operation (minimal)
-                T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
-            } else {
-                T::DbWeight::get().reads(0) + T::DbWeight::get().writes(0)
+            // Check if validator IDs have been initialized
+            if NextValidatorId::<T>::get() == 0 {
+                // Initialize with ID 1
+                NextValidatorId::<T>::put(1);
             }
+
+            // Return weight for this operation (minimal)
+            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
         }
     }
 
