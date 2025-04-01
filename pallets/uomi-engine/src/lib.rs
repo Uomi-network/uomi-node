@@ -34,17 +34,14 @@ use frame_support::{
         DispatchError, DispatchResultWithPostInfo, Hooks, InvalidTransaction, IsType, 
         MaxEncodedLen, Member, RuntimeDebug, StorageDoubleMap, StorageMap, 
         TransactionPriority, TransactionSource, TransactionValidity, ValidTransaction, 
-        ValidateUnsigned, ValueQuery,
+        ValidateUnsigned, ValueQuery, 
     },
     parameter_types,
     storage::types::StorageValue,
     traits::Randomness,
 };
 use frame_system::{
-    ensure_signed,
-    ensure_none,
-    offchain::{AppCrypto, CreateSignedTransaction, Signer},
-    pallet_prelude::{BlockNumberFor, OriginFor},
+    ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
 };
 use pallet_ipfs::{
     self,
@@ -113,6 +110,9 @@ pub mod pallet {
 		type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
+
+
+        
 	}
 
     // Events
@@ -360,8 +360,6 @@ pub mod pallet {
         type Call = Call<T>;
     
         fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-            let current_block_number = frame_system::Pallet::<T>::block_number().into();
-
             match call {
                 Call::set_inherent_data { .. } => {
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -371,7 +369,11 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
-                Call::store_nodes_outputs { .. } => {
+                Call::store_nodes_outputs {  payload, signature } => {
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
+                    }
+
                     // Existing validation for store_nodes_outputs
                     if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         return InvalidTransaction::BadSigner.into()
@@ -384,7 +386,12 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
-                Call::store_nodes_versions { .. } => {
+                Call::store_nodes_versions {  payload, signature  } => {
+
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
+                    }
+
                     // Existing validation for store_nodes_versions
                     if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         return InvalidTransaction::BadSigner.into()
@@ -397,9 +404,14 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
-                Call::store_nodes_opoc_l0_inferences { .. } => {
+                Call::store_nodes_opoc_l0_inferences { payload, signature } => {
+
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
+                    }
+                    
                     // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+                    if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
                         return InvalidTransaction::BadSigner.into()
                     }
 
@@ -849,5 +861,21 @@ impl<T: Config> Pallet<T> {
         data[0..20].copy_from_slice(&address.as_bytes());
         T::AccountId::decode(&mut &data[..])
             .map_err(|_| DispatchError::Other("Failed to decode account"))
+    }
+
+    /// Verify a payload's signature
+    pub fn verify_signature<SP>(
+        public: T::Public, 
+        payload: &SP, 
+        signature: &T::Signature 
+    )-> bool where 
+    SP:SignedPayload<T>,
+     {
+        if Self::address_is_active_validator(&public.into_account()) {
+            // Convert the public key to an account ID before verifying
+            T::UomiAuthorityId::verify(&payload.encode(), payload.public(), signature.clone())
+        } else {
+            false
+        }
     }
 }
