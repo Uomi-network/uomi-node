@@ -143,13 +143,13 @@ impl<T: Config> Pallet<T> {
                             true
                         )
                     {
-                        _ => (),
                         Err(error) => {
                             log::error!(
                                 "Failed to assign request to a random validator for OPoC level 0. error: {:?}",
                                 error
                             );
                         }
+                        _ => (),
                     }
                 }
                 x if x == opoc_assignments_of_level_0 => {
@@ -177,7 +177,6 @@ impl<T: Config> Pallet<T> {
                                 &validator
                             )
                         {
-                            _ => ()
                             Err(error) => {
                                 log::error!(
                                     "Failed to deassign request from validator of OPoC level 0 for timeout. error: {:?}",
@@ -185,6 +184,7 @@ impl<T: Config> Pallet<T> {
                                 );
                                 // NOTE: This case should not happen, but if it does, we need to handle it is some way...
                             }
+                            _ =>(),
                         }
 
                         // Reassign the request to another validator
@@ -200,13 +200,13 @@ impl<T: Config> Pallet<T> {
                                 true
                             )
                         {
-                            _ => ()
                             Err(error) => {
                                 log::error!(
                                     "Failed to assign request to a random validator for OPoC level 0 after timeout. error: {:?}",
                                     error
                                 );
                             }
+                            _ => (),
                         }
 
                         continue;
@@ -224,7 +224,6 @@ impl<T: Config> Pallet<T> {
                             &request_id
                         )
                     {
-                        _ => ()
                         Err(error) => {
                             log::error!(
                                 "Failed to deassign request from validator of OPoC level 0 for completion. error: {:?}",
@@ -232,6 +231,7 @@ impl<T: Config> Pallet<T> {
                             );
                             // NOTE: This case should not happen, but if it does, we need to handle it is some way...
                         }
+                        _ => (),
                     }
 
                     if opoc_assignments_of_level_1 > 1 {
@@ -249,13 +249,13 @@ impl<T: Config> Pallet<T> {
                                 false
                             )
                         {
-                            _ => ()
                             Err(error) => {
                                 log::error!(
                                     "Failed to assign request to random validators for OPoC level 1. error: {:?}",
                                     error
                                 );
                             }
+                            _ => (),
                         }
                     } else {
                         // When we do not require consensus, we can close the request with only one execution
@@ -269,13 +269,13 @@ impl<T: Config> Pallet<T> {
                                 &executions
                             )
                         {
-                            _ => ()
                             Err(error) => {
                                 log::error!(
                                     "Failed to complete request at OPoC level 0. error: {:?}",
                                     error
                                 );
                             }
+                            _ => (),
                         }
                     }
                 }
@@ -298,7 +298,6 @@ impl<T: Config> Pallet<T> {
                                     &validator
                                 )
                             {
-                                _ => () 
                                 Err(error) => {
                                     log::error!(
                                         "Failed to deassign request from validator of OPoC level 1 for timeout. error: {:?}",
@@ -306,6 +305,7 @@ impl<T: Config> Pallet<T> {
                                     );
                                     // NOTE: This case should not happen, but if it does, we need to handle it is some way...
                                 }
+                                _ => (),
                             }
                         }
 
@@ -331,13 +331,13 @@ impl<T: Config> Pallet<T> {
                                 false
                             )
                         {
-                            _ => () 
                             Err(error) => {
                                 log::error!(
                                     "Failed to assign request to random validators for OPoC level 1 after timeout. error: {:?}",
                                     error
                                 );
                             }
+                            _ => (),
                         }
 
                         continue;
@@ -357,7 +357,6 @@ impl<T: Config> Pallet<T> {
                                 &request_id
                             )
                         {
-                            _ => () 
                             Err(error) => {
                                 log::error!(
                                     "Failed to deassign request from validator of OPoC level 1 for completion. error: {:?}",
@@ -365,6 +364,7 @@ impl<T: Config> Pallet<T> {
                                 );
                                 // NOTE: This case should not happen, but if it does, we need to handle it is some way...
                             }
+                            _ => (),
                         }
                     }
 
@@ -384,13 +384,13 @@ impl<T: Config> Pallet<T> {
                                 &output_values_len
                             )
                         {
-                            _ => () 
                             Err(error) => {
                                 log::error!(
                                     "Failed to complete request at OPoC level 1. error: {:?}",
                                     error
                                 );
                             }
+                            _ => (),
                         }
                     } else {
                         let mut validators_to_exclude = Vec::<T::AccountId>::new();
@@ -423,13 +423,13 @@ impl<T: Config> Pallet<T> {
                                 false
                             )
                         {
-                            _ => () 
                             Err(error) => {
                                 log::error!(
                                     "Failed to assign request to all validators for OPoC level 2. error: {:?}",
                                     error
                                 );
                             }
+                            _ => (),
                         }
                     }
                 }
@@ -457,13 +457,13 @@ impl<T: Config> Pallet<T> {
                                     &validator
                                 )
                             {
-                                _ => () 
                                 Err(error) => {
                                     log::error!(
                                         "Failed to deassign request from validator of OPoC level 2 for timeout. error: {:?}",
                                         error
                                     );
                                 }
+                                _ => (),
                             }
                         }
                     }
@@ -496,13 +496,13 @@ impl<T: Config> Pallet<T> {
                                     &validator
                                 )
                             {
-                                _ => () 
                                 Err(error) => {
                                     log::error!(
                                         "Failed to deassign request from validator of OPoC level 2 for invalid output. error: {:?}",
                                         error
                                     );
                                 }
+                                _ => (),
                             }
                         } else {
                             match
@@ -512,13 +512,13 @@ impl<T: Config> Pallet<T> {
                                     &request_id
                                 )
                             {
-                                _ => () 
                                 Err(error) => {
                                     log::error!(
                                         "Failed to deassign request from validator of OPoC level 2 for completion. error: {:?}",
                                         error
                                     );
                                 }
+                                _ => (),
                             }
                         }
                     });
@@ -540,13 +540,13 @@ impl<T: Config> Pallet<T> {
                             &output_consensus_len
                         )
                     {
-                        _ => () 
                         Err(error) => {
                             log::error!(
                                 "Failed to complete request at OPoC level 2. error: {:?}",
                                 error
                             );
                         }
+                        _ => (),
                     }
                 }
                 _ => {
