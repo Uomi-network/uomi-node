@@ -54,11 +54,9 @@ impl<T: Config> Pallet<T> {
     // Offchain worker entry point
     #[cfg(feature = "std")]
     pub fn offchain_run(account_id: &T::AccountId) -> DispatchResult {
-        log::info!("UOMI-ENGINE: Running offchain worker");
 
         // Be sure account is a validator, if not, do nothing
         if !cfg!(test) && !Self::address_is_active_validator(account_id) {
-            log::info!("UOMI-ENGINE: Account is not a validator, skipping this run");
             return Ok(());
         }
 
@@ -80,7 +78,6 @@ impl<T: Config> Pallet<T> {
 
     #[cfg(feature = "std")]
     fn offchain_run_agents(account_id: &T::AccountId) -> DispatchResult {
-        log::info!("UOMI-ENGINE: Running agents");
 
         // Check semaphore to be sure to do nothing if another agent is running
         // SAFETY: This is safe because offchain workers run in their own thread
@@ -92,23 +89,19 @@ impl<T: Config> Pallet<T> {
             Ordering::Relaxed
         ).is_err() {
             // Another worker is already running
-            log::info!("UOMI-ENGINE: Another worker is already running");
             return Ok(());
         }
 
         // Find the request with less expiration block number to execute
         let (request_id, expiration_block_number) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
-            log::info!("UOMI-ENGINE: No requests to run found");
             // Unlock the semaphore
             semaphore.store(false, Ordering::Release);
             return Ok(());
         }
-        log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
 
         // Load request data from Inputs storage
         let (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
-        log::info!("UOMI-ENGINE: Request data loaded with block number: {:?}, nft_id: {:?} and nft_execution_max_time: {:?}", block_number, nft_id, nft_execution_max_time);
 
         // Detect the level of opoc the execution should have
         let opoc_level = Self::offchain_detect_opoc_level(&request_id, &nft_required_consensus);
@@ -127,12 +120,10 @@ impl<T: Config> Pallet<T> {
                 return Ok(());
             },
         };
-        log::info!("UOMI-ENGINE: Wasm loaded with length: {:?}", wasm.len());
 
         // Run the wasm and store the output data
         match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, opoc_level, request_id) {
             Ok(output_data) => {
-                log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
                 // Store the output data
                 Self::offchain_store_output_data(&request_id, &output_data).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
@@ -150,7 +141,6 @@ impl<T: Config> Pallet<T> {
         // Unlock the semaphore
         semaphore.store(false, Ordering::Release);
 
-        log::info!("UOMI-ENGINE: Request {:?} completed", request_id);
         Ok(())
     }
 
@@ -159,19 +149,16 @@ impl<T: Config> Pallet<T> {
         let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
 
         for (request_id, _) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
-            log::info!("Checking request: {:?}", request_id);
 
             // Check if the request is assigned to the validator by checking if the request_id is in the OpocAssignment storage
             let has_opoc_assignment = OpocAssignment::<T>::contains_key(*request_id, &account_id);
             if !has_opoc_assignment {
-                log::info!("Request {:?} is not assigned to the validator", request_id);
                 continue;
             }
 
             // Be sure request is not already managed by checking if the request_id is in the NodesOutputs storage
             let has_node_output = NodesOutputs::<T>::contains_key(*request_id, &account_id);
             if has_node_output {
-                log::info!("Request {:?} is already managed", request_id);
                 continue;
             }
 
@@ -181,7 +168,6 @@ impl<T: Config> Pallet<T> {
             // Add the request_id and expiration_block_number to the opoc_assignment vector
             opoc_assignments.push((*request_id, expiration_block_number));
 
-            log::info!("Request {:?} is assigned to the validator and not already managed", request_id);
         }
 
         // Return zero if no opoc_assignments has been found
@@ -222,7 +208,6 @@ impl<T: Config> Pallet<T> {
 
             return Err(DispatchError::Other("Error loading the wasm from the NFT ID for tests"));
         }
-        log::info!("Loading wasm from NFT ID: {:?}", nft_id);
 
         match T::IpfsPallet::get_file(nft_file_cid) {
             Ok(wasm) => Ok(wasm),

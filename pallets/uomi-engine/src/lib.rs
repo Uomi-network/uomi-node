@@ -374,7 +374,6 @@ pub mod pallet {
                 Call::store_nodes_outputs { .. } => {
                     // Existing validation for store_nodes_outputs
                     if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        log::info!("UOMI-ENGINE: Rejecting store_nodes_outputs unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
 
@@ -388,7 +387,6 @@ pub mod pallet {
                 Call::store_nodes_versions { .. } => {
                     // Existing validation for store_nodes_versions
                     if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        log::info!("UOMI-ENGINE: Rejecting store_nodes_versions unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
     
@@ -402,7 +400,6 @@ pub mod pallet {
                 Call::store_nodes_opoc_l0_inferences { .. } => {
                     // Existing validation for store_nodes_versions
                     if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        log::info!("UOMI-ENGINE: Rejecting store_nodes_opoc_l0_inferences unsigned transaction from external origin");
                         return InvalidTransaction::BadSigner.into()
                     }
 
@@ -414,7 +411,6 @@ pub mod pallet {
                         .build()
                 },
                 _ => {
-                    log::info!("Invalid unsigned call");
                     InvalidTransaction::Call.into()
                 }
             }
@@ -438,7 +434,6 @@ pub mod pallet {
             ),
             aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
 		) -> DispatchResultWithPostInfo {
-            log::info!("UOMI-ENGINE: Inherent data called");
 			ensure_none(origin)?;
             assert!(!InherentDidUpdate::<T>::exists(), "Inherent data must be updated only once in the block");
 			
@@ -446,7 +441,6 @@ pub mod pallet {
             Self::aimodelscalc_store_operations(aimodelscalc_operations)?;
 
 			InherentDidUpdate::<T>::set(true);
-            log::info!("UOMI-ENGINE: Inherent data set");
 			Ok(().into())
 		}
         
@@ -457,11 +451,9 @@ pub mod pallet {
             payload: payloads::PayloadNodesOutputs<T::Public>,
 			_signature: T::Signature
         ) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Storing nodes outputs");
             ensure_none(origin)?;
 
             let payloads::PayloadNodesOutputs { request_id, output_data, public } = payload;
-            log::info!("UOMI-ENGINE: Storing output for request ID: {:?}", request_id);
 
             let public_account_id = public.into_account();
 
@@ -476,7 +468,6 @@ pub mod pallet {
                 return Err("Request ID already exists".into());
             }
 
-            log::info!("UOMI-ENGINE: Stored output for request ID: {:?}", request_id);
             NodesOutputs::<T>::insert(request_id, public_account_id.clone(), output_data.clone());
 
             Self::deposit_event(Event::NodeOutputReceived { request_id, account_id: public_account_id, output_data });
@@ -491,24 +482,19 @@ pub mod pallet {
             payload: payloads::PayloadNodesVersions<T::Public>,
             _signature: T::Signature
         ) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Storing node version onchain");
             ensure_none(origin)?;
             let payloads::PayloadNodesVersions { public, version } = payload;
             let public_account_id = public.into_account();
-            log::info!("UOMI-ENGINE: Storing version for account ID: {:?}", public_account_id);
 
             if !Self::address_is_active_validator(&public_account_id) {
-                log::info!("UOMI-ENGINE: Only validators can call this function");
                 return Err("Only validators can call this function".into());
             }
 
             let current_stored_version = NodesVersions::<T>::get(&public_account_id);
             if current_stored_version == version {
-                log::info!("UOMI-ENGINE: Version already stored");
                 return Err("Version already stored".into());
             }
 
-            log::info!("UOMI-ENGINE: Stored version: {:?}", version);
             NodesVersions::<T>::set(public_account_id.clone(), version);
 
             Self::deposit_event(Event::NodeVersionReceived { account_id: public_account_id, version });
@@ -519,7 +505,6 @@ pub mod pallet {
         #[pallet::call_index(3)]
         #[pallet::weight(0)]
         pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-            log::info!("UOMI-ENGINE: Cleaning up inputs");
             let _ = ensure_signed(origin)?;
             
             // remove all data on Inputs storage
@@ -545,14 +530,11 @@ pub mod pallet {
             payload: payloads::PayloadNodesOpocL0Inferences<T::Public>,
             _signature: T::Signature
         ) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Storing opoc l0 inferences onchain");
             ensure_none(origin)?;
             let payloads::PayloadNodesOpocL0Inferences { public, request_id, inference_index, inference_proof } = payload;
             let public_account_id = public.into_account();
-            log::info!("UOMI-ENGINE: Storing version for account ID: {:?}", public_account_id);
 
             if !Self::address_is_active_validator(&public_account_id) {
-                log::info!("UOMI-ENGINE: Only validators can call this function");
                 return Err("Only validators can call this function".into());
             }
 
@@ -561,11 +543,9 @@ pub mod pallet {
                 NodesOpocL0Inferences::<T>::contains_key(request_id, account_id) && NodesOpocL0Inferences::<T>::get(request_id, account_id).0 == inference_index
             };
             if inference_already_exists(request_id, &public_account_id, inference_index) {
-                log::info!("UOMI-ENGINE: Inference already exists");
                 return Err("Inference already exists".into());
             }
 
-            log::info!("UOMI-ENGINE: Stored inference for request ID: {:?}", request_id);
             NodesOpocL0Inferences::<T>::insert(request_id, public_account_id.clone(), (inference_index, inference_proof.clone()));
 
             Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof });
@@ -583,18 +563,12 @@ pub mod pallet {
     
         fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
-            log::info!("UOMI-ENGINE: Creating inherent data for block number: {:?}", current_block_number);
 
             let opoc_operations = match Self::opoc_run(current_block_number) {
                 Ok(operations) => {
-                    log::info!(
-                        "Successfully ran OPoC at block {:?}", 
-                        current_block_number
-                    );
                     operations
                 },
                 Err(error) => {
-                    log::info!("UOMI-ENGINE: Failed to run OPoC on create_inherent. error: {:?}", error);
                     return None;
                 },
             };
@@ -604,7 +578,6 @@ pub mod pallet {
                     operations
                 },
                 Err(error) => {
-                    log::info!("UOMI-ENGINE: Failed to run AI models calc on create_inherent. error: {:?}", error);
                     return None;
                 },
             };
@@ -618,7 +591,6 @@ pub mod pallet {
         fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
             let expected_block_number = current_block_number + 1;
-            log::info!("UOMI-ENGINE: Checking inherent data for block number: {:?}", expected_block_number);
 
             match call {
                 Call::set_inherent_data { opoc_operations, aimodelscalc_operations } => {
@@ -691,10 +663,6 @@ pub mod pallet {
         
         fn is_inherent(call: &Self::Call) -> bool {
             let is_inherent = matches!(call, Call::set_inherent_data { .. });
-            log::info!(
-                "🔍 is_inherent called, result: {:?}", 
-                is_inherent
-            );
             is_inherent
         }
     }
@@ -781,18 +749,12 @@ impl<T: Config> Pallet<T> {
                 nft_file_cid_expiration_block_number != ExpirationBlockNumber::zero() &&
                 block_number + ipfs_min_expire_duration > nft_file_cid_expiration_block_number
             {
-                log::info!(
-                    "UOMI-ENGINE: NFT file cid {:?} expired before the minimum expiration duration",
-                    nft_file_cid
-                );
                 return Err("NFT file cid expired before the minimum expiration duration.".into());
             }
             if nft_file_cid_usable_from_block_number == UsableFromBlockNumber::zero() {
-                log::info!("UOMI-ENGINE: NFT file cid {:?} not usable yet", nft_file_cid);
                 return Err("NFT file cid not usable yet.".into());
             }
             if nft_file_cid_usable_from_block_number > current_block {
-                log::info!("UOMI-ENGINE: NFT file cid {:?} not usable yet", nft_file_cid);
                 return Err("NFT file cid not usable yet.".into());
             }
         }
@@ -806,7 +768,6 @@ impl<T: Config> Pallet<T> {
 
         // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
         if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {
-            log::info!("UOMI-ENGINE: Managed old unsecured mode");
             let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
             let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), U256>::new();
             let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<U256, bool>>::new();
@@ -822,7 +783,6 @@ impl<T: Config> Pallet<T> {
                 true
             ) {
                 Ok(_) => {
-                    log::info!("UOMI-ENGINE: Request assigned to a random validator for OPoC level 0 on run_request");
                     Self::opoc_store_operations((
                         opoc_blacklist_operations,
                         opoc_assignment_operations,
@@ -842,7 +802,6 @@ impl<T: Config> Pallet<T> {
         // Emit the RequestAccepted event
         Self::deposit_event(Event::RequestAccepted { request_id, address, nft_id });
 
-        log::info!("UOMI-ENGINE: Accepted request with ID on run_request: {:?}", request_id);
         Ok(())
     }
 

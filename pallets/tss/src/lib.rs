@@ -519,12 +519,10 @@ pub mod pallet {
 
     //     fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
     //         let current_block_number = frame_system::Pallet::<T>::block_number().into();
-    // //         log::info!("IPFS: Creating inherent data for block number: {:?}", current_block_number);
 
     //         let operations = match Self::ipfs_operations(current_block_number) {
     //             Ok(operations) => { operations }
     //             Err(error) => {
-    // //                 log::info!("IPFS: Failed to run ipfs_operations. error: {:?}", error);
     //                 return None;
     //             }
     //         };
@@ -545,7 +543,6 @@ pub mod pallet {
         type Call = Call<T>;
 
         fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-            // log::info!("[TSS] Validating unsigned");
             match call {
                 // Handle inherent extrinsics
                 Call::update_validators { .. } => {
@@ -589,10 +586,6 @@ pub mod pallet {
                 }
                 
                 if !new_validators.is_empty() {
-                    log::info!(
-                        "[TSS] Found {} new validators that need IDs",
-                        new_validators.len()
-                    );
 
                     let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
 
@@ -619,9 +612,6 @@ pub mod pallet {
                 if stored_validators.len() > 0 {
                     return;
                 }
-
-                // If no active validators are set, initialize them
-                log::info!("[TSS] Setting new validators at block {:?}", n);
             }            
         }
 
@@ -687,7 +677,6 @@ pub mod pallet {
             NextValidatorId::<T>::put(next_id + 1);
 
             // Emit event, maybe the client can use it?
-            log::info!("[TSS] Validator ID assigned: {:?}", validator);
             Self::deposit_event(Event::ValidatorIdAssigned(validator, next_id));
 
             Ok(())
