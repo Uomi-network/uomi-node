@@ -45,6 +45,7 @@ struct CallAiResponseCleaned {
     response: String,
 }
 
+
 impl<T: Config> Pallet<T> {
     pub fn semaphore_status() -> bool {
         unsafe { SEMAPHORE.load(Ordering::Relaxed) }
