@@ -7,7 +7,6 @@ use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
     consts::MAX_INPUTS_MANAGED_PER_BLOCK,
-    consts::TEMP_BLOCK_FOR_NEW_OPOC,
     ipfs::IpfsInterface,
     types::{ BlockNumber, Data, RequestId },
     Config,
