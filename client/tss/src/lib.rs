@@ -2989,7 +2989,7 @@ where
                                                 n,
                                                 participants,
                                                 coordinator,
-                                                message.concat()
+                                                message
                                             ),
                                         ) {
                                             log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);

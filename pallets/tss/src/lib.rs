@@ -696,7 +696,7 @@ sp_api::decl_runtime_apis! {
         fn get_dkg_session_participant_index(id: SessionId, account_id: [u8; 32]) -> u32;
         fn get_dkg_session_participants_count(id: SessionId) -> u16;
         fn get_dkg_session_old_participants(id: SessionId) -> Vec<[u8; 32]>;
-        fn get_signing_session_message(id: SessionId) -> Vec<[u8; 32]>;
+        fn get_signing_session_message(id: SessionId) -> Vec<u8>;
 
         fn get_validator_id(account_id: [u8; 32]) -> Option<u32>;
         fn get_validator_by_id(id: u32) -> Option<[u8; 32]>;

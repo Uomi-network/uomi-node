@@ -2580,8 +2580,11 @@ impl_runtime_apis! {
             }  
             return Vec::new();
         }
-        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
-            Vec::new()
+        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<u8> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_signing_session(session_id) {
+                return session.message.to_vec();
+            }
+            return Vec::new();
         }
         fn get_dkg_session_old_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
             if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
