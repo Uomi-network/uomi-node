@@ -24,6 +24,8 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+use pallet_staking::EraPayout;
+use parity_scale_codec::alloc::string::ToString;
 use sp_runtime::SaturatedConversion;
 use sp_runtime::{DispatchError, DispatchResult};
 use pallet_ipfs::types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber};
@@ -70,8 +72,8 @@ use parity_scale_codec::{Compact, Decode, Encode, MaxEncodedLen};
 use sp_api::impl_runtime_apis;
 use sp_core::{crypto::KeyTypeId, ConstBool, OpaqueMetadata, H160, H256, U256};
 use sp_runtime::{
-    curve::PiecewiseLinear,
     create_runtime_str, generic, impl_opaque_keys,
+    print,
     traits::{
         AccountIdConversion, AccountIdLookup, BlakeTwo256, Block as BlockT, ConvertInto,
         DispatchInfoOf, Dispatchable, IdentityLookup, NumberFor, PostDispatchInfoOf,
@@ -694,21 +696,10 @@ impl pallet_election_provider_multi_phase::BenchmarkingConfig for ElectionProvid
 }
 
 
-// staking
-pallet_staking_reward_curve::build! {
-    const REWARD_CURVE: PiecewiseLinear<'static> = curve!(
-        min_inflation: 0_025_000,
-        max_inflation: 0_100_000,
-        ideal_stake: 0_500_000,
-        falloff: 0_050_000,
-        max_piece_count: 40,
-        test_precision: 0_005_000,
-    );
-}
+
 
 parameter_types! {
     pub const SessionsPerEra: sp_staking::SessionIndex = 6;
-    pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
     pub const MaxNominators: u32 = <NposSolution16 as frame_election_provider_support::NposSolution>::LIMIT as u32;
     pub const OffendingValidatorsThreshold: Perbill = Perbill::from_percent(17);
     pub const BondingDuration: sp_staking::EraIndex = 6;
@@ -738,7 +729,7 @@ impl pallet_staking::Config for Runtime {
     type SlashDeferDuration = ConstU32<28>;
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
     type SessionInterface = Self;
-    type EraPayout = pallet_staking::ConvertCurve<RewardCurve>;
+    type EraPayout = UOMIEraPayout;
     type NextNewSession = Session;
     type MaxExposurePageSize = ConstU32<1000>; // O un altro valore appropriato
     type VoterList = VoterList;
@@ -2622,6 +2613,62 @@ impl_runtime_apis! {
             pallet_tss::pallet::ValidatorIds::<Runtime>::iter()
                 .map(|(account, id)| (id, account.into()))
                 .collect()
+        }
+    }
+}
+
+
+pub struct UOMIEraPayout {}
+
+impl EraPayout<Balance> for UOMIEraPayout {
+    fn era_payout(
+        _total_staked: Balance,
+        total_issuance: Balance,
+        era_duration_millis: u64,
+    ) -> (Balance, Balance) {
+        print("[UOMIEraPayout]");
+        print(total_issuance.to_string().as_str());
+        print(era_duration_millis.to_string().as_str());
+        // learn where are we, to detect payout
+
+        let halving_period = 3; // Years before halving
+        
+        let year_zero: Balance = 4919219238u128.into();
+        let base_issuance_per_three_year: Balance = (2682750000u128 * halving_period).into();
+        let factor = 2;
+
+        let days_in_one_year = 365;
+        let seconds_in_one_day = 86400;
+        let millis = 1000;
+
+        let millis_in_a_year:u64 = days_in_one_year * seconds_in_one_day * millis;
+        let eras_in_a_year:u128 = (millis_in_a_year/era_duration_millis).into();
+        
+
+        let mut current_year = None;
+        let mut curr_issuance = base_issuance_per_three_year;
+
+        let mut _curr = year_zero;
+
+
+        for i in 1..=10 {
+            if _curr + curr_issuance > total_issuance {
+                current_year = Some(i);
+                break;
+            } else {
+                _curr += curr_issuance;
+                curr_issuance /= factor;
+            }
+            
+        }
+
+        if current_year.is_none() {
+            print("[UOMIEraPayout] Returning (0, 0)");
+            (0u128.into(), 0u128.into())
+        } else {
+            print("[UOMIEraPayout] Returning ");
+            print(current_year.unwrap().to_string().as_str());
+            ((curr_issuance/halving_period/eras_in_a_year * UOMI).into(), (curr_issuance/halving_period/eras_in_a_year * UOMI).into())
         }
     }
 }
