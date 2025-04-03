@@ -559,13 +559,7 @@ pub mod pallet {
 
             Ok(())
         }
-
-        #[pallet::call_index(5)]
-        #[pallet::weight(0)]
-        pub fn temporary_function(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-            let _ = ensure_none(origin)?;
-            Ok(())
-        }
+       
 
         #[pallet::call_index(5)]
         #[pallet::weight(0)]

@@ -36,7 +36,6 @@ use std::{
     collections::BTreeMap,marker::PhantomData, sync::Arc, time::Duration,
 };
 use tss::{get_config, setup_gossip};
-use ipfs_manager::IpfsManager;
 
 
 #[cfg(not(feature = "manual-seal"))]
