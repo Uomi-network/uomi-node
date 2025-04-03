@@ -32,6 +32,7 @@ sc-consensus-grandpa-rpc = { workspace = true }
 sc-consensus-babe-rpc = { workspace = true }
 url = { workspace = true }
 thiserror = { workspace = true }
+reqwest = { version = "0.12.12", features = ["blocking", "json"] }
 rand = "0.8"
 
 # primitives

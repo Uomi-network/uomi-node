@@ -9,8 +9,8 @@ mod mock;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-mod consts;
-mod types;
+pub mod consts;
+pub mod types;
 mod payloads;
 mod offchain;
 mod opoc;
@@ -255,12 +255,13 @@ pub mod pallet {
         RequestId, // request_id
         (
             BlockNumber, // block_number
+            H160, // address
             NftId, // nft_id
             U256, // nft_required_consensus
             U256, // nft_execution_max_time
             Cid, // nft_file_cid
             Data, // input_data
-            Cid, // input_file_cidx
+            Cid, // input_file_cid
         ),
         ValueQuery
 	>;
@@ -300,6 +301,16 @@ pub mod pallet {
         BlockNumber, // expiration_block_number
         ValueQuery
 	>;
+
+    // Chilling storage is used to store the validators sets in chilling mode.
+    #[pallet::storage]
+    pub type Chilling<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId, // account_id
+        bool, // is_chilling
+        ValueQuery
+    >;
 
     // AIModels storage is used to store the AI models and their versions.
     #[pallet::storage]
@@ -516,7 +527,28 @@ pub mod pallet {
 
         #[pallet::call_index(3)]
         #[pallet::weight(0)]
-        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+        pub fn set_chilling(origin: OriginFor<T>, value: bool) -> DispatchResult {
+            let account_id = ensure_signed(origin)?;
+
+            // check if account_id is a validator
+            if !Self::address_is_active_validator(&account_id) {
+                return Err("Only validators can call this function".into());
+            }
+
+            // set chilling value
+            if value {
+                Chilling::<T>::insert(account_id, true);
+            } else {
+                Chilling::<T>::remove(account_id);
+            }
+
+            Ok(())
+        }
+
+        #[pallet::call_index(4)]
+        #[pallet::weight(0)]
+        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult {
+            log::info!("UOMI-ENGINE: Cleaning up inputs");
             let _ = ensure_signed(origin)?;
             
             // remove all data on Inputs storage
@@ -528,7 +560,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(4)]
+        #[pallet::call_index(5)]
         #[pallet::weight(0)]
         pub fn temporary_function(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
             let _ = ensure_none(origin)?;
@@ -606,66 +638,66 @@ pub mod pallet {
 
             match call {
                 Call::set_inherent_data { opoc_operations, aimodelscalc_operations } => {
-                    // let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
-                    //     Ok(opoc_operations) => {
-                    //         opoc_operations
-                    //     },
-                    //     Err(error) => {
-                    //         log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
-                    //         return Err(InherentError::InvalidInherentValue);
-                    //     },
-                    // };
-                    // let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, nodes_timeouts_operations, outputs_operations, nodes_errors_operations) = opoc_operations;
-                    // let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_nodes_timeouts_operations, expected_outputs_operations, expected_nodes_errors_operations) = expected_opoc_operations;
+                    let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
+                        Ok(opoc_operations) => {
+                            opoc_operations
+                        },
+                        Err(error) => {
+                            log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
+                            return Err(InherentError::InvalidInherentValue);
+                        },
+                    };
+                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, nodes_timeouts_operations, outputs_operations, nodes_errors_operations) = opoc_operations;
+                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_nodes_timeouts_operations, expected_outputs_operations, expected_nodes_errors_operations) = expected_opoc_operations;
                     
-                    // if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
-                    //     log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
-                    //     log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if opoc_assignment_operations != &expected_opoc_assignment_operations {
-                    //     log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
-                    //     log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_works_operations != &expected_nodes_works_operations {
-                    //     log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
-                    //     log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_timeouts_operations != &expected_nodes_timeouts_operations {
-                    //     log::info!("failed check nodes_timeouts_operations: {:?}", nodes_timeouts_operations);
-                    //     log::info!("expected_nodes_timeouts_operations: {:?}", expected_nodes_timeouts_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if outputs_operations != &expected_outputs_operations {
-                    //     log::info!("failed check outputs_operations: {:?}", outputs_operations);
-                    //     log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_errors_operations != &expected_nodes_errors_operations {
-                    //     log::info!("failed check nodes_errors_operations: {:?}", nodes_errors_operations);
-                    //     log::info!("expected_nodes_errors_operations: {:?}", expected_nodes_errors_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
+                    if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
+                        log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
+                        log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if opoc_assignment_operations != &expected_opoc_assignment_operations {
+                        log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
+                        log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_works_operations != &expected_nodes_works_operations {
+                        log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
+                        log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_timeouts_operations != &expected_nodes_timeouts_operations {
+                        log::info!("failed check nodes_timeouts_operations: {:?}", nodes_timeouts_operations);
+                        log::info!("expected_nodes_timeouts_operations: {:?}", expected_nodes_timeouts_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if outputs_operations != &expected_outputs_operations {
+                        log::info!("failed check outputs_operations: {:?}", outputs_operations);
+                        log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_errors_operations != &expected_nodes_errors_operations {
+                        log::info!("failed check nodes_errors_operations: {:?}", nodes_errors_operations);
+                        log::info!("expected_nodes_errors_operations: {:?}", expected_nodes_errors_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
 
-                    // let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
-                    //     Ok(operations) => {
-                    //         operations
-                    //     },
-                    //     Err(error) => {
-                    //         log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
-                    //         return Err(InherentError::InvalidInherentValue);
-                    //     },
-                    // };
+                    let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
+                        Ok(operations) => {
+                            operations
+                        },
+                        Err(error) => {
+                            log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
+                            return Err(InherentError::InvalidInherentValue);
+                        },
+                    };
                     
-                    // if expected_aimodelscalc_operations != *aimodelscalc_operations {
-                    //     log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
-                    //     log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
+                    if expected_aimodelscalc_operations != *aimodelscalc_operations {
+                        log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
+                        log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
 
-                    // log::info!("UOMI-ENGINE: Checking inherent OK");
+                    log::info!("UOMI-ENGINE: Checking inherent OK");
  
                     Ok(())
                 }
@@ -776,7 +808,7 @@ impl<T: Config> Pallet<T> {
         let nft_execution_max_time = min_blocks;
 
         // Store the inputs in the Inputs storage
-        Inputs::<T>::insert(request_id, (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
+        Inputs::<T>::insert(request_id, (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
 
         // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
         if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {

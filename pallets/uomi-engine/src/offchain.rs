@@ -2,7 +2,7 @@ use frame_support::pallet_prelude::{DispatchError, DispatchResult};
 use frame_system::offchain::{SendUnsignedTransaction, Signer};
 use pallet_ipfs::types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber};
 use pallet_ipfs::MinExpireDuration;
-use sp_core::U256;
+use sp_core::{U256, H160};
 use sp_std::{
     vec,
     vec::Vec,
@@ -100,11 +100,10 @@ impl<T: Config> Pallet<T> {
             return Ok(());
         }
 
-        // Load request data from Inputs storage
-        let (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
-
         // Detect the level of opoc the execution should have
         let opoc_level = Self::offchain_detect_opoc_level(&request_id, &nft_required_consensus);
+        let (block_number, address, nft_id, _nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
+        log::info!("UOMI-ENGINE: Request data loaded with block number: {:?}, nft_id: {:?} and nft_execution_max_time: {:?}", block_number, nft_id, nft_execution_max_time);
 
         // Load wasm associated to the request nft_id
         let wasm = match Self::offchain_load_wasm_from_nft_id(&nft_id, &nft_file_cid) {
@@ -122,7 +121,7 @@ impl<T: Config> Pallet<T> {
         };
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, opoc_level, request_id) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_execution_max_time) {
             Ok(output_data) => {
                 // Store the output data
                 Self::offchain_store_output_data(&request_id, &output_data).unwrap_or_else(|e| {
@@ -201,6 +200,10 @@ impl<T: Config> Pallet<T> {
                 let wasm = include_bytes!("./test_agents/agent3.wasm").to_vec();
                 return Ok(wasm);
             }
+            if nft_id == &U256::from(4) { // Agent 4 is a simple agent that read the sender address and return it as output
+                let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
+                return Ok(wasm);
+            }
             if nft_id == &U256::from(1312) { // Agent 1312 is the famous uomi whitepaper chat agent
                 let wasm = include_bytes!("./test_agents/uomi_whitepaper_chat_agent.wasm").to_vec();
                 return Ok(wasm);
@@ -219,9 +222,11 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_execution_max_time: U256) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
+        // Convert address to a Vec<u8>
+        let address_as_vec = address.as_bytes().to_vec();
 
         // Calculate the timeout for the execution of the request
         // The timeout should be calculated as expiration_block_number - start_block
@@ -317,7 +322,13 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
-        let console_log = move |caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
+        let get_request_sender = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(address_as_vec.clone());
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
+        let console_log = move |mut caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
             // Do nothing, function exposed to help wasm debugging
         };
 
@@ -348,6 +359,7 @@ impl<T: Config> Pallet<T> {
         linker.func_wrap("env", "set_output", set_output).unwrap();
         linker.func_wrap("env", "set_output_transaction", set_output_transaction).unwrap();
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
+        linker.func_wrap("env", "get_request_sender", get_request_sender).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
         linker.func_wrap("env", "call_ai", call_ai).unwrap();
 

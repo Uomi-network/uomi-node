@@ -24,9 +24,6 @@
 /// Development node support.
 pub mod local;
 
-///testnet node.
-pub mod finney;
-
 /// uomi mainnet node.
 pub mod uomi;
 

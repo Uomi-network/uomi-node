@@ -21,6 +21,7 @@ use crate::{
     Pallet,
     Event,
     NodesOpocL0Inferences,
+    Chilling
 };
 
 impl<T: Config> Pallet<T> {
@@ -53,6 +54,7 @@ impl<T: Config> Pallet<T> {
             request_id,
             (
                 block_number,
+                _address,
                 _nft_id,
                 nft_required_consensus,
                 _nft_execution_max_time,
@@ -749,11 +751,21 @@ impl<T: Config> Pallet<T> {
         validators_to_exclude: Vec<T::AccountId>
     ) -> Result<Vec<T::AccountId>, DispatchError> {
         let number_usize = number.low_u64() as usize;
-        
+
+        // Take list of chilling validators
+        let validators_chilling: Vec<T::AccountId> = Chilling::<T>::iter().map(|(account_id, chill)| {
+            if chill {
+                Some(account_id)
+            } else {
+                None
+            }
+        }).collect::<Vec<Option<T::AccountId>>>().into_iter().filter_map(|x| x).collect();
+
         // Get active validators excluding specified ones
         let validators: Vec<T::AccountId> = Self::get_active_validators()
             .into_iter()
-            .filter(|account_id| !validators_to_exclude.contains(account_id))
+            .filter(|account_id| !validators_chilling.contains(account_id)) // filter out the chilling validators
+            .filter(|account_id| !validators_to_exclude.contains(account_id)) // filter out the validators to exclude
             .collect();
     
         // Get potential validators based on first_free flag
@@ -1040,6 +1052,7 @@ impl<T: Config> Pallet<T> {
         for request_id in request_ids.iter() {
             let (
                 _block_number,
+                _address,
                 _nft_id,
                 _nft_required_consensus,
                 nft_execution_max_time,
