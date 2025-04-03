@@ -3466,155 +3466,156 @@ where
 {
     let mut rng = rand::thread_rng();
 
-    let validator_key = get_validator_key_from_keystore(&keystore_container);
-
-    if validator_key.is_none() {
-        log::warn!("[TSS] No validator key found in keystore. Starting empty TSS thread.");
-        // Return an empty thread 
-        return Ok(Box::pin(async {
-            loop {
-                sleep(Duration::from_secs(3600));
-            }
-        }));
-    }    
-    
-    let validator_key = validator_key.unwrap().0.to_vec();
-    let validator_key_clone = validator_key.clone();
-    let local_peer_id = network.local_peer_id();
-
-    info!(
-        "[TSS] My Validator key is {:}",
-        AccountId::from_slice(&validator_key_clone)
-            .unwrap()
-            .to_ss58check_with_version(Ss58AddressFormat::custom(87))
-    );
-    
-    // Create announcement message
-    let announcement = if let Some(signature) = sign_announcment(
-        &keystore_container,
-        &validator_key[..],
-        &local_peer_id.to_bytes()[..],
-    ) {
-        let announcement = TssMessage::Announce(
-            rng.gen::<u16>(),
-            local_peer_id.to_bytes(),
-            validator_key.clone(),
-            signature,
-        );
-        Some(announcement)
-    } else {
-        log::warn!("[TSS] Failed to sign announcement message");
-        None
-    };
-
-    let gossip_validator = Arc::new(TssValidator {
-        announcement: announcement.clone(),
-    });
-
-    // Set up communication channels
-    let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
-        sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
-            "gossip_to_session_manager",
-            1024,
-        );
-    let (session_manager_to_gossip_tx, session_manager_to_gossip_rx) =
-        sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
-            "session_manager_to_gossip",
-            1024,
-        );
-    let (runtime_to_session_manager_tx, runtime_to_session_manager_rx) =
-        sc_utils::mpsc::tracing_unbounded::<TSSRuntimeEvent>("runtime_to_session_manager", 1024);
-
-    // Create shared state
-    let sessions_participants = Arc::new(Mutex::new(HashMap::<
-        SessionId,
-        HashMap<Identifier, TSSPublic>,
-    >::new()));
-    let sessions_data = Arc::new(Mutex::new(HashMap::<SessionId, SessionData>::new()));
-    let dkg_session_states = Arc::new(Mutex::new(HashMap::<SessionId, DKGSessionState>::new()));
-    let signing_session_states =
-        Arc::new(Mutex::new(HashMap::<SessionId, SigningSessionState>::new()));
-    let storage = Arc::new(Mutex::new(MemoryStorage::new()));
-    let key_storage = Arc::new(Mutex::new(FileStorage::new()));
-
-    // Set up peer mapping
-    let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants.clone())));
-    {
-        let mut handle = peer_mapper.lock().unwrap();
-        handle.add_peer(local_peer_id.clone(), validator_key.clone());
-    }
-
-    log::info!(
-        "[TSS] Local peer ID: {:?}",
-        local_peer_id.to_base58()
-    );
-    
-    // ===== GossipHandler Setup =====
-    let mut gossip_engine = GossipEngine::new(
-        network.clone(),
-        sync,
-        notification_service,
-        protocol_name.clone(),
-        gossip_validator,
-        None,
-    );
-
-    let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
-    let gossip_handler_message_receiver: Receiver<TopicNotification> =
-        gossip_engine.messages_for(topic);
-
-    let mut gossip_handler = GossipHandler::new(
-        gossip_engine,
-        gossip_to_session_manager_tx,
-        session_manager_to_gossip_rx,
-        peer_mapper.clone(),
-        gossip_handler_message_receiver,
-    );
-
-    // Broadcast initial announcement if available
-    if let Some(a) = announcement {
-        if let Err(e) = gossip_handler.broadcast_message(a) {
-            log::error!("[TSS] Failed to broadcast announcement: {:?}", e);
-        } else {
-            log::info!("[TSS] Announcement broadcasted successfully");
+    let setup_gossip_pin = move || {
+        // Wait until the key is available. This might not be right away, so check every 30s
+        while get_validator_key_from_keystore(&keystore_container).is_none() {
+            log::warn!("[TSS] No validator key found in keystore. Waiting for key");
+            sleep(Duration::from_secs(30));
         }
-    }
+
+        // As soon as the key is ready we can break the loop and we can start the actual thing
+
+        let validator_key = get_validator_key_from_keystore(&keystore_container);
     
-    // ===== RuntimeEventHandler Setup =====
-    let runtime_event_handler =
-        RuntimeEventHandler::<B, C>::new(client.clone(), runtime_to_session_manager_tx);
+        let validator_key = validator_key.unwrap().0.to_vec();
+        let validator_key_clone = validator_key.clone();
+        let local_peer_id = network.local_peer_id();
 
-    // ===== SessionManager Setup =====
-    let mut session_manager = SessionManager::<B>::new(
-        storage.clone(),
-        key_storage.clone(),
-        sessions_participants.clone(),
-        sessions_data.clone(),
-        dkg_session_states.clone(),
-        signing_session_states.clone(),
-        validator_key.clone(),
-        peer_mapper.clone(),
-        gossip_to_session_manager_rx,
-        runtime_to_session_manager_rx,
-        session_manager_to_gossip_tx,
-        local_peer_id.to_bytes(),
-    );
-    
-    // Configure session timeout (default is 1 hour, make it 2 hours for production)
-    session_manager.session_timeout = 7200; // 2 hours in seconds
+        info!(
+            "[TSS] My Validator key is {:}",
+            AccountId::from_slice(&validator_key_clone)
+                .unwrap()
+                .to_ss58check_with_version(Ss58AddressFormat::custom(87))
+        );
+        
+        // Create announcement message
+        let announcement = if let Some(signature) = sign_announcment(
+            &keystore_container,
+            &validator_key[..],
+            &local_peer_id.to_bytes()[..],
+        ) {
+            let announcement = TssMessage::Announce(
+                rng.gen::<u16>(),
+                local_peer_id.to_bytes(),
+                validator_key.clone(),
+                signature,
+            );
+            Some(announcement)
+        } else {
+            log::warn!("[TSS] Failed to sign announcement message");
+            None
+        };
 
-    // ===== Start the components =====
-    let runtime_event_handler_future = runtime_event_handler.run();
-    let session_manager_future = session_manager.run();
+        let gossip_validator = Arc::new(TssValidator {
+            announcement: announcement.clone(),
+        });
 
-    let combined_future = futures::future::join3(
-        runtime_event_handler_future,
-        session_manager_future,
-        gossip_handler,
-    )
-    .map(|_| ());
+        // Set up communication channels
+        let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
+            sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
+                "gossip_to_session_manager",
+                1024,
+            );
+        let (session_manager_to_gossip_tx, session_manager_to_gossip_rx) =
+            sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
+                "session_manager_to_gossip",
+                1024,
+            );
+        let (runtime_to_session_manager_tx, runtime_to_session_manager_rx) =
+            sc_utils::mpsc::tracing_unbounded::<TSSRuntimeEvent>("runtime_to_session_manager", 1024);
 
-    Ok(Box::pin(combined_future))
+        // Create shared state
+        let sessions_participants = Arc::new(Mutex::new(HashMap::<
+            SessionId,
+            HashMap<Identifier, TSSPublic>,
+        >::new()));
+        let sessions_data = Arc::new(Mutex::new(HashMap::<SessionId, SessionData>::new()));
+        let dkg_session_states = Arc::new(Mutex::new(HashMap::<SessionId, DKGSessionState>::new()));
+        let signing_session_states =
+            Arc::new(Mutex::new(HashMap::<SessionId, SigningSessionState>::new()));
+        let storage = Arc::new(Mutex::new(MemoryStorage::new()));
+        let key_storage = Arc::new(Mutex::new(FileStorage::new()));
+
+        // Set up peer mapping
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants.clone())));
+        {
+            let mut handle = peer_mapper.lock().unwrap();
+            handle.add_peer(local_peer_id.clone(), validator_key.clone());
+        }
+
+        log::info!(
+            "[TSS] Local peer ID: {:?}",
+            local_peer_id.to_base58()
+        );
+        
+        // ===== GossipHandler Setup =====
+        let mut gossip_engine = GossipEngine::new(
+            network.clone(),
+            sync,
+            notification_service,
+            protocol_name.clone(),
+            gossip_validator,
+            None,
+        );
+
+        let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
+        let gossip_handler_message_receiver: Receiver<TopicNotification> =
+            gossip_engine.messages_for(topic);
+
+        let mut gossip_handler = GossipHandler::new(
+            gossip_engine,
+            gossip_to_session_manager_tx,
+            session_manager_to_gossip_rx,
+            peer_mapper.clone(),
+            gossip_handler_message_receiver,
+        );
+
+        // Broadcast initial announcement if available
+        if let Some(a) = announcement {
+            if let Err(e) = gossip_handler.broadcast_message(a) {
+                log::error!("[TSS] Failed to broadcast announcement: {:?}", e);
+            } else {
+                log::info!("[TSS] Announcement broadcasted successfully");
+            }
+        }
+        
+        // ===== RuntimeEventHandler Setup =====
+        let runtime_event_handler =
+            RuntimeEventHandler::<B, C>::new(client.clone(), runtime_to_session_manager_tx);
+
+        // ===== SessionManager Setup =====
+        let mut session_manager = SessionManager::<B>::new(
+            storage.clone(),
+            key_storage.clone(),
+            sessions_participants.clone(),
+            sessions_data.clone(),
+            dkg_session_states.clone(),
+            signing_session_states.clone(),
+            validator_key.clone(),
+            peer_mapper.clone(),
+            gossip_to_session_manager_rx,
+            runtime_to_session_manager_rx,
+            session_manager_to_gossip_tx,
+            local_peer_id.to_bytes(),
+        );
+        
+        // Configure session timeout (default is 1 hour, make it 2 hours for production)
+        session_manager.session_timeout = 7200; // 2 hours in seconds
+
+        // ===== Start the components =====
+        let runtime_event_handler_future = runtime_event_handler.run();
+        let session_manager_future = session_manager.run();
+
+        let combined_future = futures::future::join3(
+            runtime_event_handler_future,
+            session_manager_future,
+            gossip_handler,
+        )
+        .map(|_| ());
+
+        combined_future
+    };
+    Ok(Box::pin(setup_gossip_pin()))
 }
 
 pub fn get_active_validators() {}
