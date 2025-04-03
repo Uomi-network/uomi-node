@@ -599,7 +599,7 @@ impl Storage for FileStorage {
 
 /// Gets the base directory from the environment variable or defaults to "data".
 fn get_base_directory() -> PathBuf {
-    env::var("FILE_STORAGE_DIR")
+    env::var("TSS_STORAGE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("key-material"))
 }
