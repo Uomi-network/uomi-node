@@ -75,6 +75,13 @@ pub enum InherentError {
     InvalidInherentValue,
 }
 
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, Default, Copy)]
+pub enum OpocLevel {
+    #[default] Level0,
+    Level1,
+    Level2
+}
+
 // Implementa IsFatalError per il tuo enum
 impl IsFatalError for InherentError {
     fn is_fatal_error(&self) -> bool {
@@ -298,7 +305,7 @@ pub mod pallet {
         RequestId, // request_id
         Blake2_128Concat,
         T::AccountId, // account_id
-        BlockNumber, // expiration_block_number
+        (BlockNumber, OpocLevel), // expiration_block_number
         ValueQuery
 	>;
 
@@ -449,7 +456,7 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			opoc_operations: (
                 BTreeMap<T::AccountId, bool>, 
-                BTreeMap<(RequestId, T::AccountId), BlockNumber>, 
+                BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
                 BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, 
                 BTreeMap<T::AccountId, u32>, 
                 BTreeMap<T::AccountId, u32>, 
@@ -807,7 +814,7 @@ impl<T: Config> Pallet<T> {
         // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
         if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {
             let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
-            let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), U256>::new();
+            let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), (U256, OpocLevel)>::new();
             let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<U256, bool>>::new();
             let current_block = frame_system::Pallet::<T>::block_number().into();
             match Self::opoc_assignment_finney_v1(
