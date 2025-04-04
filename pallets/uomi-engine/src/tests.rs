@@ -1,9 +1,7 @@
 use pallet_ipfs::types::Cid;
 use pallet_ipfs::CidsStatus;
 use crate::{
-    mock::*, Event, Inputs, NodesErrors,
-    NodesOutputs, NodesTimeouts, NodesWorks, OpocAssignment, OpocBlacklist,
-    Outputs, MaxDataSize, InherentDidUpdate, Chilling
+    mock::*, Chilling, Event, InherentDidUpdate, Inputs, MaxDataSize, NodesErrors, NodesOutputs, NodesTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
 };
 use crate::types::{Address, NftId, RequestId};
 use sp_std::vec;
@@ -317,7 +315,7 @@ fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
         // Read semaphore status and be sure is false
@@ -380,7 +378,7 @@ fn test_offchain_worker_ok() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
         // Run the offchain worker
@@ -434,7 +432,7 @@ fn test_offchain_worker_infinite() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
         // Run the offchain worker
@@ -488,7 +486,7 @@ fn test_offchain_worker_not_existing() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(request_id, validator.clone(), U256::from(current_block_number + 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
         // Run the offchain worker
@@ -510,8 +508,10 @@ fn test_offchain_run_wasm_function_with_valid_wasm() {
         let wasm = include_bytes!("./test_agents/agent0.wasm").to_vec();
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
-
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), 
+        U256::from(1),
+        U256::from(99),
+        U256::from(99));
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -531,7 +531,11 @@ fn test_offchain_run_wasm_function_with_infinite_wasm() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(3), U256::from(3));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(3), 
+        U256::from(1),
+        U256::from(3),
+
+        U256::from(3));
         assert!(result.is_err());
 
         // Be sure error message is "WASM execution error"
@@ -551,7 +555,13 @@ fn test_offchain_run_wasm_function_with_call_ai() {
         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), 
+        
+        
+        U256::from(1),
+        U256::from(99),
+
+        U256::from(99));
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -577,7 +587,13 @@ fn test_offchain_run_wasm_function_with_get_file_cid() {
         ));
 
         // Run the offchain_run_wasm function
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(2), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(2), U256::from(99), 
+        
+        
+        U256::from(1),
+        U256::from(99),
+
+        U256::from(99));
         assert!(result.is_ok());
     });
 }
@@ -594,7 +610,11 @@ fn test_offchain_run_wasm_function_with_get_request_sender() {
         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
         // Run the offchain_run_wasm function
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), address, U256::from(2), U256::from(99), U256::from(99));
+        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), address, U256::from(2), U256::from(99),
+        
+        U256::from(1),
+        U256::from(99),
+        U256::from(99));
         assert!(result.is_ok());
 
         // Be sure result is the address
@@ -645,10 +665,12 @@ fn test_inherent_opoc_no_assignment() {
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
         
         // After the execution of the inherent, should exist 1 assignment for the request_id 1 and the validator
-        let opoc_assignment = OpocAssignment::<Test>::get(request_id, validator.clone());
+        let (opoc_assignment, level) = OpocAssignment::<Test>::get(request_id, validator.clone());
         assert_ne!(opoc_assignment, U256::zero());
         // After the execution of the inherent, the opoc assignment should have the expiration block number set to the current block number + the input lifetime
         assert_eq!(opoc_assignment, U256::from(current_block_number + 25));
+        // The level of the opoc should be Level0
+        assert_eq!(level, OpocLevel::Level0);
         // After the execution of the inherent, the NodesWorks storage should contain a record assigned to the validator with the value 1
         let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
         assert_eq!(nodes_works_number, true);
@@ -725,7 +747,7 @@ fn test_inherent_opoc_level_0_no_timeout() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(request_id, validators[0].clone(), U256::from(current_block_number + 1));
+        OpocAssignment::<Test>::insert(request_id, validators[0].clone(), (U256::from(current_block_number + 1), OpocLevel::Level0));
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
         
         let inherent_data = InherentData::new();
@@ -737,8 +759,10 @@ fn test_inherent_opoc_level_0_no_timeout() {
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
         
         // After the execution of the inherent, the OpocAssignment storage should contain 1 assignment for the request_id 1 and the first validator
-        let opoc_assignment = OpocAssignment::<Test>::get(request_id, validators[0].clone());
+        let (opoc_assignment, level) = OpocAssignment::<Test>::get(request_id, validators[0].clone());
         assert_eq!(opoc_assignment, U256::from(current_block_number + 1));
+        // Check that level is 0
+        assert_eq!(level, OpocLevel::Level0);
         // After the execution of the inherent, the NodesWorks storage should contain 1 assignment for the first validator
         let nodes_works_number = NodesWorks::<Test>::get(validators[0].clone(), request_id);
         assert_eq!(nodes_works_number, true);
@@ -780,7 +804,7 @@ fn test_inherent_opoc_level_0_timeout() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), U256::from(current_block_number - 1));
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0));
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
         
         let inherent_data = InherentData::new();
@@ -836,7 +860,7 @@ fn test_inherent_opoc_level_0_completed() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), U256::from(current_block_number - 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
 
         // Insert the output for the first validator
@@ -858,7 +882,7 @@ fn test_inherent_opoc_level_0_completed() {
         assert_eq!(nodes_works_number.len() as u32, nft_required_consensus.as_u32() - 1);
         // All the opoc_assignments except one should have the expiration block number set to the current block number + the input lifetime
         let mut opoc_assignments_with_valid_expirations = 0;
-        for opoc_assignment in opoc_assignments {
+        for (opoc_assignment, _opoc_level) in opoc_assignments {
             if opoc_assignment == U256::from(current_block_number + 25) {
                 opoc_assignments_with_valid_expirations += 1;
             }
@@ -897,7 +921,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), U256::from(current_block_number - 1)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
 
         // Insert the output for the first validator
@@ -963,13 +987,13 @@ fn test_inherent_opoc_level_1_no_timeouts() {
       ));
 
       // Insert an assignment for the first validator
-      OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), U256::from(current_block_number - 1)); 
+      OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
       // Insert the output for the first validator
       NodesOutputs::<Test>::insert(request_id, validators[4].clone(), empty_bounded_vec.clone());
 
       // Insert an assignment for the other 4 validators
       for i in 0..4 {
-          OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), U256::from(current_block_number + 1));
+          OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
           NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
       }
       
@@ -989,7 +1013,7 @@ fn test_inherent_opoc_level_1_no_timeouts() {
       assert_eq!(nodes_works_number.len() as u32, nft_required_consensus.as_u32() - 1);
       // All the opoc_assignments except one should have the expiration block number set to the current block number + 1
       let mut opoc_assignments_with_valid_expirations = 0;
-      for opoc_assignment in opoc_assignments {
+      for (opoc_assignment, _opoc_level) in opoc_assignments {
           if opoc_assignment == U256::from(current_block_number + 1) {
               opoc_assignments_with_valid_expirations += 1;
           }
@@ -1028,17 +1052,17 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), U256::from(current_block_number - 1)); 
+        OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
         // Insert the output for the first validator
         NodesOutputs::<Test>::insert(request_id, validators[4].clone(), empty_bounded_vec.clone());
 
         // Insert an assignment for the expired validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[3].clone(), U256::from(current_block_number - 1));
+        OpocAssignment::<Test>::insert(U256::from(1), validators[3].clone(), (U256::from(current_block_number - 1), OpocLevel::Level1));
         NodesWorks::<Test>::insert(validators[3].clone(), request_id, true);
 
         // Insert an assignment for the other 3 validators
         for i in 0..3 {
-            OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), U256::from(current_block_number + 1));
+            OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
             NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
         }
 
@@ -1059,7 +1083,7 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
         // All the opoc_assignments except one should have the expiration block number set to the current block number + 1
         let mut opoc_assignments_with_valid_expirations = 0;
         let mut opoc_assignment_with_new_expiration = 0;
-        for opoc_assignment in opoc_assignments {
+        for (opoc_assignment, opoc_level) in opoc_assignments {
                 if opoc_assignment == U256::from(current_block_number + 1) {
                     opoc_assignments_with_valid_expirations += 1;
                 }
@@ -1115,13 +1139,13 @@ fn test_inherent_opoc_level_1_completed_valid() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), U256::from(current_block_number - 1)); 
+        OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
         // Insert the output for the first validator
         NodesOutputs::<Test>::insert(request_id, validators[4].clone(), bounded_vec.clone());
 
         // Insert an assignment and an output for the other 4 validators
         for i in 0..4 {
-            OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), U256::from(current_block_number + 1));
+            OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
             NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
             NodesOutputs::<Test>::insert(request_id, validators[i].clone(), bounded_vec.clone());
         }
@@ -1188,18 +1212,18 @@ fn test_inherent_opoc_level_1_completed_invalid() {
     ));
 
     // Insert an assignment for the first validator
-    OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), U256::from(current_block_number - 1)); 
+    OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
     // Insert the output for the first validator
     NodesOutputs::<Test>::insert(request_id, validators[4].clone(), bounded_vec.clone());
 
     // Insert an assignment and an output for the other 4 validators
     for i in 0..3 {
-        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), U256::from(current_block_number + 1));
+        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
         NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
         NodesOutputs::<Test>::insert(request_id, validators[i].clone(), bounded_vec.clone());
     }
     
-    OpocAssignment::<Test>::insert(U256::from(1), validators[3].clone(), U256::from(current_block_number + 1));
+    OpocAssignment::<Test>::insert(U256::from(1), validators[3].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
     NodesWorks::<Test>::insert(validators[3].clone(), request_id, true);
     NodesOutputs::<Test>::insert(request_id, validators[3].clone(), default_bounded_vec.clone());
     
@@ -1251,14 +1275,14 @@ fn test_inherent_opoc_level_2_completed() {
 
     // Insert an assignment and an output for the first 7 validators
     for i in 0..7 {
-        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), U256::from(current_block_number + 1));
+        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level2));
         NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
         NodesOutputs::<Test>::insert(request_id, validators[i].clone(), bounded_vec.clone());
     }
 
     // Insert an assignment and another output for the other 3 validators
     for i in 7..10 {
-        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), U256::from(current_block_number + 1));
+        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level2));
         NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
         NodesOutputs::<Test>::insert(request_id, validators[i].clone(), default_bounded_vec.clone());
     }
@@ -1335,7 +1359,7 @@ fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
         let current_block: U256 = U256::from(1);
 
         let mut opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
-        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), U256>::new();
+        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), (U256, OpocLevel)>::new();
         let mut nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
 
         // Add request_id to the Inputs storage to permit the calculation of the expiration block number works correctly
@@ -1370,6 +1394,7 @@ fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
             &mut nodes_works_operations,
             &request_id,
             &current_block,
+            crate::OpocLevel::Level0,
             1,
             vec![],
             true
@@ -1384,8 +1409,9 @@ fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
         assert_eq!(*opoc_blacklist, false);
 
         // Be sure that the main_validator is on the opoc_assignment_operations with the expiration block number set to the current block number + nft_execution_max_time
-        let opoc_assignment = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
+        let (opoc_assignment, opoc_level) = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
         assert_eq!(*opoc_assignment, U256::from(1 + 45));
+        assert_eq!(*opoc_level, crate::OpocLevel::Level0);
 
         // Be sure that the main_validator is on the nodes_works_operations with the request_id set to true
         let nodes_works = nodes_works_operations.get(&main_validator).unwrap();
@@ -1483,7 +1509,7 @@ fn test_opoc_assignment_for_one_validator_free_in_chilling() {
         let current_block: U256 = U256::from(1);
 
         let mut opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
-        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), U256>::new();
+        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), (U256, OpocLevel)>::new();
         let mut nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
 
         // Add request_id to the Inputs storage to permit the calculation of the expiration block number works correctly
@@ -1518,6 +1544,7 @@ fn test_opoc_assignment_for_one_validator_free_in_chilling() {
             &mut nodes_works_operations,
             &request_id,
             &current_block,
+            crate::OpocLevel::Level0,
             1,
             vec![],
             true
@@ -1541,6 +1568,7 @@ fn test_opoc_assignment_for_one_validator_free_in_chilling() {
             &mut nodes_works_operations,
             &request_id,
             &current_block,
+            crate::OpocLevel::Level0,
             1,
             vec![],
             true
@@ -1551,8 +1579,9 @@ fn test_opoc_assignment_for_one_validator_free_in_chilling() {
         assert_eq!(assigned_completed, true);
 
         // Be sure that the main_validator is on the opoc_assignment_operations with the expiration block number set to the current block number + nft_execution_max_time
-        let opoc_assignment = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
+        let (opoc_assignment, opoc_level) = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
         assert_eq!(*opoc_assignment, U256::from(1 + 45));
+        assert_eq!(*opoc_level, OpocLevel::Level0);
     });
 }
 
