@@ -123,7 +123,7 @@ impl<T: Config> Pallet<T> {
         };
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id, opoc_level) {
             Ok(output_data) => {
                 // Store the output data
                 Self::offchain_store_output_data(&request_id, &output_data).unwrap_or_else(|e| {
@@ -224,7 +224,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, request_id: RequestId) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, request_id: RequestId, opoc_level:OpocLevel) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
         // Convert address to a Vec<u8>
@@ -344,7 +344,7 @@ impl<T: Config> Pallet<T> {
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
             let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, *call_ai_counter.read().unwrap(), request_id) {
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, *call_ai_counter.read().unwrap(), request_id, opoc_level) {
                 Ok(output) => output,
                 Err(error) => {
                     log::error!("Error calling the AI: {:?}", error);
@@ -416,7 +416,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId, opoc_level:OpocLevel) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
@@ -446,55 +446,113 @@ impl<T: Config> Pallet<T> {
             log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
             DispatchError::Other("Invalid UTF-8 in final local name")
         })?;
- 
-        
-        let mut proof: Data = Data::default();
-        for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
-            let (inference_index, inference_proof) = inference_data;
-            if inference_index == counter {
-                if OpocAssignment::<T>::try_get(request_id, account_id).is_ok() {
-                    proof = inference_proof;
-                    break;
-                }
-            }
-        }
 
-        let body = if proof.is_empty() {
+
+        if opoc_level == OpocLevel::Level0 { 
             let body_data = CallAiRequestWithoutProof {
                 model: model.clone(),
                 input: input_data.clone(),
             };
-            miniserde::json::to_string(&body_data)
-        } else {
-            let body_data = CallAiRequestWithProof {
-                model: model.clone(),
-                input: input_data.clone(),
-                proof: String::from_utf8(proof.to_vec()).unwrap_or_default(),
+            let body = miniserde::json::to_string(&body_data);
+
+            let output = Self::offchain_worker_call_ai_send_request(body)?;
+            let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
+                DispatchError::Other("Invalid UTF-8 in output data")
+            })?;
+            let output_string = output_string.trim();
+            let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
+                log::error!("UOMI-ENGINE: Error parsing output data to JSON");
+                DispatchError::Other("Error parsing output data to JSON")
+            })?;
+            let output_json_cleaned = CallAiResponseCleaned {
+                response: output_json.response,
             };
-            miniserde::json::to_string(&body_data)
-        };
+            let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
+            let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert output to Data type");
+                DispatchError::Other("Failed to convert output")
+            })?;
 
-        let output = Self::offchain_worker_call_ai_send_request(body)?;
-        let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
-            log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
-            DispatchError::Other("Invalid UTF-8 in output data")
-        })?;
+            if !output_json.proof.is_empty() { 
+                // Store the inference on OpocL0Inferences
+                let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
+                if !signer.can_sign() {
+                    log::error!("No accounts available to sign the transaction");
+                    return Err(DispatchError::Other("No accounts available to sign"));
+                }
 
-        let output_string = output_string.trim();
-        let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
-            log::error!("UOMI-ENGINE: Error parsing output data to JSON");
-            DispatchError::Other("Error parsing output data to JSON")
-        })?;
-        let output_json_cleaned = CallAiResponseCleaned {
-            response: output_json.response,
-        };
-        let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
-        let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
-            log::error!("UOMI-ENGINE: Failed to convert output to Data type");
-            DispatchError::Other("Failed to convert output")
-        })?;
+                // Convert output_proof to a Data
+                let output_proof: Data = output_json.proof.as_bytes().to_vec().try_into().map_err(|_| {
+                    log::error!("UOMI-ENGINE: Failed to convert output proof to Data type");
+                    DispatchError::Other("Failed to convert output proof")
+                })?;
 
-        Ok(output.to_vec())
+                let _ = signer.send_unsigned_transaction(
+                    |acct| PayloadNodesOpocL0Inferences { 
+                        request_id: request_id.clone(), 
+                        inference_index: counter,
+                        inference_proof: output_proof.clone(),
+                        public: acct.public.clone(),
+                    },
+                    |payload, signature| Call::store_nodes_opoc_l0_inferences { 
+                        payload, 
+                        signature 
+                    },
+                );
+            }
+
+            Ok(output.to_vec())
+        } else {
+
+            let mut proof: Data = Data::default();
+            for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
+                let (inference_index, inference_proof) = inference_data;
+                if inference_index == counter {
+                    if OpocAssignment::<T>::try_get(request_id, account_id).is_ok() {
+                        proof = inference_proof;
+                        break;
+                    }
+                }
+            }
+
+            let body = if proof.is_empty() {
+                let body_data = CallAiRequestWithoutProof {
+                    model: model.clone(),
+                    input: input_data.clone(),
+                };
+                miniserde::json::to_string(&body_data)
+            } else {
+                let body_data = CallAiRequestWithProof {
+                    model: model.clone(),
+                    input: input_data.clone(),
+                    proof: String::from_utf8(proof.to_vec()).unwrap_or_default(),
+                };
+                miniserde::json::to_string(&body_data)
+            };
+
+            let output = Self::offchain_worker_call_ai_send_request(body)?;
+            let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
+                log::error!("UOMI-ENGINE: Invalid UTF-8 in output data");
+                DispatchError::Other("Invalid UTF-8 in output data")
+            })?;
+
+            let output_string = output_string.trim();
+            let output_json: CallAiResponse = miniserde::json::from_str(&output_string).map_err(|_| {
+                log::error!("UOMI-ENGINE: Error parsing output data to JSON");
+                DispatchError::Other("Error parsing output data to JSON")
+            })?;
+            let output_json_cleaned = CallAiResponseCleaned {
+                response: output_json.response,
+            };
+            let output_string_cleaned = miniserde::json::to_string(&output_json_cleaned);
+            let output: Data = output_string_cleaned.as_bytes().to_vec().try_into().map_err(|_| {
+                log::error!("UOMI-ENGINE: Failed to convert output to Data type");
+                DispatchError::Other("Failed to convert output")
+            })?;
+
+            Ok(output.to_vec())
+        }
     
     }
     

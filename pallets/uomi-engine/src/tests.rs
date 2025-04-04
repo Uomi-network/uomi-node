@@ -511,7 +511,7 @@ fn test_offchain_run_wasm_function_with_valid_wasm() {
         let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), 
         U256::from(1),
         U256::from(99),
-        U256::from(99));
+        U256::from(99), OpocLevel::Level0);
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -535,7 +535,9 @@ fn test_offchain_run_wasm_function_with_infinite_wasm() {
         U256::from(1),
         U256::from(3),
 
-        U256::from(3));
+        U256::from(3),
+        OpocLevel::Level0
+    );
         assert!(result.is_err());
 
         // Be sure error message is "WASM execution error"
@@ -561,7 +563,7 @@ fn test_offchain_run_wasm_function_with_call_ai() {
         U256::from(1),
         U256::from(99),
 
-        U256::from(99));
+        U256::from(99), OpocLevel::Level0);
         assert!(result.is_ok());
 
         // Be sure result is input_data reversed
@@ -593,7 +595,7 @@ fn test_offchain_run_wasm_function_with_get_file_cid() {
         U256::from(1),
         U256::from(99),
 
-        U256::from(99));
+        U256::from(99), OpocLevel::Level0);
         assert!(result.is_ok());
     });
 }
@@ -614,7 +616,7 @@ fn test_offchain_run_wasm_function_with_get_request_sender() {
         
         U256::from(1),
         U256::from(99),
-        U256::from(99));
+        U256::from(99), OpocLevel::Level0);
         assert!(result.is_ok());
 
         // Be sure result is the address
