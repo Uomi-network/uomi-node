@@ -509,7 +509,8 @@ impl<T: Config> Pallet<T> {
             for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
                 let (inference_index, inference_proof) = inference_data;
                 if inference_index == counter {
-                    if OpocAssignment::<T>::try_get(request_id, account_id).is_ok() {
+                    let opoc_assignment = OpocAssignment::<T>::try_get(request_id, account_id);
+                    if opoc_assignment.is_ok() && opoc_assignment.unwrap().1 == OpocLevel::Level0 {
                         proof = inference_proof;
                         break;
                     }
