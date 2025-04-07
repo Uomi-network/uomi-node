@@ -42,10 +42,7 @@ use sp_std::collections::btree_map::BTreeMap;
 
 // Local imports
 use crate::{
-    Call,
-    DispatchResult,
-    InherentError,
-    types::{AiModelKey, BlockNumber, Data, RequestId},
+    types::{AiModelKey, BlockNumber, Data, RequestId}, Call, DispatchResult, InherentError, OpocLevel
 };
 use crate as pallet_uomi_engine;
 use pallet_uomi_engine::Call as UomiCall;
@@ -136,7 +133,7 @@ impl onchain::Config for OnChainSeqPhragmen {
 impl MockInherentDataProvider {
     fn opoc_run() -> Result<(
         BTreeMap<AccountId, bool>,
-        BTreeMap<(RequestId, AccountId), BlockNumber>,
+        BTreeMap<(RequestId, AccountId), (BlockNumber, OpocLevel)>,
         BTreeMap<AccountId, BTreeMap<RequestId, bool>>,
         BTreeMap<AccountId, u32>,
         BTreeMap<AccountId, u32>,

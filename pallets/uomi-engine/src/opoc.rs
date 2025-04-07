@@ -6,22 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::MAX_INPUTS_MANAGED_PER_BLOCK,
-    ipfs::IpfsInterface,
-    types::{ BlockNumber, Data, RequestId },
-    Config,
-    Inputs,
-    NodesErrors,
-    NodesOutputs,
-    NodesTimeouts,
-    NodesWorks,
-    OpocAssignment,
-    OpocBlacklist,
-    Outputs,
-    Pallet,
-    Event,
-    NodesOpocL0Inferences,
-    Chilling
+    consts::MAX_INPUTS_MANAGED_PER_BLOCK, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Chilling, Config, Event, Inputs, NodesErrors, NodesOpocL0Inferences, NodesOutputs, NodesTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
 impl<T: Config> Pallet<T> {
@@ -29,7 +14,7 @@ impl<T: Config> Pallet<T> {
     pub fn opoc_run(current_block: BlockNumber) -> Result<
         (
             BTreeMap<T::AccountId, bool>, // opoc_blacklist_operations
-            BTreeMap<(RequestId, T::AccountId), BlockNumber>, // opoc_assignment_operations
+            BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, // opoc_assignment_operations
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
             BTreeMap<T::AccountId, u32>, // nodes_timeouts_operations
             BTreeMap<T::AccountId, u32>, // nodes_errors_operations
@@ -40,7 +25,7 @@ impl<T: Config> Pallet<T> {
         let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
         let mut opoc_assignment_operations = BTreeMap::<
             (RequestId, T::AccountId),
-            BlockNumber
+            (BlockNumber, OpocLevel)
         >::new();
         let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<RequestId, bool>>::new();
         let mut nodes_timeouts_operations = BTreeMap::<T::AccountId, u32>::new();
@@ -139,6 +124,7 @@ impl<T: Config> Pallet<T> {
                             &mut nodes_works_operations,
                             &request_id,
                             &current_block,
+                            OpocLevel::Level0,
                             1,
                             vec![],
                             true
@@ -196,6 +182,7 @@ impl<T: Config> Pallet<T> {
                                 &mut nodes_works_operations,
                                 &request_id,
                                 &current_block,
+                                OpocLevel::Level0,
                                 1,
                                 vec![],
                                 true
@@ -245,6 +232,7 @@ impl<T: Config> Pallet<T> {
                                 &mut nodes_works_operations,
                                 &request_id,
                                 &current_block,
+                                OpocLevel::Level1,
                                 (opoc_assignments_of_level_1 as u32) - 1,
                                 vec![validator],
                                 false
@@ -327,6 +315,7 @@ impl<T: Config> Pallet<T> {
                                 &mut nodes_works_operations,
                                 &request_id,
                                 &current_block,
+                                OpocLevel::Level1,
                                 validators_in_timeout.len() as u32,
                                 validators_to_exclude,
                                 false
@@ -410,6 +399,7 @@ impl<T: Config> Pallet<T> {
                             .filter(|account_id| !validators_to_exclude.contains(account_id))
                             .collect::<Vec<T::AccountId>>();
                         let number_of_validators = active_validators_without_exclude.len() as u32;
+                        let number_of_validators = (number_of_validators * 2 / 3) + 1;
                         
                         // Assign the request to validators for opoc level 2 to all validators
                         match
@@ -419,6 +409,7 @@ impl<T: Config> Pallet<T> {
                                 &mut nodes_works_operations,
                                 &request_id,
                                 &current_block,
+                                OpocLevel::Level2,
                                 number_of_validators,
                                 validators_to_exclude,
                                 false
@@ -571,10 +562,11 @@ impl<T: Config> Pallet<T> {
 
     pub fn opoc_assignment(
         opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<U256, bool>>,
         request_id: &RequestId,
         current_block: &BlockNumber,
+        opoc_level: OpocLevel,
         validators_amount: u32,
         validators_to_exclude: Vec<T::AccountId>,
         first_free: bool
@@ -620,7 +612,8 @@ impl<T: Config> Pallet<T> {
                 opoc_assignment_operations,
                 &request_id,
                 &validator,
-                &expiration_block_number
+                &expiration_block_number, 
+                opoc_level,
             );
         }
 
@@ -630,7 +623,7 @@ impl<T: Config> Pallet<T> {
     pub fn opoc_store_operations(
         operations: (
             BTreeMap<T::AccountId, bool>, // opoc_blacklist_operations
-            BTreeMap<(RequestId, T::AccountId), BlockNumber>, // opoc_assignment_operations
+            BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, // opoc_assignment_operations
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
             BTreeMap<T::AccountId, u32>, // nodes_timeouts_operations
             BTreeMap<T::AccountId, u32>, // nodes_errors_operations
@@ -661,7 +654,7 @@ impl<T: Config> Pallet<T> {
         // set opoc_assignment_operations
         for (
             (request_id, account_id),
-            expiration_block_number,
+            (expiration_block_number, opoc_level),
         ) in opoc_assignment_operations.iter() {
             if expiration_block_number == &U256::from(0) {
                 OpocAssignment::<T>::remove(request_id, account_id);
@@ -670,7 +663,7 @@ impl<T: Config> Pallet<T> {
                     account_id: account_id.clone(),
                 });
             } else {
-                OpocAssignment::<T>::insert(request_id, account_id, expiration_block_number);
+                OpocAssignment::<T>::insert(request_id, account_id, (expiration_block_number, opoc_level));
                 Self::deposit_event(Event::OpocAssignmentAdd {
                     request_id: request_id.clone(),
                     account_id: account_id.clone(),
@@ -854,7 +847,7 @@ impl<T: Config> Pallet<T> {
 
     fn opoc_deassignment_per_invalid_output(
         opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         nodes_errors_operations: &mut BTreeMap<T::AccountId, u32>,
         request_id: &RequestId,
@@ -874,7 +867,7 @@ impl<T: Config> Pallet<T> {
 
     fn opoc_deassignment_per_timeout(
         opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         nodes_timeouts_operations: &mut BTreeMap<T::AccountId, u32>,
         request_id: &RequestId,
@@ -920,7 +913,7 @@ impl<T: Config> Pallet<T> {
         let mut validators_in_timeout = Vec::<T::AccountId>::new();
 
         let opoc_assignments = OpocAssignment::<T>::iter_prefix(*request_id);
-        for (validator, expiration_block_number) in opoc_assignments {
+        for (validator, (expiration_block_number, opoc_level)) in opoc_assignments {
             // Check if the validator has responded to the request
             // IMPORTANT: The check is done by iterating over the outputs of the request_id and checking if the validator is in the outputs BTreeMap
             // because the validator could have written the output as an empty value, so the output is empty but the validator has responded.
@@ -978,24 +971,25 @@ impl<T: Config> Pallet<T> {
     }
 
     fn opoc_assignment_operations_add(
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         request_id: &RequestId,
         validator: &T::AccountId,
-        expiration_block_number: &BlockNumber
+        expiration_block_number: &BlockNumber,
+        opoc_level: OpocLevel
     ) -> bool {
         opoc_assignment_operations.insert(
             (request_id.clone(), validator.clone()),
-            expiration_block_number.clone()
+            (expiration_block_number.clone(), opoc_level)
         );
         true
     }
 
     fn opoc_assignment_operations_remove(
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         request_id: &RequestId,
         validator: &T::AccountId
     ) -> bool {
-        opoc_assignment_operations.insert((request_id.clone(), validator.clone()), U256::from(0));
+        opoc_assignment_operations.insert((request_id.clone(), validator.clone()), (U256::from(0), OpocLevel::Level0));
         true
     }
 
@@ -1186,7 +1180,7 @@ impl<T: Config> Pallet<T> {
     // NOTE: The following functions are used to maintain retro-compatibility with the finney chain.
     pub fn opoc_assignment_finney_v1(
         opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), BlockNumber>,
+        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<U256, bool>>,
         request_id: &RequestId,
         current_block: &BlockNumber,
@@ -1235,7 +1229,8 @@ impl<T: Config> Pallet<T> {
                 opoc_assignment_operations,
                 &request_id,
                 &validator,
-                &expiration_block_number
+                &expiration_block_number,
+                OpocLevel::Level0
             );
         }
 
