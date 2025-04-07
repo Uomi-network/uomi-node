@@ -399,6 +399,7 @@ impl<T: Config> Pallet<T> {
                             .filter(|account_id| !validators_to_exclude.contains(account_id))
                             .collect::<Vec<T::AccountId>>();
                         let number_of_validators = active_validators_without_exclude.len() as u32;
+                        let number_of_validators = (number_of_validators * 2 / 3) + 1;
                         
                         // Assign the request to validators for opoc level 2 to all validators
                         match

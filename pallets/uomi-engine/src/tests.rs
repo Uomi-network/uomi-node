@@ -1192,7 +1192,7 @@ fn test_inherent_opoc_level_1_completed_invalid() {
     let bounded_vec: BoundedVec<u8, MaxDataSize> = BoundedVec::try_from(vec![1, 2, 3, 4, 5]).expect("Vector exceeds the bound");
     
     let stake = 10_000_000_000_000_000_000;
-    let num_validators = 10;
+    let num_validators = 30;
     let validators = create_validators(num_validators, stake);
     let default_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
         
@@ -1239,7 +1239,7 @@ fn test_inherent_opoc_level_1_completed_invalid() {
       
     //check if opoc assignment has numv_validators elements
     let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
-    assert_eq!(opoc_assignments.len() as u32, num_validators);
+    assert_eq!(opoc_assignments.len() as u32, 4 + 1+((num_validators - 4)*2/3));
       
   });
 }
