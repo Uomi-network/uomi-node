@@ -65,7 +65,7 @@ sp-staking = { workspace = true, features = ["std"] }
 sp-keystore	= { workspace = true, features = ["std"] }
 pallet-tss = { workspace = true, features = ["std"] }
 pallet-im-online = { workspace = true, features = ["std"] }
-
+substrate-test-runtime-client =  { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
 
 
 [features]
