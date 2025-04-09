@@ -602,6 +602,9 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                         if peer_id.to_bytes() != self.local_peer_id && !active_participants_in_session.contains(&peer_id.to_bytes()) {
                             inactive_participants.push(account_id.clone().try_into().unwrap());
                         }
+                    } else {
+                        // If the peer_id is not found, we assume it's inactive
+                        inactive_participants.push(account_id.clone().try_into().unwrap());
                     }
                 }
             }

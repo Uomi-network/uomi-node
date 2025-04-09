@@ -61,7 +61,14 @@ pub struct ReportParticipantsPayload<T: Config> {
     public: T::Public,
 }
 
-impl<T:Config> ReportParticipantsPayload<T> {
+/// A struct for a report participants count payload
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+pub struct ReportParticipantsCountPayload<T: Config> {
+    session_id: SessionId,
+    public: T::Public,
+}
+
+impl<T: Config> ReportParticipantsPayload<T> {
     pub fn new(
         session_id: SessionId,
         reported_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
@@ -81,8 +88,13 @@ impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsPayload<T>
     }
 }
 
-
 impl<T: SigningTypes + Config> SignedPayload<T> for UpdateValidatorsPayload<T> {
+    fn public(&self) -> T::Public {
+        self.public.clone()
+    }
+}
+
+impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsCountPayload<T> {
     fn public(&self) -> T::Public {
         self.public.clone()
     }
@@ -96,9 +108,8 @@ pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
 pub mod crypto {
     use crate::CRYPTO_KEY_TYPE;
     use sp_core::sr25519::Signature as Sr25519Signature;
-    use sp_runtime::app_crypto::{ app_crypto, sr25519 };
-    use sp_runtime::{ traits::Verify, MultiSignature, MultiSigner };
-
+    use sp_runtime::app_crypto::{app_crypto, sr25519};
+    use sp_runtime::{traits::Verify, MultiSignature, MultiSigner};
 
     app_crypto!(sr25519, CRYPTO_KEY_TYPE);
 
@@ -113,18 +124,19 @@ pub mod crypto {
 
     // implemented for mock runtime in test
     impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature>
-    for AuthId {
+        for AuthId
+    {
         type RuntimeAppPublic = Public;
         type GenericSignature = sp_core::sr25519::Signature;
         type GenericPublic = sp_core::sr25519::Public;
     }
 }
 
-
 #[frame_support::pallet]
 pub mod pallet {
 
     use frame_system::offchain::{AppCrypto, CreateSignedTransaction};
+    use pallet_uomi_engine::types::BlockNumber;
     use sp_runtime::traits::{IdentifyAccount, Verify};
 
     use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
@@ -164,14 +176,14 @@ pub mod pallet {
                 Err(_) => return false, // Public key must be exactly 33 bytes
             };
             let pubkey = sp_core::ecdsa::Public(pubkey_bytes);
-    
+
             // Convert Signature to [u8; 65] for ECDSA signature
             let signature_bytes: [u8; 65] = match sig.as_slice().try_into() {
                 Ok(bytes) => bytes,
                 Err(_) => return false, // Signature must be exactly 65 bytes
             };
             let signature = sp_core::ecdsa::Signature(signature_bytes);
-    
+
             // Verify the signature; it hashes the message internally with blake2_256
             signature.verify(message, &pubkey)
         }
@@ -182,6 +194,7 @@ pub mod pallet {
         DKGCreated,
         DKGInProgress,
         DKGComplete,
+        DKGFailed,
         SigningInProgress,
         SigningComplete,
     }
@@ -196,6 +209,7 @@ pub mod pallet {
         pub threshold: u32,
         pub state: SessionState,
         pub old_participants: Option<BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>>,
+        pub deadline: BlockNumberFor<T>,
     }
 
     #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo)]
@@ -253,14 +267,20 @@ pub mod pallet {
     #[pallet::getter(fn next_validator_id)]
     pub type NextValidatorId<T: Config> = StorageValue<_, u32, ValueQuery>;
 
-    
     // A storage to store the reported participants for a given session_id. Used to skip them during next retry
     // each participant may report multiple participants, we need to know who reported who so that we can check against
     // that and maybe exclude someone definitively
     #[pallet::storage]
     #[pallet::getter(fn reported_participants)]
-    pub type ReportedParticipants<T: Config> =
-        StorageDoubleMap<_, Blake2_128Concat, SessionId, Blake2_128Concat, T::AccountId, BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>, OptionQuery>;
+    pub type ReportedParticipants<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        SessionId,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
+        OptionQuery,
+    >;
 
     // A storage that counts for how many sessions a given participant has been reported, so that we can slash them
     #[pallet::storage]
@@ -268,7 +288,6 @@ pub mod pallet {
     pub type ParticipantReportCount<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
 
-        
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -276,10 +295,11 @@ pub mod pallet {
         DKGSessionCreated(SessionId),
         DKGReshareSessionCreated(SessionId),
         SigningSessionCreated(SessionId, SessionId), // Signing session ID, DKG session ID
-        DKGCompleted(SessionId, PublicKey),                // Aggregated public key
+        DKGCompleted(SessionId, PublicKey),          // Aggregated public key
         SigningCompleted(SessionId, Signature),      // Final aggregated signature
         SignatureSubmitted(SessionId),               // When signature is stored
         ValidatorIdAssigned(T::AccountId, u32),      // Validator account, ID
+        DKGFailed(SessionId),                        // DKG session failed
     }
 
     #[pallet::error]
@@ -329,6 +349,7 @@ pub mod pallet {
                 threshold,
                 state: SessionState::DKGCreated,
                 old_participants: None,
+                deadline: <frame_system::Pallet<T>>::block_number() + 100u32.into(),
             };
 
             // Generate random session ID
@@ -515,19 +536,20 @@ pub mod pallet {
         pub fn report_participant(
             origin: OriginFor<T>,
             payload: ReportParticipantsPayload<T>,
-            _signature: T::Signature, 
+            _signature: T::Signature,
         ) -> DispatchResult {
-
             let _ = ensure_none(origin)?;
 
             let who = payload.public().into_account();
-            
+
             // Check if the session exists
             let _session =
                 DkgSessions::<T>::get(payload.session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
             // Check if the participant has already reported for this session
-            if let Some(mut reported_list) = ReportedParticipants::<T>::get(payload.session_id, who.clone()) {
+            if let Some(mut reported_list) =
+                ReportedParticipants::<T>::get(payload.session_id, who.clone())
+            {
                 // Check if any of the reported participants are already in the list
                 for reported_participant in payload.reported_participants.iter() {
                     if reported_list.contains(reported_participant) {
@@ -536,13 +558,19 @@ pub mod pallet {
                         continue;
                     }
                     // Add the new reported participant to the list
-                    reported_list.try_push(reported_participant.clone()).map_err(|_| Error::<T>::InvalidParticipantsCount)?;
+                    reported_list
+                        .try_push(reported_participant.clone())
+                        .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
                 }
                 // Update the storage with the new list
                 ReportedParticipants::<T>::insert(payload.session_id, who.clone(), reported_list);
             } else {
                 // No previous reports from this participant, add the new list
-                ReportedParticipants::<T>::insert(payload.session_id, who.clone(), payload.reported_participants.clone());
+                ReportedParticipants::<T>::insert(
+                    payload.session_id,
+                    who.clone(),
+                    payload.reported_participants.clone(),
+                );
             }
             Ok(())
         }
@@ -554,42 +582,14 @@ pub mod pallet {
         #[pallet::call_index(7)]
         pub fn check_participant_report_count(
             origin: OriginFor<T>,
-            session_id: SessionId,
+            payload: ReportParticipantsCountPayload<T>,
+            _signature: T::Signature,
         ) -> DispatchResult {
             let _ = ensure_none(origin)?;
 
-            // Get the session
-            let session =
-                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+            let session_id = payload.session_id;
 
-            // Get the total number of participants in the session
-            let total_participants = session.participants.len();
-
-            // Iterate over all reported participants for this session
-            for (_reporter, reported_list) in ReportedParticipants::<T>::iter_prefix(session_id) {
-                // Iterate over each reported participant
-                for reported_participant in reported_list.iter() {
-                    // Count how many times this participant has been reported
-                    let mut report_count = 0;
-                    for (_, inner_reported_list) in ReportedParticipants::<T>::iter_prefix(session_id) {
-                        if inner_reported_list.contains(reported_participant) {
-                            report_count += 1;
-                        }
-                    }
-
-                    // Calculate the threshold for reporting (2/3 of total participants)
-                    let reporting_threshold = (total_participants * 2) / 3;
-
-                    // Check if the participant has been reported by more than 2/3 of the participants
-                    if report_count > reporting_threshold {
-                        // Increment the report count for this participant
-                        let current_count = ParticipantReportCount::<T>::get(reported_participant);
-                        ParticipantReportCount::<T>::insert(reported_participant, current_count + 1);
-                    }
-                }
-            }
             Ok(())
-
         }
     }
     fn verify_signature<T: Config>(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
@@ -642,7 +642,6 @@ pub mod pallet {
             match call {
                 // Handle inherent extrinsics
                 Call::update_validators { .. } => {
-
                     return ValidTransaction::with_tag_prefix("TssPallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(call.encode())
@@ -651,7 +650,14 @@ pub mod pallet {
                         .build();
                 }
                 Call::report_participant { .. } => {
-
+                    return ValidTransaction::with_tag_prefix("TssPallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(call.encode())
+                        .longevity(64)
+                        .propagate(true)
+                        .build();
+                }
+                Call::check_participant_report_count { .. } => {
                     return ValidTransaction::with_tag_prefix("TssPallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(call.encode())
@@ -672,7 +678,7 @@ pub mod pallet {
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn offchain_worker(n: BlockNumberFor<T>) {
             let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-            // Check for new validators every 10 blocks
+                                                                                         // Check for new validators every 10 blocks
             if n % 10u32.into() != 0u32.into() {
                 return;
             }
@@ -688,9 +694,8 @@ pub mod pallet {
                     new_validators.push(validator.clone());
                 }
             }
-            
-            if !new_validators.is_empty() {
 
+            if !new_validators.is_empty() {
                 let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
 
                 if !signer.can_sign() {
@@ -716,16 +721,18 @@ pub mod pallet {
             if stored_validators.len() > 0 {
                 return;
             }
-
         }
 
         // Add on_initialize hook to handle validator initialization
-        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+        fn on_initialize(n: BlockNumberFor<T>) -> Weight {
             // Check if validator IDs have been initialized
             if NextValidatorId::<T>::get() == 0 {
                 // Initialize with ID 1
                 NextValidatorId::<T>::put(1);
             }
+
+            // Check expired sessions 
+            Pallet::<T>::check_expired_sessions(n).ok();
 
             // Return weight for this operation (minimal)
             T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
@@ -733,6 +740,70 @@ pub mod pallet {
     }
 
     impl<T: Config> Pallet<T> {
+
+        pub fn check_expired_sessions(n: BlockNumberFor<T>) -> DispatchResult {
+            // Fetch all the sessions in progress and verify if they are still valid or deadline has passed
+            let mut sessions_to_remove = Vec::new();
+            for (session_id, session) in DkgSessions::<T>::iter() {
+                if session.deadline < n {
+                    sessions_to_remove.push(session_id);
+                }
+            }
+            
+            for session_id in sessions_to_remove {
+                DkgSessions::<T>::remove(session_id);
+                Pallet::<T>::update_report_count(session_id).ok();
+                Pallet::<T>::deposit_event(Event::DKGFailed(session_id));
+            }
+
+            Ok(())
+        }
+        pub fn update_report_count(session_id: SessionId) -> DispatchResult {
+            // Get the session
+            let session =
+                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
+            // First set the session state to DKGFailed
+            DkgSessions::<T>::mutate(session_id, |session| {
+                if let Some(s) = session {
+                    s.state = SessionState::DKGFailed;
+                }
+            });
+
+            // Get the total number of participants in the session
+            let total_participants = session.participants.len();
+
+            // Iterate over all reported participants for this session
+            for (_reporter, reported_list) in ReportedParticipants::<T>::iter_prefix(session_id) {
+                // Iterate over each reported participant
+                for reported_participant in reported_list.iter() {
+                    // Count how many times this participant has been reported
+                    let mut report_count = 0;
+                    for (_, inner_reported_list) in
+                        ReportedParticipants::<T>::iter_prefix(session_id)
+                    {
+                        if inner_reported_list.contains(reported_participant) {
+                            report_count += 1;
+                        }
+                    }
+
+                    // Calculate the threshold for reporting (2/3 of total participants)
+                    let reporting_threshold = (total_participants * 2) / 3;
+
+                    // Check if the participant has been reported by more than 2/3 of the participants
+                    if report_count > reporting_threshold {
+                        // Increment the report count for this participant
+                        let current_count = ParticipantReportCount::<T>::get(reported_participant);
+                        ParticipantReportCount::<T>::insert(
+                            reported_participant,
+                            current_count + 1,
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+
         pub fn initialize_validator_ids() -> DispatchResult {
             // Get all validators from pallet_staking
             let validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
@@ -766,7 +837,6 @@ pub mod pallet {
 
             // Get the next ID
             let next_id = Self::next_validator_id();
-            
 
             // Assign the ID
             ValidatorIds::<T>::insert(&validator, next_id);
@@ -803,8 +873,10 @@ pub mod pallet {
         }
 
         pub fn report_participants(id: SessionId, reported_participants: Vec<[u8; 32]>) {
-
-            log::info!("[TSS] Reporting participants...");
+            log::info!(
+                "[TSS] Reporting participants... {:?}",
+                reported_participants
+            );
             // Create a transaction to submit
             let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
 
@@ -812,8 +884,14 @@ pub mod pallet {
                 log::error!("TSS: No accounts available to sign report_participant");
                 return;
             }
-            let reported_participants_bounded = BoundedVec::try_from(reported_participants.iter().map(|x| T::AccountId::decode(&mut &x[..]).unwrap()).collect::<Vec<T::AccountId>>()).unwrap();
-            log::info!("[TSS] Sending....");
+            let reported_participants_bounded = BoundedVec::try_from(
+                reported_participants
+                    .iter()
+                    .map(|x| T::AccountId::decode(&mut &x[..]).unwrap())
+                    .collect::<Vec<T::AccountId>>(),
+            )
+            .unwrap();
+            log::info!("[TSS] Sending.... {:?}", reported_participants_bounded);
 
             // Send unsigned transaction with signed payload
             let _ = signer.send_unsigned_transaction(
@@ -826,10 +904,8 @@ pub mod pallet {
             );
             log::info!("[TSS] Reported participants");
         }
-
     }
 }
-
 
 sp_api::decl_runtime_apis! {
     pub trait TssApi {
@@ -847,5 +923,3 @@ sp_api::decl_runtime_apis! {
         fn report_participants(id: SessionId, reported_participants: Vec<[u8; 32]>);
     }
 }
-
-
