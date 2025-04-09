@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use scale_info::prelude::string::String;
 
 use frame_election_provider_support::{

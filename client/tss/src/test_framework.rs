@@ -237,6 +237,7 @@ impl TestNode {
             session_timeout: 3600,
             session_timestamps: Arc::new(Mutex::new(HashMap::new())),
             _phantom: PhantomData,
+            active_participants: Arc::new(Mutex::new(HashMap::new())),
         };
 
         TestNode {

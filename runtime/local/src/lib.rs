@@ -2607,6 +2607,10 @@ impl_runtime_apis! {
                 .map(|(account, id)| (id, account.into()))
                 .collect()
         }
+
+        fn report_participants(id: u64, reported_participants: Vec<[u8; 32]>) {
+            pallet_tss::pallet::Pallet::<Runtime>::report_participants(id, reported_participants);
+        }
     }
 }
 

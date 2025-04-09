@@ -3,6 +3,8 @@ use ecdsa::{ECDSAError, ECDSAIndexWrapper, ECDSAManager};
 use frame_system::EventRecord;
 use multi_party_ecdsa::communication::sending_messages::SendingMessages;
 use rand::prelude::*;
+use sc_transaction_pool_api::{LocalTransactionPool, OffchainTransactionPoolFactory};
+use sp_keystore::KeystoreExt;
 use std::{
     collections::{btree_map::Keys, BTreeMap, HashMap},
     fmt::Debug,
@@ -29,10 +31,9 @@ use frost_ed25519::{
 };
 use futures::{channel::mpsc::Receiver, prelude::*, select, stream::FusedStream};
 use log::info;
-use sc_service::KeystoreContainer;
+use sc_service::{KeystoreContainer, TransactionPool};
 use sp_core::{sr25519, ByteArray};
-
-use sc_client_api::BlockchainEvents;
+use sc_client_api::{BlockchainEvents, HeaderBackend};
 use sc_network::{
     config::{self, NonDefaultSetConfig, SetConfig}, utils::interval, NetworkSigner, NetworkStateInfo, NotificationService, PeerId, ProtocolName
 };
@@ -41,7 +42,7 @@ use sc_network_gossip::{
     ValidatorContext,
 };
 use sc_utils::mpsc::{TracingUnboundedReceiver, TracingUnboundedSender, TrySendError};
-use sp_api::ProvideRuntimeApi;
+use sp_api::{ApiExt, ProvideRuntimeApi};
 use sp_io::crypto::sr25519_verify;
 use sp_runtime::app_crypto::Ss58Codec;
 use uomi_runtime::pallet_uomi_engine::crypto::CRYPTO_KEY_TYPE as UOMI;
@@ -55,7 +56,7 @@ use sp_runtime::{
 
 use uomi_runtime::{
     pallet_tss::{types::SessionId, Event as TssEvent, TssApi},
-    AccountId,
+    AccountId
 };
 
 use uomi_runtime::RuntimeEvent;
@@ -469,7 +470,10 @@ pub enum SessionError {
     GenericError(String),
 }
 
-struct SessionManager<B: BlockT> {
+struct SessionManager<B: BlockT, C> where 
+C: ProvideRuntimeApi<B> + HeaderBackend<B> + BlockchainEvents<B> + Send + Sync + 'static,
+C::Api: TssApi<B>
+{
     storage: Arc<Mutex<MemoryStorage>>,
     key_storage: Arc<Mutex<FileStorage>>,
     sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
@@ -485,13 +489,19 @@ struct SessionManager<B: BlockT> {
     session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
     buffer: Arc<Mutex<HashMap<SessionId, Vec<(TSSPeerId, TssMessage)>>>>,
     local_peer_id: TSSPeerId,
+    client: Arc<C>,
     // Track session creation timestamps for timeout enforcement
     session_timestamps: Arc<Mutex<HashMap<SessionId, std::time::Instant>>>,
     // Maximum session lifetime (in seconds)
     session_timeout: u64,
+    // A list of participants that have actively participated so far
+    active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
 }
 
-impl<B: BlockT> SessionManager<B> {
+impl<B: BlockT, C> SessionManager<B, C> where 
+C: ProvideRuntimeApi<B> + HeaderBackend<B> + BlockchainEvents<B> + Send + Sync + 'static,
+C::Api: TssApi<B>
+{
     fn new(
         storage: Arc<Mutex<MemoryStorage>>,
         key_storage: Arc<Mutex<FileStorage>>,
@@ -505,6 +515,7 @@ impl<B: BlockT> SessionManager<B> {
         runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
         session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
         local_peer_id: TSSPeerId,
+        client: Arc<C>,
     ) -> Self {
         Self {
             storage,
@@ -521,10 +532,12 @@ impl<B: BlockT> SessionManager<B> {
             _phantom: PhantomData,
             buffer: Arc::new(Mutex::new(empty_hash_map())),
             local_peer_id,
+            client,
             ecdsa_manager: Arc::new(Mutex::new(ECDSAManager::new())),
             // Default session timeout to 1 hour (3600 seconds)
             session_timeout: 3600,
             session_timestamps: Arc::new(Mutex::new(empty_hash_map())),
+            active_participants: Arc::new(Mutex::new(empty_hash_map())),
         }
     }
     
@@ -552,6 +565,44 @@ impl<B: BlockT> SessionManager<B> {
         );
         drop(peer_mapper);
         id.is_some()
+    }
+
+    // Add the participant as active, so that it doesn't get reported as bad actor
+    fn add_active_participant(&self, session_id: &SessionId, peer_id: &PeerId) {
+        let mut active_participants = self.active_participants.lock().unwrap();
+        let participants = active_participants.entry(*session_id).or_insert_with(Vec::new);
+        participants.push(peer_id.to_bytes());
+        drop(active_participants);
+    }
+
+    /// Checks what participants have not participated actively
+    fn get_inactive_participants(&self, session_id: &SessionId) -> Vec<[u8; 32]> {
+        let mut inactive_participants = Vec::new();
+        let session_data = self.get_session_data(session_id);
+        if let Some((_, _, _, _)) = session_data {
+            let peer_mapper = self.peer_mapper.lock().unwrap();
+            let participants = peer_mapper.sessions_participants.lock().unwrap().clone();
+            drop(peer_mapper);
+            let mut peer_mapper = self.peer_mapper.lock().unwrap();
+            let active_participants = self.active_participants.lock().unwrap();
+            let empty_vec = Vec::new();
+            let active_participants_in_session = active_participants.get(session_id).unwrap_or(&empty_vec);
+            if let Some(session_participants) = participants.get(session_id) {
+                for (_identifier, account_id) in session_participants.iter() {
+                    let peer_id = peer_mapper.get_peer_id_from_account_id(account_id);
+                    if let Some(peer_id) = peer_id {
+                        if !active_participants_in_session.contains(&peer_id.to_bytes()) {
+                            inactive_participants.push(account_id.clone().try_into().unwrap());
+                        }
+                    }
+                }
+            }
+            drop(active_participants);
+            drop(participants);
+            drop(peer_mapper);
+        }
+        inactive_participants
+
     }
 
     /// Add session data with validation
@@ -677,6 +728,8 @@ impl<B: BlockT> SessionManager<B> {
                             log::error!("[TSS] Error handling DKGRound1 for session {}: {:?}", session_id, error);
                         },
                     }
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
             TssMessage::DKGRound2(session_id, ref bytes, ref recipient) => {
@@ -724,6 +777,8 @@ impl<B: BlockT> SessionManager<B> {
                             log::error!("[TSS] Error handling DKGRound2 for session {}: {:?}", session_id, error);
                         },
                     }
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
             TssMessage::SigningCommitment(session_id, ref bytes) => {
@@ -745,6 +800,8 @@ impl<B: BlockT> SessionManager<B> {
                 ) {
                     // only the coordinator is supposed to receive this
                     log::error!("[TSS] Error Handling Signing Commitment for session {}: {:?}", session_id, error);
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
             TssMessage::SigningShare(session_id, ref bytes) => {
@@ -766,8 +823,10 @@ impl<B: BlockT> SessionManager<B> {
                     sender_peer_id,
                 ) {
                     Err(error) => log::error!("[TSS] Error Handling Signing Share for session {}: {:?}", session_id, error),
-                    Ok(signature) => log::debug!("[TSS] Signature: {:?}", signature)
-                }
+                    Ok(_signature) => {
+                        self.add_active_participant(session_id, &sender_peer_id);
+                    }
+                } 
             }
 
             TssMessage::SigningPackage(session_id, bytes) => {
@@ -791,6 +850,8 @@ impl<B: BlockT> SessionManager<B> {
                     sender_peer_id,
                 ) {
                     log::error!("[TSS] Error Handling Signing Package for session {}: {:?}", session_id, error);
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
 
@@ -878,6 +939,8 @@ impl<B: BlockT> SessionManager<B> {
                 if let Err(error) = &sending_messages {
                     log::error!("[TSS] Error sending messages for session {}: {:?}", session_id, error);
                     return;
+                } else{
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
                 log::debug!("[TSS] calling handle_ecdsa_sending_messages()");
 
@@ -2675,6 +2738,12 @@ impl<B: BlockT> SessionManager<B> {
         // Clean up expired sessions
         for session_id in expired_sessions {
             log::info!("[TSS] Cleaning up expired session {}", session_id);
+
+            // Get the inactive participants for reporting them
+            let inactive_participants = self.get_inactive_participants(&session_id);
+            let runtime = self.client.runtime_api();
+            let best_hash = self.client.info().best_hash;
+            let _ = runtime.report_participants(best_hash, session_id, inactive_participants.clone());
             
             // Remove from all session data structures
             {
@@ -3446,25 +3515,35 @@ impl<B: BlockT> Future for GossipHandler<B> {
 // }
 // ===== Main Setup Function =====
 
-pub fn setup_gossip<C, N, B, S, RE>(
+pub fn setup_gossip<C, N, B, S, TP, RE>(
     client: Arc<C>,
     network: N,
     sync: S,
     notification_service: Box<dyn NotificationService>,
     protocol_name: ProtocolName,
     keystore_container: KeystoreContainer,
+    transaction_pool: Arc<TP>,
     _: PhantomData<B>,
     __: PhantomData<RE>,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Error>
 where
     B: BlockT,
-    C: BlockchainEvents<B> + ProvideRuntimeApi<B> + Send + Sync + 'static,
+    C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static,
     C::Api: uomi_runtime::pallet_tss::TssApi<B>,
     N: Network<B> + Clone + Send + Sync + 'static + NetworkStateInfo + NetworkSigner,
     S: Syncing<B> + Clone + Send + 'static,
+    TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
     RE: EncodeLike + Eq + Debug + Parameter + Sync + Send + Member,
 {
     let mut rng = rand::thread_rng();
+
+
+    let mut runtime = client.runtime_api();
+    runtime.register_extension(KeystoreExt(keystore_container.keystore().clone()));
+
+    let otpf = OffchainTransactionPoolFactory::new(transaction_pool.clone());
+    runtime.register_extension(otpf.offchain_transaction_pool(client.info().best_hash));
+
 
     let setup_gossip_pin = move || {
         // Wait until the key is available. This might not be right away, so check every 30s
@@ -3584,7 +3663,7 @@ where
             RuntimeEventHandler::<B, C>::new(client.clone(), runtime_to_session_manager_tx);
 
         // ===== SessionManager Setup =====
-        let mut session_manager = SessionManager::<B>::new(
+        let mut session_manager = SessionManager::<B, C>::new(
             storage.clone(),
             key_storage.clone(),
             sessions_participants.clone(),
@@ -3597,6 +3676,7 @@ where
             runtime_to_session_manager_rx,
             session_manager_to_gossip_tx,
             local_peer_id.to_bytes(),
+            client,
         );
         
         // Configure session timeout (default is 1 hour, make it 2 hours for production)

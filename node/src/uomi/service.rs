@@ -708,7 +708,7 @@ pub fn start_node(
             prometheus_registry,
             shared_voter_state: SharedVoterState::empty(),
             telemetry: telemetry.as_ref().map(|x| x.handle()),
-            offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(transaction_pool),
+            offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(transaction_pool.clone()),
         };
 
         // the GRANDPA voter task is considered infallible, i.e.
@@ -719,6 +719,8 @@ pub fn start_node(
             sc_consensus_grandpa::run_grandpa_voter(grandpa_config)?,
         );
     }
+
+
 
     
     task_manager.spawn_essential_handle().spawn_blocking(
@@ -731,6 +733,7 @@ pub fn start_node(
             tss_notification_service, 
             tss_protocol_name, 
             keystore_container,
+            transaction_pool,
             PhantomData::<Block>,
             PhantomData::<pallet_tss::Event<Runtime>>
         ).unwrap(),
