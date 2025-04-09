@@ -4,7 +4,7 @@ use frame_system::EventRecord;
 use multi_party_ecdsa::communication::sending_messages::SendingMessages;
 use rand::prelude::*;
 use sc_transaction_pool_api::{LocalTransactionPool, OffchainTransactionPoolFactory};
-use sp_keystore::KeystoreExt;
+use sp_keystore::{KeystoreExt, KeystorePtr};
 use std::{
     collections::{btree_map::Keys, BTreeMap, HashMap},
     fmt::Debug,
@@ -567,6 +567,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
     // Add the participant as active, so that it doesn't get reported as bad actor
     fn add_active_participant(&self, session_id: &SessionId, peer_id: &PeerId) {
+        log::info!("[TSS] Adding Active Participant {:?}", peer_id);
         let mut active_participants = self.active_participants.lock().unwrap();
         let participants = active_participants.entry(*session_id).or_insert_with(Vec::new);
         participants.push(peer_id.to_bytes());
@@ -575,8 +576,16 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
     /// Checks what participants have not participated actively
     fn get_inactive_participants(&self, session_id: &SessionId) -> Vec<[u8; 32]> {
+
+        if !self.is_authorized_for_session(session_id) {
+            return Vec::new();
+        }
         let mut inactive_participants = Vec::new();
-        let session_data = self.get_session_data(session_id);
+
+        let sessions_data = self.sessions_data.lock().unwrap();
+        let session_data = sessions_data.get(session_id).cloned();
+        drop(sessions_data);
+        
         if let Some((_, _, _, _)) = session_data {
             let peer_mapper = self.peer_mapper.lock().unwrap();
             let participants = peer_mapper.sessions_participants.lock().unwrap().clone();
@@ -585,11 +594,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             let active_participants = self.active_participants.lock().unwrap();
             let empty_vec = Vec::new();
             let active_participants_in_session = active_participants.get(session_id).unwrap_or(&empty_vec);
+            log::info!("[TSS] Active Participants In Session: {:?}", active_participants_in_session);
             if let Some(session_participants) = participants.get(session_id) {
                 for (_identifier, account_id) in session_participants.iter() {
                     let peer_id = peer_mapper.get_peer_id_from_account_id(account_id);
                     if let Some(peer_id) = peer_id {
-                        if !active_participants_in_session.contains(&peer_id.to_bytes()) {
+                        if peer_id.to_bytes() != self.local_peer_id && !active_participants_in_session.contains(&peer_id.to_bytes()) {
                             inactive_participants.push(account_id.clone().try_into().unwrap());
                         }
                     }
@@ -707,6 +717,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     return;
                 }
 
+                // Check if the node is authorized for this session
+                if !self.is_authorized_for_session(session_id) {
+                    log::warn!("[TSS] Node not authorized for session {}", session_id);
+                    return;
+                }
+
                 if let Err(error) = self.dkg_handle_round1_message(
                     *session_id,
                     bytes,
@@ -739,6 +755,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 
                 if self.is_session_timed_out(session_id) {
                     log::warn!("[TSS] Received DKGRound2 message for timed out session {}", session_id);
+                    return;
+                }
+
+                // Check if the node is authorized for this session
+                if !self.is_authorized_for_session(session_id) {
+                    log::warn!("[TSS] Node not authorized for session {}", session_id);
                     return;
                 }
 
@@ -2739,9 +2761,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
             // Get the inactive participants for reporting them
             let inactive_participants = self.get_inactive_participants(&session_id);
-            let best_hash = self.client.best_hash();
-            let _ = self.client.report_participants(best_hash, session_id, inactive_participants.clone());
-            
+            if inactive_participants.len() > 0 { 
+                let best_hash = self.client.best_hash();
+                let _ = self.client.report_participants(best_hash, session_id, inactive_participants.clone());
+            }
+
             // Remove from all session data structures
             {
                 let mut session_data = self.sessions_data.lock().unwrap();
@@ -2838,6 +2862,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         
         log::info!("[TSS] Successfully added data for DKG session {}", id);
         
+        // Check if the node is authorized for this session
+        if !self.is_authorized_for_session(&id) {
+            log::warn!("[TSS] Node not authorized for session {}", id);
+            return Err(format!("Node not authorized for session {}", id));
+        }
+        
+
         self.dkg_handle_session_created(id, n.into(), t.into(), participants.clone())
             .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
         
@@ -3513,6 +3544,28 @@ impl<B: BlockT> Future for GossipHandler<B> {
 
 
 // ===== Client Manager =====
+
+struct ClientWrapper<B: BlockT, C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static, TP> where 
+TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
+{
+    client: Arc<C>,
+    phantom: PhantomData<B>,
+    keystore: KeystorePtr,
+    transaction_pool: Arc<TP>,
+}   
+impl <B: BlockT, C: BlockchainEvents<B> + ProvideRuntimeApi<B, Api=T> + HeaderBackend<B> + Send + Sync + 'static, T:TssApi<B>, TP> ClientWrapper<B, C, TP> where 
+TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static
+ {
+    fn new(client: Arc<C>, keystore: KeystorePtr, transaction_pool: Arc<TP> ) -> Self {
+        Self {
+            client,
+            phantom: Default::default(),
+            keystore,
+            transaction_pool
+        }
+    }
+}
+
 trait ClientManager<B: BlockT> {
     fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash;
     fn report_participants(
@@ -3523,13 +3576,14 @@ trait ClientManager<B: BlockT> {
     ) -> Result<(), String>;
 }
 
-impl<B: BlockT, C> ClientManager<B> for Arc<C>
+impl<B: BlockT, C, TP> ClientManager<B> for ClientWrapper<B, C, TP>
 where
     C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static,
     C::Api: uomi_runtime::pallet_tss::TssApi<B>,
+    TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
 {
     fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash {
-        self.info().best_hash
+        self.client.info().best_hash
     }
 
     fn report_participants(
@@ -3538,7 +3592,14 @@ where
         session_id: SessionId,
         inactive_participants: Vec<[u8; 32]>,
     ) -> Result<(), String> {
-        self.runtime_api()
+
+        let mut runtime = self.client.runtime_api();
+        runtime.register_extension(KeystoreExt(self.keystore.clone()));
+    
+        let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+        runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
+
+        runtime
             .report_participants(hash, session_id, inactive_participants)
             .map_err(|e| format!("Failed to report participants: {:?}", e))
     }
@@ -3570,19 +3631,16 @@ where
     let mut rng = rand::thread_rng();
 
 
-    let mut runtime = client.runtime_api();
-    runtime.register_extension(KeystoreExt(keystore_container.keystore().clone()));
-
-    let otpf = OffchainTransactionPoolFactory::new(transaction_pool.clone());
-    runtime.register_extension(otpf.offchain_transaction_pool(client.info().best_hash));
-
-
     let setup_gossip_pin = move || {
+        // Create Arc clone of client that will be moved into the future
+        let client = Arc::clone(&client);
+        
         // Wait until the key is available. This might not be right away, so check every 30s
         while get_validator_key_from_keystore(&keystore_container).is_none() {
             log::warn!("[TSS] No validator key found in keystore. Waiting for key");
             sleep(Duration::from_secs(30));
         }
+    
 
         // As soon as the key is ready we can break the loop and we can start the actual thing
 
@@ -3708,11 +3766,11 @@ where
             runtime_to_session_manager_rx,
             session_manager_to_gossip_tx,
             local_peer_id.to_bytes(),
-            client,
+            ClientWrapper::new(Arc::clone(&client), keystore_container.keystore().clone(), transaction_pool.clone()),
         );
         
         // Configure session timeout (default is 1 hour, make it 2 hours for production)
-        session_manager.session_timeout = 7200; // 2 hours in seconds
+        session_manager.session_timeout = 15; // 2 hours in seconds
 
         // ===== Start the components =====
         let runtime_event_handler_future = runtime_event_handler.run();
