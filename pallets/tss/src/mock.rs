@@ -170,7 +170,8 @@ impl SendTransactionTypes<crate::pallet::Call<Test>> for Test {
 impl pallet_uomi_engine::Config for Test {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
-    type Randomness = pallet_babe::RandomnessFromOneEpochAgo<Test>;
+    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Test>; // for finney update. remove on turing
+    type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
 }
