@@ -3,10 +3,11 @@ use crate::*;
 use crate::{
     dkghelpers::{FileStorage, MemoryStorage},
     ecdsa::ECDSAManager,
-    DKGSessionState, PeerMapper, SessionData, SessionId, SessionManager, SigningSessionState,
+    PeerMapper, SessionData, SessionId, SessionManager, SigningSessionState,
     TSSParticipant, TSSPeerId, TSSPublic, TSSRuntimeEvent, TssMessage,
 };
 use sc_network::PeerId;
+use sc_service::TFullClient;
 use sc_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
 use std::cell::RefCell;
 use std::{
@@ -14,7 +15,9 @@ use std::{
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
-use uomi_runtime::Block;
+use uomi_runtime::{Block, RuntimeApi};
+use substrate_test_runtime_client::{TestClientBuilder, Client};
+
 
 /// Simulates the network environment with configurable message passing
 pub struct TestNetwork {
@@ -43,10 +46,28 @@ impl Default for TestConfig {
     }
 }
 
+
+pub struct TestClientManager;
+
+impl<B: BlockT> ClientManager<B> for TestClientManager {
+    fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash {
+        Default::default()
+    }
+
+    fn report_participants(
+        &self,
+        _hash: <<B as BlockT>::Header as HeaderT>::Hash, 
+        _session_id: SessionId,
+        _inactive_participants: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
+        // Test implementation just returns Ok
+        Ok(())
+    }
+}
 /// Represents a single node in the test network
 pub struct TestNode {
     /// The core component under test
-    pub session_manager: SessionManager<Block>,
+    pub session_manager: SessionManager<Block, TestClientManager>,
     /// Transmitter for runtime events
     pub runtime_tx: TracingUnboundedSender<TSSRuntimeEvent>,
     /// Receiver for outgoing gossip messages
@@ -198,6 +219,9 @@ impl TestNetwork {
     }
 }
 
+
+
+
 impl TestNode {
     /// Create a new test node with mocked channels
     fn new(peer_id: PeerId, validator_key: TSSPublic) -> Self {
@@ -238,6 +262,7 @@ impl TestNode {
             session_timestamps: Arc::new(Mutex::new(HashMap::new())),
             _phantom: PhantomData,
             active_participants: Arc::new(Mutex::new(HashMap::new())),
+            client: TestClientManager {}
         };
 
         TestNode {

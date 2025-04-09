@@ -470,9 +470,9 @@ pub enum SessionError {
     GenericError(String),
 }
 
-struct SessionManager<B: BlockT, C> where 
-C: ProvideRuntimeApi<B> + HeaderBackend<B> + BlockchainEvents<B> + Send + Sync + 'static,
-C::Api: TssApi<B>
+
+
+struct SessionManager<B: BlockT, C: ClientManager<B>>
 {
     storage: Arc<Mutex<MemoryStorage>>,
     key_storage: Arc<Mutex<FileStorage>>,
@@ -489,7 +489,7 @@ C::Api: TssApi<B>
     session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
     buffer: Arc<Mutex<HashMap<SessionId, Vec<(TSSPeerId, TssMessage)>>>>,
     local_peer_id: TSSPeerId,
-    client: Arc<C>,
+    client: C,
     // Track session creation timestamps for timeout enforcement
     session_timestamps: Arc<Mutex<HashMap<SessionId, std::time::Instant>>>,
     // Maximum session lifetime (in seconds)
@@ -498,9 +498,7 @@ C::Api: TssApi<B>
     active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
 }
 
-impl<B: BlockT, C> SessionManager<B, C> where 
-C: ProvideRuntimeApi<B> + HeaderBackend<B> + BlockchainEvents<B> + Send + Sync + 'static,
-C::Api: TssApi<B>
+impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 {
     fn new(
         storage: Arc<Mutex<MemoryStorage>>,
@@ -515,7 +513,7 @@ C::Api: TssApi<B>
         runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
         session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
         local_peer_id: TSSPeerId,
-        client: Arc<C>,
+        client: C,
     ) -> Self {
         Self {
             storage,
@@ -2741,9 +2739,8 @@ C::Api: TssApi<B>
 
             // Get the inactive participants for reporting them
             let inactive_participants = self.get_inactive_participants(&session_id);
-            let runtime = self.client.runtime_api();
-            let best_hash = self.client.info().best_hash;
-            let _ = runtime.report_participants(best_hash, session_id, inactive_participants.clone());
+            let best_hash = self.client.best_hash();
+            let _ = self.client.report_participants(best_hash, session_id, inactive_participants.clone());
             
             // Remove from all session data structures
             {
@@ -3513,6 +3510,41 @@ impl<B: BlockT> Future for GossipHandler<B> {
     // }
     // Main poll method
 // }
+
+
+// ===== Client Manager =====
+trait ClientManager<B: BlockT> {
+    fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash;
+    fn report_participants(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        inactive_participants: Vec<[u8; 32]>,
+    ) -> Result<(), String>;
+}
+
+impl<B: BlockT, C> ClientManager<B> for Arc<C>
+where
+    C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static,
+    C::Api: uomi_runtime::pallet_tss::TssApi<B>,
+{
+    fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash {
+        self.info().best_hash
+    }
+
+    fn report_participants(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        inactive_participants: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
+        self.runtime_api()
+            .report_participants(hash, session_id, inactive_participants)
+            .map_err(|e| format!("Failed to report participants: {:?}", e))
+    }
+}
+
+
 // ===== Main Setup Function =====
 
 pub fn setup_gossip<C, N, B, S, TP, RE>(
@@ -3663,7 +3695,7 @@ where
             RuntimeEventHandler::<B, C>::new(client.clone(), runtime_to_session_manager_tx);
 
         // ===== SessionManager Setup =====
-        let mut session_manager = SessionManager::<B, C>::new(
+        let mut session_manager = SessionManager::<B, _>::new(
             storage.clone(),
             key_storage.clone(),
             sessions_participants.clone(),

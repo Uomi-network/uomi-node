@@ -308,20 +308,6 @@ pub mod pallet {
             nft_id: NftId,
             threshold: u32,
         ) -> DispatchResult {
-            // JACOPO QUA!!!
-            let who = ensure_signed(origin)?;
-         
-            // convert 5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL in accountId to whitelist
-            let raw_bytes = hex::decode("f49d2bc0033b1c3c3ede364a02096a2c05bbba0e39c4e0ea5f9e7d3abf2ba074")
-            .map_err(|_| Error::<T>::DecodingError)?;
-            
-            // Decodifica i bytes in un AccountId
-            let whitelisted = T::AccountId::decode(&mut &raw_bytes[..])
-                .map_err(|_| Error::<T>::DecodingError)?;
-
-
-         
-            ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
             ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
             // threshold needs to be an integer value between 50 and 100%
@@ -383,22 +369,6 @@ pub mod pallet {
             nft_id: NftId,
             message: BoundedVec<u8, MaxMessageSize>,
         ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-
-            // Rimuovi il prefisso "0x" e converte la stringa hex in bytes
-            let raw_bytes = hex::decode("f49d2bc0033b1c3c3ede364a02096a2c05bbba0e39c4e0ea5f9e7d3abf2ba074")
-            .map_err(|_| Error::<T>::DecodingError)?;
-            
-
-            // Decodifica i bytes in un AccountId
-            let whitelisted = T::AccountId::decode(&mut &raw_bytes[..])
-                .map_err(|_| Error::<T>::DecodingError)?;
-    
-         
-            ensure!(whitelisted == who, Error::<T>::UnauthorizedParticipation);
-
-          
-
             // Find the DKG session with this NFT ID
             let mut dkg_session_id = None;
             for (id, session) in DkgSessions::<T>::iter() {
