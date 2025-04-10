@@ -579,6 +579,7 @@ pub fn start_node(
             },
         )
     };
+    let is_authority = config.role.is_authority();
 
     let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
         network: network.clone(),
@@ -727,23 +728,25 @@ pub fn start_node(
             sc_consensus_grandpa::run_grandpa_voter(grandpa_config)?,
         );
     }
-
-    task_manager.spawn_essential_handle().spawn_blocking(
-        "tss-p2p",
-        None,
-        setup_gossip(
-            c,
-            network,
-            sync_service,
-            tss_notification_service,
-            tss_protocol_name,
-            keystore_container,
-            transaction_pool,
-            PhantomData::<Block>,
-            PhantomData::<RuntimeEvent>,
-        )
-        .unwrap(),
-    );
+    
+    if is_authority {
+        task_manager.spawn_essential_handle().spawn_blocking(
+            "tss-p2p",
+            None,
+            setup_gossip(
+                c,
+                network,
+                sync_service,
+                tss_notification_service,
+                tss_protocol_name,
+                keystore_container,
+                transaction_pool,
+                PhantomData::<Block>,
+                PhantomData::<RuntimeEvent>,
+            )
+            .unwrap(),
+        );
+    }
 
     network_starter.start_network();
 
