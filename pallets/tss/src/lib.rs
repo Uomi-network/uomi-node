@@ -189,7 +189,7 @@ pub mod pallet {
         }
     }
 
-    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Debug, PartialEq, Eq, Clone, Copy)]
+    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Debug, PartialEq, Eq, Clone, Copy, PartialOrd)]
     pub enum SessionState {
         DKGCreated,
         DKGInProgress,
@@ -335,6 +335,7 @@ pub mod pallet {
             ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
 
             let slashed_validators = Self::get_slashed_validators();
+            let deadline = frame_system::Pallet::<T>::block_number() + 100u32.into();
 
             // Create new DKG session
             let session = DKGSession {
@@ -349,8 +350,9 @@ pub mod pallet {
                 threshold,
                 state: SessionState::DKGCreated,
                 old_participants: None,
-                deadline: <frame_system::Pallet<T>>::block_number() + 100u32.into(),
+                deadline
             };
+
 
             // Generate random session ID
             let session_id = Self::get_next_session_id();
@@ -745,15 +747,19 @@ pub mod pallet {
             // Fetch all the sessions in progress and verify if they are still valid or deadline has passed
             let mut sessions_to_remove = Vec::new();
             for (session_id, session) in DkgSessions::<T>::iter() {
-                if session.deadline < n {
-                    sessions_to_remove.push(session_id);
+                // Check if the session is in progress and if the deadline has passed
+                if session.state <= SessionState::DKGInProgress {
+                    let deadline = session.deadline;
+                    if n >= deadline {
+                        sessions_to_remove.push(session_id);
+                    }
                 }
             }
             
             for session_id in sessions_to_remove {
-                DkgSessions::<T>::remove(session_id);
                 Pallet::<T>::update_report_count(session_id).ok();
                 Pallet::<T>::deposit_event(Event::DKGFailed(session_id));
+                DkgSessions::<T>::remove(session_id);
             }
 
             Ok(())
@@ -791,7 +797,7 @@ pub mod pallet {
                     let reporting_threshold = (total_participants * 2) / 3;
 
                     // Check if the participant has been reported by more than 2/3 of the participants
-                    if report_count > reporting_threshold {
+                    if report_count >= reporting_threshold {
                         // Increment the report count for this participant
                         let current_count = ParticipantReportCount::<T>::get(reported_participant);
                         ParticipantReportCount::<T>::insert(
