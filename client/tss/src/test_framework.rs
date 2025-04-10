@@ -16,7 +16,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use uomi_runtime::{Block, RuntimeApi};
-use substrate_test_runtime_client::{TestClientBuilder, Client};
+use substrate_test_runtime_client::{Client, TestClient, TestClientBuilder};
 
 
 /// Simulates the network environment with configurable message passing
@@ -47,7 +47,43 @@ impl Default for TestConfig {
 }
 
 
-pub struct TestClientManager;
+pub struct TestClientManager {
+    // spy on calls to ClientManager functions
+    submit_dkg_result_calls: RefCell<Vec<(SessionId, Vec<u8>)>>,
+    report_participants_calls: RefCell<Vec<(SessionId, Vec<[u8; 32]>)>>,
+}
+
+impl TestClientManager {
+    pub fn new() -> Self {
+        TestClientManager {
+            submit_dkg_result_calls: RefCell::new(Vec::new()),
+            report_participants_calls: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn submit_dkg_result_calls(&self) -> Vec<(SessionId, Vec<u8>)> {
+        self.submit_dkg_result_calls.borrow().clone()
+    }
+    pub fn report_participants_calls(&self) -> Vec<(SessionId, Vec<[u8; 32]>)> {
+        self.report_participants_calls.borrow().clone()
+    }
+
+    pub fn clear_calls(&self) {
+        self.submit_dkg_result_calls.borrow_mut().clear();
+        self.report_participants_calls.borrow_mut().clear();
+    }
+
+    pub fn add_submit_dkg_result_call(&self, session_id: SessionId, aggregated_key: Vec<u8>) {
+        self.submit_dkg_result_calls
+            .borrow_mut()
+            .push((session_id, aggregated_key));
+    }
+    pub fn add_report_participants_call(&self, session_id: SessionId, inactive_participants: Vec<[u8; 32]>) {
+        self.report_participants_calls
+            .borrow_mut()
+            .push((session_id, inactive_participants));
+    }
+}
 
 impl<B: BlockT> ClientManager<B> for TestClientManager {
     fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash {
@@ -57,10 +93,21 @@ impl<B: BlockT> ClientManager<B> for TestClientManager {
     fn report_participants(
         &self,
         _hash: <<B as BlockT>::Header as HeaderT>::Hash, 
-        _session_id: SessionId,
-        _inactive_participants: Vec<[u8; 32]>,
+        session_id: SessionId,
+        inactive_participants: Vec<[u8; 32]>,
     ) -> Result<(), String> {
         // Test implementation just returns Ok
+        self.add_report_participants_call(session_id, inactive_participants);
+        Ok(())
+    }
+    fn submit_dkg_result(
+            &self,
+            _hash: <<B as BlockT>::Header as HeaderT>::Hash,
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        ) -> Result<(), String> {
+        // Test implementation just returns Ok
+        self.add_submit_dkg_result_call(session_id, aggregated_key);
         Ok(())
     }
 }
@@ -262,7 +309,7 @@ impl TestNode {
             session_timestamps: Arc::new(Mutex::new(HashMap::new())),
             _phantom: PhantomData,
             active_participants: Arc::new(Mutex::new(HashMap::new())),
-            client: TestClientManager {}
+            client: TestClientManager::new(),
         };
 
         TestNode {

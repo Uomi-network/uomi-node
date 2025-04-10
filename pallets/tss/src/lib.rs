@@ -18,17 +18,22 @@ use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
 use scale_info::TypeInfo;
-use sp_core::crypto::Ss58Codec;
 
 pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
-use types::{Key, SessionId};
+use types::{ PublicKey, SessionId};
 
 const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1950000; // For finney update. remove on turing
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
 pub struct EmptyInherent;
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+pub struct AggregatedKeyInherent {
+    pub session_id: SessionId,
+    pub public_key: Vec<u8>,
+}
 
 // Prima delle implementazioni del pallet, aggiungi:
 #[derive(Encode)]
@@ -82,6 +87,17 @@ impl<T: Config> ReportParticipantsPayload<T> {
     }
 }
 
+
+/// A struct for the payload of the SubmitDKGResult call
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+pub struct SubmitDKGResultPayload<T: Config> {
+    session_id: SessionId,
+    public_key: PublicKey,
+    public: T::Public,
+}
+
+
+
 impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsPayload<T> {
     fn public(&self) -> T::Public {
         self.public.clone()
@@ -95,6 +111,12 @@ impl<T: SigningTypes + Config> SignedPayload<T> for UpdateValidatorsPayload<T> {
 }
 
 impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsCountPayload<T> {
+    fn public(&self) -> T::Public {
+        self.public.clone()
+    }
+}
+
+impl<T: SigningTypes + Config> SignedPayload<T> for SubmitDKGResultPayload<T> {
     fn public(&self) -> T::Public {
         self.public.clone()
     }
@@ -136,7 +158,6 @@ pub mod crypto {
 pub mod pallet {
 
     use frame_system::offchain::{AppCrypto, CreateSignedTransaction};
-    use pallet_uomi_engine::types::BlockNumber;
     use sp_runtime::traits::{IdentifyAccount, Verify};
 
     use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
@@ -161,6 +182,9 @@ pub mod pallet {
         type SignatureVerifier: SignatureVerification<PublicKey>;
 
         type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
+
+        #[pallet::constant]
+        type MinimumValidatorThreshold: Get<u32>;
     }
 
     pub trait SignatureVerification<PublicKey> {
@@ -288,6 +312,14 @@ pub mod pallet {
     pub type ParticipantReportCount<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
 
+    // A storage to store temporarily proposed public keys generated from the DKG process associated with the session ID and validator ID
+    #[pallet::storage]
+    #[pallet::getter(fn proposed_public_keys)]
+    pub type ProposedPublicKeys<T: Config> =
+        StorageDoubleMap<_, Blake2_128Concat, SessionId, Blake2_128Concat, u32, PublicKey, OptionQuery>;
+
+    
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -406,10 +438,10 @@ pub mod pallet {
             // Ensure the DKG session is in the correct state
             let dkg_session =
                 Self::get_dkg_session(dkg_session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
-            // ensure!(
-            //     dkg_session.state == SessionState::DKGComplete,
-            //     Error::<T>::DkgSessionNotReady
-            // );
+            ensure!(
+                dkg_session.state == SessionState::DKGComplete,
+                Error::<T>::DkgSessionNotReady
+            );
 
             // Create new Signing session
             let session = SigningSession {
@@ -436,29 +468,58 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn submit_dkg_result(
             origin: OriginFor<T>,
-            session_id: SessionId,
-            aggregated_key: PublicKey,
+            payload: SubmitDKGResultPayload<T>,
+            _signature: T::Signature,
         ) -> DispatchResult {
-            // let who = ensure_signed(origin)?;
+            ensure_none(origin)?;
 
-            // let mut session =
-            //     DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
-            // // Verify submitter was part of DKG session
-            // ensure!(
-            //     session.participants.contains(&who),
-            //     Error::<T>::UnauthorizedParticipation
-            // );
+            let who = payload.public().into_account();
+            let session_id = payload.session_id;
+            let aggregated_key = payload.public_key;
 
-            // // Store aggregated key
-            // AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
-            // session.state = SessionState::DKGComplete;
-            // DkgSessions::<T>::insert(session_id, session);
 
-            // // Update TSS key if this is the latest session.
-            // TSSKey::<T>::put(aggregated_key.clone());
+            let mut session =
+                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
-            // Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+            ensure!(
+                session.state == SessionState::DKGInProgress,
+                Error::<T>::InvalidSessionState
+            );
+
+            // Check if the validator was involved in the DKG session
+            let validator_id = ValidatorIds::<T>::get(who.clone()).ok_or(Error::<T>::UnauthorizedParticipation)?;
+            ensure!(
+                session.participants.contains(&who),
+                Error::<T>::UnauthorizedParticipation
+            );
+
+            // Add the vote to the proposed public keys
+            ProposedPublicKeys::<T>::insert(session_id, validator_id, aggregated_key.clone());
+
+            let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
+
+            // Check if the number of votes meets the threshold
+            let mut votes = 0;
+            for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(session_id) {
+                if key == aggregated_key {
+                    votes += 1;
+                }
+            }
+            let total_validators = session.participants.len() as u32;
+            let required_votes = (total_validators * threshold) / 100;
+
+            if votes >= required_votes {
+                // If the threshold is met, finalize the DKG session
+                session.state = SessionState::DKGComplete;
+                DkgSessions::<T>::insert(session_id, session);
+
+                // Store the aggregated public key
+                AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
+
+                // Emit event
+                Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+            }
             Ok(())
         }
 
@@ -469,28 +530,28 @@ pub mod pallet {
             session_id: SessionId,
             signature: Signature,
         ) -> DispatchResult {
-            // let _who = ensure_signed(origin)?; // Could add participant check
+            let _who = ensure_signed(origin)?; // Could add participant check
 
-            // let mut session =
-            //     SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
+            let mut session =
+                SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
 
-            // ensure!(
-            //     session.state == SessionState::SigningInProgress,
-            //     Error::<T>::InvalidSessionState
-            // );
+            ensure!(
+                session.state == SessionState::SigningInProgress,
+                Error::<T>::InvalidSessionState
+            );
 
-            // // Verify signature against stored message and TSS key
-            // let public_key = TSSKey::<T>::get();
-            // ensure!(
-            //     verify_signature::<T>(&public_key, &session.message, &signature),
-            //     Error::<T>::InvalidSignature
-            // );
+            // Verify signature against stored message and TSS key
+            let public_key = TSSKey::<T>::get();
+            ensure!(
+                verify_signature::<T>(&public_key, &session.message, &signature),
+                Error::<T>::InvalidSignature
+            );
 
-            // session.aggregated_sig = Some(signature.clone());
-            // session.state = SessionState::SigningComplete;
-            // SigningSessions::<T>::insert(session_id, session);
+            session.aggregated_sig = Some(signature.clone());
+            session.state = SessionState::SigningComplete;
+            SigningSessions::<T>::insert(session_id, session);
 
-            // Self::deposit_event(Event::SigningCompleted(session_id, signature));
+            Self::deposit_event(Event::SigningCompleted(session_id, signature));
             Ok(())
         }
 
@@ -502,34 +563,35 @@ pub mod pallet {
             threshold: u32,
             old_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
         ) -> DispatchResult {
-            // let _who = ensure_signed(origin)?;
+            let _who = ensure_signed(origin)?;
 
-            // ensure!(threshold > 0, Error::<T>::InvalidThreshold);
+            ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
-            // // threshold needs to be an integer value between 50 and 100%
-            // ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
-            // ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
+            // threshold needs to be an integer value between 50 and 100%
+            ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
+            ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
 
-            // // Create new reshare DKG session
-            // let session = DKGSession {
-            //     nft_id,
-            //     participants: BoundedVec::try_from(
-            //         pallet_staking::Validators::<T>::iter()
-            //             .map(|(account_id, _)| account_id)
-            //             .collect::<Vec<T::AccountId>>(),
-            //     )
-            //     .unwrap(),
-            //     threshold,
-            //     state: SessionState::DKGCreated,
-            //     old_participants: Some(old_participants),
-            // };
+            // Create new reshare DKG session
+            let session = DKGSession {
+                nft_id,
+                participants: BoundedVec::try_from(
+                    pallet_staking::Validators::<T>::iter()
+                        .map(|(account_id, _)| account_id)
+                        .collect::<Vec<T::AccountId>>(),
+                )
+                .unwrap(),
+                threshold,
+                state: SessionState::DKGCreated,
+                old_participants: Some(old_participants),
+                deadline: frame_system::Pallet::<T>::block_number() + 100u32.into(),
+            };
 
-            // // Generate random session ID
-            // let session_id = Self::get_next_session_id();
+            // Generate random session ID
+            let session_id = Self::get_next_session_id();
 
-            // // Store the session
-            // DkgSessions::<T>::insert(session_id, session);
-            // Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
+            // Store the session
+            DkgSessions::<T>::insert(session_id, session);
+            Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
             Ok(())
         }
 
@@ -576,23 +638,6 @@ pub mod pallet {
             }
             Ok(())
         }
-
-        /// A function that checks how many times has a participant been reported in the storage  ReportedParticipants
-        /// if a participant has been reported by > 2/3 of all the participants of the remaining participants of the session
-        /// we add a count of 1 to the storage  ParticipantReportCount.       
-        #[pallet::weight(10_000)]
-        #[pallet::call_index(7)]
-        pub fn check_participant_report_count(
-            origin: OriginFor<T>,
-            payload: ReportParticipantsCountPayload<T>,
-            _signature: T::Signature,
-        ) -> DispatchResult {
-            let _ = ensure_none(origin)?;
-
-            let session_id = payload.session_id;
-
-            Ok(())
-        }
     }
     fn verify_signature<T: Config>(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
         T::SignatureVerifier::verify(key, message, sig)
@@ -607,7 +652,7 @@ pub mod pallet {
         }
     }
 
-    pub const INHERENT_IDENTIFIER: InherentIdentifier = *b"tss-iden";
+    // pub const INHERENT_IDENTIFIER: InherentIdentifier = *b"tss-iden";
 
     // #[pallet::inherent]
     // impl<T: Config> ProvideInherent for Pallet<T> {
@@ -615,25 +660,14 @@ pub mod pallet {
     //     type Error = InherentError;
     //     const INHERENT_IDENTIFIER: InherentIdentifier = INHERENT_IDENTIFIER;
 
-    //     fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
-    //         let current_block_number = frame_system::Pallet::<T>::block_number().into();
+    //     fn create_inherent(data: &InherentData) -> Option<Self::Call> {
 
-    //         let operations = match Self::ipfs_operations(current_block_number) {
-    //             Ok(operations) => { operations }
-    //             Err(error) => {
-    //                 return None;
-    //             }
-    //         };
-
-    //         Some(Call::set_inherent_data {
-    //             operations,
-    //         })
+    //         None
     //     }
-
     //     fn is_inherent(call: &Self::Call) -> bool {
-    //         matches!(call, Call::set_inherent_data { .. })
+    //         // matches!(call, Call::submit_dkg_result { .. })
+    //         false
     //     }
-
     // }
 
     #[pallet::validate_unsigned]
@@ -659,14 +693,6 @@ pub mod pallet {
                         .propagate(true)
                         .build();
                 }
-                Call::check_participant_report_count { .. } => {
-                    return ValidTransaction::with_tag_prefix("TssPallet")
-                        .priority(TransactionPriority::MAX)
-                        .and_provides(call.encode())
-                        .longevity(64)
-                        .propagate(true)
-                        .build();
-                }
 
                 // Reject all other unsigned calls
                 _ => {
@@ -679,8 +705,7 @@ pub mod pallet {
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn offchain_worker(n: BlockNumberFor<T>) {
-            let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-                                                                                         // Check for new validators every 10 blocks
+            // Check for new validators every 10 blocks
             if n % 10u32.into() != 0u32.into() {
                 return;
             }
@@ -910,6 +935,79 @@ pub mod pallet {
             );
             log::info!("[TSS] Reported participants");
         }
+
+        // cast_vote_on_dkg_result is called by each validator and created. This function will sign the payload
+        // and call submit_dkg_result with the signature
+        pub fn cast_vote_on_dkg_result(
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        ) -> DispatchResult {
+            let aggregated_key = BoundedVec::try_from(aggregated_key)
+                .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
+            
+            // Check if the session exists
+            let session =
+                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
+            // Check if the session is in progress
+            ensure!(
+                session.state == SessionState::DKGInProgress,
+                Error::<T>::InvalidSessionState
+            );
+
+            // Create a transaction to submit
+            let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+
+            if !signer.can_sign() {
+                log::error!("TSS: No accounts available to sign cast_vote_on_dkg_result");
+                return Err(Error::<T>::KeyUpdateFailed.into());
+            }
+
+            // Send unsigned transaction with signed payload
+            let _ = signer.send_unsigned_transaction(
+                |acct| SubmitDKGResultPayload::<T> {
+                    session_id,
+                    public_key: aggregated_key.clone(),
+                    public: acct.public.clone(),
+                },
+                |payload, signature| Call::submit_dkg_result { payload, signature },
+            );
+
+            Ok(())
+        }
+
+        pub fn finalize_dkg_session(
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        ) -> DispatchResult {
+
+            let aggregated_key = BoundedVec::try_from(aggregated_key)
+                .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
+            
+            // Check if the session exists and is in the correct state
+            let mut session =
+                DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
+            ensure!(
+                session.state == SessionState::DKGInProgress,
+                Error::<T>::InvalidSessionState
+            );
+
+            // Update the session state to DKGComplete
+            DkgSessions::<T>::mutate(session_id, |session| {
+                if let Some(s) = session {
+                    s.state = SessionState::DKGComplete;
+                }
+            });
+
+            // Store the aggregated public key
+            AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
+
+            // Emit event with the session ID and aggregated key
+            Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+
+            Ok(())
+        }
     }
 }
 
@@ -927,5 +1025,9 @@ sp_api::decl_runtime_apis! {
         fn get_all_validator_ids() -> Vec<(u32, [u8; 32])>;
 
         fn report_participants(id: SessionId, reported_participants: Vec<[u8; 32]>);
+        fn submit_dkg_result(
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        );
     }
 }

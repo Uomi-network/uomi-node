@@ -1358,6 +1358,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     return;
                 }
 
+                // Publish to the chain
+                if let Err(err) = self.client.submit_dkg_result(self.client.best_hash(), session_id, msg.as_bytes().to_vec()) {
+                    log::error!("[TSS] Error submitting DKG result to chain: {:?}", err);
+                }
+
                 let session_data = self.get_session_data(&session_id);
 
                 match session_data {
@@ -3577,6 +3582,12 @@ trait ClientManager<B: BlockT> {
         session_id: SessionId,
         inactive_participants: Vec<[u8; 32]>,
     ) -> Result<(), String>;
+    fn submit_dkg_result(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        aggregated_key: Vec<u8>,
+    ) -> Result<(), String>;
 }
 
 impl<B: BlockT, C, TP> ClientManager<B> for ClientWrapper<B, C, TP>
@@ -3605,6 +3616,23 @@ where
         runtime
             .report_participants(hash, session_id, inactive_participants)
             .map_err(|e| format!("Failed to report participants: {:?}", e))
+    }
+
+    fn submit_dkg_result(
+            &self,
+            hash: <<B as BlockT>::Header as HeaderT>::Hash,
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        ) -> Result<(), String> {
+            let mut runtime = self.client.runtime_api();
+            runtime.register_extension(KeystoreExt(self.keystore.clone()));
+        
+            let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+            runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
+    
+            runtime
+                .submit_dkg_result(hash, session_id, aggregated_key)
+                .map_err(|e| format!("Failed to submit DKG result: {:?}", e))
     }
 }
 

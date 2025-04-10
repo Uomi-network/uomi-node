@@ -1316,6 +1316,7 @@ impl pallet_tss::Config for Runtime {
     
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
+    type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
 }
 
 parameter_types! {
@@ -2610,6 +2611,12 @@ impl_runtime_apis! {
 
         fn report_participants(id: u64, reported_participants: Vec<[u8; 32]>) {
             pallet_tss::pallet::Pallet::<Runtime>::report_participants(id, reported_participants);
+        }
+        fn submit_dkg_result(
+            session_id: u64,
+            aggregated_key: Vec<u8>,
+        )  {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
         }
     }
 }
