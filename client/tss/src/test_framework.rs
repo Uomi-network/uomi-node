@@ -3,11 +3,11 @@ use crate::*;
 use crate::{
     dkghelpers::{FileStorage, MemoryStorage},
     ecdsa::ECDSAManager,
-    PeerMapper, SessionData, SessionId, SessionManager, SigningSessionState,
-    TSSParticipant, TSSPeerId, TSSPublic, TSSRuntimeEvent, TssMessage,
+    PeerMapper, SessionId, SessionManager,
+    TSSPublic, TSSRuntimeEvent, TssMessage,
 };
 use sc_network::PeerId;
-use sc_service::TFullClient;
+
 use sc_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
 use std::cell::RefCell;
 use std::{
@@ -15,8 +15,7 @@ use std::{
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
-use uomi_runtime::{Block, RuntimeApi};
-use substrate_test_runtime_client::{Client, TestClient, TestClientBuilder};
+use uomi_runtime::Block;
 
 
 /// Simulates the network environment with configurable message passing
@@ -496,29 +495,3 @@ fn test_route_ecdsa_message() {
         _ => panic!("Wrong message type or recipient"),
     }
 }
-
-/// We mock the network in this way:
-///
-/// 1. MockNetwork holds references to half of the ends, specifically:
-///     a. Runtime to SessionManager transmitter
-///     b. Gossip to SessionManager transmitter
-///     c. SessionManager to Gossip receiver
-/// 2. When we mock a SessionManager, we also automatically add a node to the network, giving it the necessary channels to communicate.
-/// 3. The MockNetwork routes messages. It uses PeerId for direct messages. SessionId is used within the SessionManager to direct messages to the correct session's logic.
-/// 4. Broadcast messages are sent by the MockNetwork to all connected SessionManagers. The SessionManager then handles internal routing based on the SessionId.
-///
-/// The original creates these channels
-/// // Set up communication channels
-/// let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
-/// sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
-///     "gossip_to_session_manager",
-///     1024,
-/// );
-/// let (session_manager_to_gossip_tx, session_manager_to_gossip_rx) =
-/// sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
-///     "session_manager_to_gossip",
-///     1024,
-/// );
-/// let (runtime_to_session_manager_tx, runtime_to_session_manager_rx) =
-/// sc_utils::mpsc::tracing_unbounded::<TSSRuntimeEvent>("runtime_to_session_manager", 1024);
-fn fake() {}
