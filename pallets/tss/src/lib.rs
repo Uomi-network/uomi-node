@@ -843,7 +843,7 @@ pub mod pallet {
                     let reporting_threshold = (total_participants * 2) / 3;
 
                     // Check if the participant has been reported by more than 2/3 of the participants
-                    if report_count >= reporting_threshold {
+                    if report_count == reporting_threshold {
                         // Increment the report count for this participant
                         let current_count = ParticipantReportCount::<T>::get(reported_participant);
                         ParticipantReportCount::<T>::insert(
@@ -860,7 +860,7 @@ pub mod pallet {
             // Get all validators from pallet_staking
             let validators: Vec<T::AccountId> = ActiveValidators::<T>::get().to_vec();
 
-            let mut next_id = 1u32; // Start IDs from 1
+            let mut next_id = NextValidatorId::<T>::get();
 
             // Assign IDs to validators that don't have one yet
             for validator in validators {

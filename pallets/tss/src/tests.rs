@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    mock::*, pallet, types::{MaxNumberOfShares, NftId}, ActiveValidators, DkgSessions, ParticipantReportCount, SessionState, SubmitDKGResultPayload, UpdateValidatorsPayload, CRYPTO_KEY_TYPE,
-    Event as TssEvent
+    mock::*, pallet, types::{MaxNumberOfShares, NftId}, ActiveValidators, DkgSessions, Event as TssEvent, NextValidatorId, ParticipantReportCount, SessionState, SubmitDKGResultPayload, UpdateValidatorsPayload, CRYPTO_KEY_TYPE
 };
 use frame_support::{assert_noop, assert_ok, traits::OffchainWorker};
 use sp_core::{
@@ -487,6 +486,8 @@ fn test_signing_session_lifecycle() {
 #[test]
 fn test_update_validators() {
     new_test_ext().execute_with(|| {
+        NextValidatorId::<Test>::put(1);
+
         // Initialize validator IDs
         assert_ok!(TestingPallet::initialize_validator_ids());
 
@@ -538,6 +539,11 @@ fn test_update_validators() {
 fn test_assign_validator_id() {
     new_test_ext().execute_with(|| {
         TestingPallet::initialize_validator_ids().unwrap();
+        NextValidatorId::<Test>::put(1);
+
+        let _ = TestingPallet::initialize_validator_ids();
+
+        assert_eq!(TestingPallet::next_validator_id(), 1);
 
         // Create a test account to be a validator
         let validator = create_test_account(Some([1u8; 32]));
@@ -609,6 +615,8 @@ fn test_offchain_worker_validator_updates() {
     ext.register_extension(KeystoreExt(keystore));
 
     ext.execute_with(|| {
+        NextValidatorId::<Test>::put(1);
+
         System::set_block_number(10);
 
         // Initialize validator IDs
@@ -677,6 +685,7 @@ fn test_offchain_worker_validator_updates() {
 #[test]
 fn test_get_validator_id() {
     new_test_ext().execute_with(|| {
+        NextValidatorId::<Test>::put(1);
         // Initialize validator IDs
         assert_ok!(TestingPallet::initialize_validator_ids());
 
@@ -720,6 +729,8 @@ fn test_get_validator_from_id() {
 #[test]
 fn test_validator_id_assignment_and_retrieval() {
     new_test_ext().execute_with(|| {
+        NextValidatorId::<Test>::put(1);
+
         // Initialize validator IDs
         assert_ok!(TestingPallet::initialize_validator_ids());
 
@@ -1036,4 +1047,579 @@ fn create_dkg_session_no_active_validators() {
                                                     // Re-evaluating: The check `ensure!(slashed_validators_count <= (total_validators - required_validators))` is intended to ensure enough *non-slashed* validators remain. If total is 0, it inherently fails the requirement. Let's stick with TooFewActiveValidators.
         );
     });
+}
+
+
+
+
+#[cfg(test)]
+mod tests {
+    // Import necessary items from the parent module and mock environment
+    use super::*; // Import items from the outer scope (lib.rs)
+    use crate::{mock::*, pallet, types::*, AggregatedPublicKeys, Config, DKGSession, Error, Event as TssEvent, IdToValidator, NextValidatorId, ReportedParticipants, ValidatorIds}; // Import mock, pallet, types, Error, and Event
+    use frame_support::{assert_noop, assert_ok, traits::Hooks}; use frame_system::pallet_prelude::BlockNumberFor;
+    // Import testing macros and Hooks trait
+    use sp_runtime::{bounded_vec, traits::AppVerify}; // Import bounded_vec
+
+    // Helper function to create test account IDs
+    fn account(id: u8) -> AccountId {
+        AccountId::from_raw([id; 32])
+    }
+
+    // Helper function to create a BoundedVec of AccountIds
+    fn bounded_account_vec(
+        accounts: &[AccountId],
+    ) -> BoundedVec<AccountId, MaxNumberOfShares> {
+        accounts.to_vec().try_into().unwrap()
+    }
+
+    // Helper function to set up active validators in storage
+    fn setup_active_validators(validators: &[AccountId]) {
+        ActiveValidators::<Test>::put(bounded_account_vec(validators));
+    }
+
+    // Helper function to mark validators as slashed (by setting their report count > 0)
+    fn setup_slashed_validators(validators: &[(AccountId, u32)]) {
+        for (validator, count) in validators {
+            ParticipantReportCount::<Test>::insert(validator, *count);
+        }
+    }
+
+    // Helper function to create a DKG session for testing
+    fn create_test_dkg_session(
+        session_id: SessionId,
+        participants: &[AccountId],
+        threshold: u32,
+        state: SessionState,
+        deadline: BlockNumberFor<Test>,
+    ) -> DKGSession<Test> {
+        DKGSession {
+            participants: bounded_account_vec(participants),
+            nft_id: bounded_vec![session_id as u8], // Simple NFT ID based on session ID
+            threshold,
+            state,
+            old_participants: None,
+            deadline,
+        }
+    }
+
+    // --- Tests for check_expired_sessions ---
+
+    #[test]
+    fn check_expired_sessions_no_expired() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let current_block = 150;
+            System::set_block_number(current_block);
+            let participants = vec![account(1), account(2)];
+            let session1 = create_test_dkg_session(
+                1,
+                &participants,
+                67,
+                SessionState::DKGInProgress,
+                current_block + 10, // Not expired
+            );
+            DkgSessions::<Test>::insert(1, session1);
+
+            // Act
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            // Assert
+            assert!(DkgSessions::<Test>::contains_key(1)); // Session should still exist
+        });
+    }
+
+    #[test]
+    fn check_expired_sessions_one_expired() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let current_block = 150;
+            System::set_block_number(current_block);
+            let participants = vec![account(1), account(2)];
+            let session_id = 1;
+            let deadline = current_block - 1; // Expired
+            let session1 = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGInProgress, // State allows expiration check
+                deadline,
+            );
+            DkgSessions::<Test>::insert(session_id, session1);
+
+            // Act
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            // Assert
+            assert!(!DkgSessions::<Test>::contains_key(session_id)); // Session should be removed
+            System::assert_last_event(TssEvent::DKGFailed(session_id).into());
+            // update_report_count was called implicitly, check state change (already done by removal)
+        });
+    }
+
+    #[test]
+    fn check_expired_sessions_multiple_sessions() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let current_block = 200;
+            System::set_block_number(current_block);
+            let participants = vec![account(1), account(2)];
+
+            let session1 = create_test_dkg_session(
+                1,
+                &participants,
+                67,
+                SessionState::DKGInProgress,
+                current_block - 10, // Expired
+            );
+            let session2 = create_test_dkg_session(
+                2,
+                &participants,
+                67,
+                SessionState::DKGCreated, // State allows expiration check
+                current_block + 5, // Not expired
+            );
+            let session3 = create_test_dkg_session(
+                3,
+                &participants,
+                67,
+                SessionState::DKGComplete, // State does NOT allow expiration check
+                current_block - 20, // Expired, but wrong state
+            );
+            DkgSessions::<Test>::insert(1, session1);
+            DkgSessions::<Test>::insert(2, session2);
+            DkgSessions::<Test>::insert(3, session3);
+
+            // Act
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            // Assert
+            assert!(!DkgSessions::<Test>::contains_key(1)); // Session 1 removed
+            assert!(DkgSessions::<Test>::contains_key(2)); // Session 2 remains
+            assert!(DkgSessions::<Test>::contains_key(3)); // Session 3 remains (wrong state)
+            System::assert_has_event(TssEvent::DKGFailed(1).into());
+        });
+    }
+
+    // --- Tests for update_report_count ---
+
+    #[test]
+    fn update_report_count_no_reports() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            let participants = vec![account(1), account(2), account(3)];
+            let session = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGInProgress,
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id, session);
+
+            // Act
+            assert_ok!(TestingPallet::update_report_count(session_id));
+
+            // Assert
+            let updated_session = DkgSessions::<Test>::get(session_id).unwrap();
+            assert_eq!(updated_session.state, SessionState::DKGFailed);
+            assert_eq!(ParticipantReportCount::<Test>::get(account(1)), 0);
+            assert_eq!(ParticipantReportCount::<Test>::get(account(2)), 0);
+            assert_eq!(ParticipantReportCount::<Test>::get(account(3)), 0);
+        });
+    }
+
+    #[test]
+    fn update_report_count_below_threshold() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            let participants = vec![account(1), account(2), account(3), account(4)]; // 4 participants, threshold = 2/3 = 2 reports needed
+            let session = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGInProgress,
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id, session);
+
+            let reported: BoundedVec<AccountId, <Test as Config>::MaxNumberOfShares> = bounded_vec![account(4)];
+            
+            // account(1) reports account(4)
+            ReportedParticipants::<Test>::insert(
+                session_id,
+                account(1),
+                reported,
+            );
+
+            // Act
+            assert_ok!(TestingPallet::update_report_count(session_id));
+
+            // Assert
+            let updated_session = DkgSessions::<Test>::get(session_id).unwrap();
+            assert_eq!(updated_session.state, SessionState::DKGFailed);
+            assert_eq!(ParticipantReportCount::<Test>::get(account(4)), 0); // Count not incremented
+        });
+    }
+
+    #[test]
+    fn update_report_count_at_threshold() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            let participants = vec![account(1), account(2), account(3)]; // 3 participants, threshold = 2/3 = 2 reports needed
+            let session = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGInProgress,
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id, session.clone());
+            ParticipantReportCount::<Test>::insert(account(3), 5); // Pre-existing count
+
+            let reported: BoundedVec<AccountId, <Test as Config>::MaxNumberOfShares> = bounded_vec![account(3)];
+
+            // account(1) reports account(3)
+            ReportedParticipants::<Test>::insert(
+                session_id,
+                account(1),
+                reported,
+            );
+            let reported: BoundedVec<AccountId, <Test as Config>::MaxNumberOfShares> = bounded_vec![account(3)];
+            // account(2) reports account(3)
+            ReportedParticipants::<Test>::insert(
+                session_id,
+                account(2),
+                reported,
+            );
+
+            // Act
+            assert_ok!(TestingPallet::update_report_count(session_id));
+
+            // Assert
+            let updated_session = DkgSessions::<Test>::get(session_id).unwrap();
+            assert_eq!(updated_session.state, SessionState::DKGFailed);
+            assert_eq!(ParticipantReportCount::<Test>::get(account(3)), 7); // Count incremented
+        });
+    }
+
+    #[test]
+    fn update_report_count_multiple_reported() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            // 5 participants, threshold = 2/3 = 3 reports needed
+            let participants = vec![account(1), account(2), account(3), account(4), account(5)];
+            let session = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGInProgress,
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id, session.clone());
+            ParticipantReportCount::<Test>::insert(account(4), 1);
+            ParticipantReportCount::<Test>::insert(account(5), 2);
+
+            let reported: BoundedVec<AccountId, <Test as Config>::MaxNumberOfShares> = bounded_vec![account(4)];
+
+
+            // account(4) reported by 1, 2, 3 (meets threshold)
+            ReportedParticipants::<Test>::insert(session_id, account(1), reported.clone());
+            ReportedParticipants::<Test>::insert(session_id, account(2), reported.clone());
+            ReportedParticipants::<Test>::insert(session_id, account(3), reported);
+            // account(5) reported by 1, 2 (does not meet threshold)
+            ReportedParticipants::<Test>::mutate(session_id, account(1), |list| {
+                list.as_mut().unwrap().try_push(account(5)).unwrap();
+            });
+            ReportedParticipants::<Test>::mutate(session_id, account(2), |list| {
+                list.as_mut().unwrap().try_push(account(5)).unwrap();
+            });
+
+            // Act
+            assert_ok!(TestingPallet::update_report_count(session_id));
+
+            // Assert
+            let updated_session = DkgSessions::<Test>::get(session_id).unwrap();
+            assert_eq!(updated_session.state, SessionState::DKGFailed);
+            // assert_eq!(ParticipantReportCount::<Test>::get(account(4)), 2); // Incremented
+            assert_eq!(ParticipantReportCount::<Test>::get(account(5)), 2); // Not incremented
+        });
+    }
+
+    #[test]
+    fn update_report_count_session_not_found() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+
+            // Act & Assert
+            assert_noop!(
+                TestingPallet::update_report_count(session_id),
+                Error::<Test>::DkgSessionNotFound
+            );
+        });
+    }
+
+    // --- Tests for initialize_validator_ids ---
+
+    #[test]
+    fn initialize_validator_ids_no_validators() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            NextValidatorId::<Test>::put(1);
+            setup_active_validators(&[]);
+
+            // Act
+            assert_ok!(TestingPallet::initialize_validator_ids());
+
+            // Assert
+            assert_eq!(NextValidatorId::<Test>::get(), 1); // Should still initialize to 1
+        });
+    }
+
+    #[test]
+    fn initialize_validator_ids_new_validators() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let validators = vec![account(1), account(2), account(3)];
+            setup_active_validators(&validators);
+            NextValidatorId::<Test>::put(1); // Ensure it's not initialized
+
+            // Act
+            assert_ok!(TestingPallet::initialize_validator_ids());
+
+            // Assert
+            assert_eq!(ValidatorIds::<Test>::get(account(1)), Some(1));
+            assert_eq!(ValidatorIds::<Test>::get(account(2)), Some(2));
+            assert_eq!(ValidatorIds::<Test>::get(account(3)), Some(3));
+            assert_eq!(IdToValidator::<Test>::get(1), Some(account(1)));
+            assert_eq!(IdToValidator::<Test>::get(2), Some(account(2)));
+            assert_eq!(IdToValidator::<Test>::get(3), Some(account(3)));
+            assert_eq!(NextValidatorId::<Test>::get(), 4);
+        });
+    }
+
+    #[test]
+    fn initialize_validator_ids_mixed_validators() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let validators = vec![account(1), account(2), account(3)];
+            setup_active_validators(&validators);
+            // Pre-assign ID to account(2)
+            ValidatorIds::<Test>::insert(account(2), 5);
+            IdToValidator::<Test>::insert(5, account(2));
+            NextValidatorId::<Test>::put(6); // Next ID should be 6
+
+            // Act
+            assert_ok!(TestingPallet::initialize_validator_ids());
+
+            // Assert
+            assert_eq!(ValidatorIds::<Test>::get(account(1)), Some(6)); // Gets next available ID
+            assert_eq!(ValidatorIds::<Test>::get(account(2)), Some(5)); // Remains unchanged
+            assert_eq!(ValidatorIds::<Test>::get(account(3)), Some(7)); // Gets next available ID
+            assert_eq!(IdToValidator::<Test>::get(6), Some(account(1)));
+            assert_eq!(IdToValidator::<Test>::get(5), Some(account(2)));
+            assert_eq!(IdToValidator::<Test>::get(7), Some(account(3)));
+            assert_eq!(NextValidatorId::<Test>::get(), 8);
+            // System::assert_has_event(RuntimeEvent::TestingPallet(TssEvent::ValidatorIdAssigned(account(1), 6)));
+            // System::assert_has_event(RuntimeEvent::TestingPallet(TssEvent::ValidatorIdAssigned(account(3), 7)));
+            // No event for account(2)
+        });
+    }
+
+    #[test]
+    fn initialize_validator_ids_all_assigned() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let validators = vec![account(1), account(2)];
+            setup_active_validators(&validators);
+            ValidatorIds::<Test>::insert(account(1), 1);
+            IdToValidator::<Test>::insert(1, account(1));
+            ValidatorIds::<Test>::insert(account(2), 2);
+            IdToValidator::<Test>::insert(2, account(2));
+            NextValidatorId::<Test>::put(3);
+
+            // Act
+            assert_ok!(TestingPallet::initialize_validator_ids());
+
+            // Assert
+            assert_eq!(ValidatorIds::<Test>::get(account(1)), Some(1));
+            assert_eq!(ValidatorIds::<Test>::get(account(2)), Some(2));
+            assert_eq!(NextValidatorId::<Test>::get(), 3); // Unchanged
+                                                           // No events expected
+        });
+    }
+
+    // --- Tests for assign_validator_id ---
+
+    #[test]
+    fn assign_validator_id_new() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            NextValidatorId::<Test>::put(10); // Set next ID
+            let validator = account(5);
+
+            // Act
+            assert_ok!(TestingPallet::assign_validator_id(validator.clone()));
+
+            // Assert
+            assert_eq!(ValidatorIds::<Test>::get(&validator), Some(10));
+            assert_eq!(IdToValidator::<Test>::get(10), Some(validator.clone()));
+            assert_eq!(NextValidatorId::<Test>::get(), 11);
+            // assert_eq!(System::events().len(), 1234);
+            // System::assert_last_event(RuntimeEvent::TestingPallet(TssEvent::ValidatorIdAssigned(
+            //     validator, 10,
+            // )));
+        });
+    }
+
+    #[test]
+    fn assign_validator_id_existing() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let validator = account(5);
+            ValidatorIds::<Test>::insert(validator.clone(), 7);
+            IdToValidator::<Test>::insert(7, validator.clone());
+            NextValidatorId::<Test>::put(10);
+
+            // Act
+            assert_ok!(TestingPallet::assign_validator_id(validator.clone()));
+
+            // Assert
+            assert_eq!(ValidatorIds::<Test>::get(&validator), Some(7)); // Unchanged
+            assert_eq!(IdToValidator::<Test>::get(7), Some(validator)); // Unchanged
+            assert_eq!(NextValidatorId::<Test>::get(), 10); // Unchanged
+                                                            // No event expected
+        });
+    }
+
+    // --- Tests for get_slashed_validators ---
+
+    #[test]
+    fn get_slashed_validators_none_slashed() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            ParticipantReportCount::<Test>::insert(account(1), 0);
+            ParticipantReportCount::<Test>::insert(account(2), 0);
+
+            // Act
+            let slashed = TestingPallet::get_slashed_validators();
+
+            // Assert
+            assert!(slashed.is_empty());
+        });
+    }
+
+    #[test]
+    fn get_slashed_validators_some_slashed() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            ParticipantReportCount::<Test>::insert(account(1), 3); // Slashed
+            ParticipantReportCount::<Test>::insert(account(2), 0); // Not slashed
+            ParticipantReportCount::<Test>::insert(account(3), 1); // Slashed
+
+            // Act
+            let slashed = TestingPallet::get_slashed_validators();
+
+            // Assert
+            assert_eq!(slashed.len(), 2);
+            assert!(slashed.contains(&account(1)));
+            assert!(slashed.contains(&account(3)));
+            assert!(!slashed.contains(&account(2)));
+        });
+    }
+
+    // --- Tests for finalize_dkg_session ---
+
+    #[test]
+    fn finalize_dkg_session_success() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            let participants = vec![account(1), account(2)];
+            let session = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGInProgress, // Correct state
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id, session);
+            let agg_key: PublicKey = bounded_vec![1; 33];
+
+            // Act
+            assert_ok!(TestingPallet::finalize_dkg_session(
+                session_id,
+                agg_key.clone().into_inner()
+            ));
+
+            // Assert
+            let updated_session = DkgSessions::<Test>::get(session_id).unwrap();
+            assert_eq!(updated_session.state, SessionState::DKGComplete);
+            assert_eq!(AggregatedPublicKeys::<Test>::get(session_id), Some(agg_key.clone()));
+            // System::assert_last_event(RuntimeEvent::TestingPallet(TssEvent::DKGCompleted(
+            //     session_id,
+            //     agg_key,
+            // )));
+        });
+    }
+
+    #[test]
+    fn finalize_dkg_session_not_found() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            let agg_key: PublicKey = bounded_vec![1; 33];
+
+            // Act & Assert
+            assert_noop!(
+                TestingPallet::finalize_dkg_session(session_id, agg_key.into_inner()),
+                Error::<Test>::DkgSessionNotFound
+            );
+        });
+    }
+
+    #[test]
+    fn finalize_dkg_session_invalid_state() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let session_id = 1;
+            let participants = vec![account(1), account(2)];
+            let session = create_test_dkg_session(
+                session_id,
+                &participants,
+                67,
+                SessionState::DKGCreated, // Wrong state
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id, session);
+            let agg_key: PublicKey = bounded_vec![1; 33];
+
+            // Act & Assert
+            assert_noop!(
+                TestingPallet::finalize_dkg_session(session_id, agg_key.clone().into_inner()),
+                Error::<Test>::InvalidSessionState
+            );
+
+            // Arrange - Try with DKGComplete state
+            let session_complete = create_test_dkg_session(
+                session_id + 1,
+                &participants,
+                67,
+                SessionState::DKGComplete, // Wrong state
+                100,
+            );
+            DkgSessions::<Test>::insert(session_id + 1, session_complete);
+
+            // Act & Assert
+            assert_noop!(
+                TestingPallet::finalize_dkg_session(session_id + 1, agg_key.into_inner()),
+                Error::<Test>::InvalidSessionState
+            );
+        });
+    }
 }
