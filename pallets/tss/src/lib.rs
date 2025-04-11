@@ -391,7 +391,10 @@ pub mod pallet {
                 .cloned()
                 .collect::<Vec<T::AccountId>>();
 
-
+            ensure!(
+                participants.len() > 0,
+                Error::<T>::TooFewActiveValidators,
+            );
 
             // Create new DKG session
             let session = DKGSession {
@@ -501,7 +504,7 @@ pub mod pallet {
                 DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
             ensure!(
-                session.state == SessionState::DKGInProgress,
+                session.state <= SessionState::DKGInProgress,
                 Error::<T>::InvalidSessionState
             );
 
@@ -519,11 +522,13 @@ pub mod pallet {
 
             // Check if the number of votes meets the threshold
             let mut votes = 0;
+            
             for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(session_id) {
                 if key == aggregated_key {
                     votes += 1;
                 }
             }
+
             let total_validators = session.participants.len() as u32;
             let required_votes = (total_validators * threshold) / 100;
 
@@ -729,9 +734,7 @@ pub mod pallet {
             }
 
             // Get current validators from staking pallet
-            let current_validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
-                .map(|(account_id, _)| account_id)
-                .collect();
+            let current_validators: Vec<T::AccountId> = ActiveValidators::<T>::get().to_vec();
             // Check if there are any new validators that need IDs
             let mut new_validators = Vec::new();
             for validator in current_validators.iter() {
@@ -855,9 +858,7 @@ pub mod pallet {
 
         pub fn initialize_validator_ids() -> DispatchResult {
             // Get all validators from pallet_staking
-            let validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter()
-                .map(|(account_id, _)| account_id)
-                .collect();
+            let validators: Vec<T::AccountId> = ActiveValidators::<T>::get().to_vec();
 
             let mut next_id = 1u32; // Start IDs from 1
 

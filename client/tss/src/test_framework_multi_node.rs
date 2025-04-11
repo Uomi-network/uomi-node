@@ -845,6 +845,7 @@ mod tests {
             let state = session_states.get(&dkg_session_id);
             assert_eq!(state.is_some(), true);
             assert_eq!(*state.unwrap(), DKGSessionState::KeyGenerated);
+            assert_eq!(node.session_manager.client.submit_dkg_result_calls().len(), 1);
         }
 
         // --- 2. Initiate Signing Session ---

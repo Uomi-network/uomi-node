@@ -32,7 +32,7 @@ use sp_runtime::{
 };
 use sp_staking::currency_to_vote::SaturatingCurrencyToVote;
 
-use crate::{runtime_decl_for_tss_api::ID, types::MaxNumberOfShares};
+use crate::{types::{MaxNumberOfShares, MinimumValidatorThreshold, PublicKey}, SignatureVerification};
 
 // TYPES
 pub type Balance = u128; // needed in System
@@ -141,12 +141,21 @@ impl CreateSignedTransaction<UomiCall<Test>> for Test {
     }
 }
 
+pub struct MockVerifier {}
+impl SignatureVerification<PublicKey> for MockVerifier {
+    fn verify(_key: &PublicKey, _message: &[u8], sig: &crate::types::Signature) -> bool {
+        sig[0] != 0
+    }
+
+}
+
 impl crate::pallet::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type MaxNumberOfShares = MaxNumberOfShares;
-    type SignatureVerifier = crate::pallet::Verifier;
+    type SignatureVerifier = MockVerifier;
 
     type AuthorityId = crate::crypto::AuthId;
+    type MinimumValidatorThreshold = MinimumValidatorThreshold;
 }
 
 impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
