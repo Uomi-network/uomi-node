@@ -339,6 +339,7 @@ pub mod pallet {
         KeyUpdateFailed,
         DuplicateParticipant,
         InvalidParticipantsCount,
+        TooFewActiveValidators,
         InvalidThreshold,
         DkgSessionNotFound,
         DkgSessionNotReady,
@@ -369,16 +370,33 @@ pub mod pallet {
             let slashed_validators = Self::get_slashed_validators();
             let deadline = frame_system::Pallet::<T>::block_number() + 100u32.into();
 
+            let active_validators = ActiveValidators::<T>::get();
+
+            // we need to be sure that the slashed validators is not more than 1/3 of the active validators, otherwise stop here
+            let total_validators = active_validators.len() as u32;
+            let slashed_validators_count = slashed_validators.len() as u32; 
+
+            let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
+            let required_validators = (total_validators * threshold) / 100;
+
+            // Check if the number of slashed validators exceeds the threshold
+            ensure!(
+                slashed_validators_count <= (total_validators - required_validators),
+                Error::<T>::TooFewActiveValidators,
+            );
+            
+            let participants = active_validators
+                .iter()
+                .filter(|validator| !slashed_validators.contains(validator))
+                .cloned()
+                .collect::<Vec<T::AccountId>>();
+
+
+
             // Create new DKG session
             let session = DKGSession {
                 nft_id,
-                participants: BoundedVec::try_from(
-                    pallet_staking::Validators::<T>::iter()
-                        .map(|(account_id, _)| account_id)
-                        .filter(|account_id| !slashed_validators.contains(account_id))
-                        .collect::<Vec<T::AccountId>>(),
-                )
-                .unwrap(),
+                participants: BoundedVec::try_from(participants).map_err(|_| Error::<T>::InvalidParticipantsCount)?,
                 threshold,
                 state: SessionState::DKGCreated,
                 old_participants: None,
