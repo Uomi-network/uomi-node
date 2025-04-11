@@ -1,5 +1,4 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-use scale_info::prelude::*;
 use sp_runtime::KeyTypeId;
 
 #[cfg(test)]
@@ -12,7 +11,7 @@ use frame_support::pallet_prelude::*;
 use sp_std::prelude::*;
 pub mod types;
 
-use frame_support::inherent::{InherentIdentifier, IsFatalError};
+use frame_support::inherent::IsFatalError;
 use frame_system::offchain::SendUnsignedTransaction;
 use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
@@ -23,8 +22,6 @@ pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
 use types::{ PublicKey, SessionId};
-
-const TEMP_BLOCK_FOR_NEW_OPOC: i32 = 1950000; // For finney update. remove on turing
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
 pub struct EmptyInherent;
@@ -357,7 +354,7 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         #[pallet::call_index(0)]
         pub fn create_dkg_session(
-            origin: OriginFor<T>,
+            _origin: OriginFor<T>,
             nft_id: NftId,
             threshold: u32,
         ) -> DispatchResult {
@@ -441,7 +438,7 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         #[pallet::call_index(2)]
         pub fn create_signing_session(
-            origin: OriginFor<T>,
+            _origin: OriginFor<T>,
             nft_id: NftId,
             message: BoundedVec<u8, MaxMessageSize>,
         ) -> DispatchResult {
@@ -1004,7 +1001,7 @@ pub mod pallet {
                 .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
             
             // Check if the session exists and is in the correct state
-            let mut session =
+            let session =
                 DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
             ensure!(

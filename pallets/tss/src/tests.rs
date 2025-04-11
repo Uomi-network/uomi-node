@@ -1056,10 +1056,10 @@ fn create_dkg_session_no_active_validators() {
 mod tests {
     // Import necessary items from the parent module and mock environment
     use super::*; // Import items from the outer scope (lib.rs)
-    use crate::{mock::*, pallet, types::*, AggregatedPublicKeys, Config, DKGSession, Error, Event as TssEvent, IdToValidator, NextValidatorId, ReportedParticipants, ValidatorIds}; // Import mock, pallet, types, Error, and Event
-    use frame_support::{assert_noop, assert_ok, traits::Hooks}; use frame_system::pallet_prelude::BlockNumberFor;
+    use crate::{types::*, AggregatedPublicKeys, Config, DKGSession, Error, Event as TssEvent, IdToValidator, NextValidatorId, ReportedParticipants, ValidatorIds}; // Import mock, pallet, types, Error, and Event
+    use frame_support::{assert_noop, assert_ok}; use frame_system::pallet_prelude::BlockNumberFor;
     // Import testing macros and Hooks trait
-    use sp_runtime::{bounded_vec, traits::AppVerify}; // Import bounded_vec
+    use sp_runtime::bounded_vec; // Import bounded_vec
 
     // Helper function to create test account IDs
     fn account(id: u8) -> AccountId {
@@ -1079,7 +1079,7 @@ mod tests {
     }
 
     // Helper function to mark validators as slashed (by setting their report count > 0)
-    fn setup_slashed_validators(validators: &[(AccountId, u32)]) {
+    fn _setup_slashed_validators(validators: &[(AccountId, u32)]) {
         for (validator, count) in validators {
             ParticipantReportCount::<Test>::insert(validator, *count);
         }
