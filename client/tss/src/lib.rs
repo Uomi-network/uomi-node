@@ -168,7 +168,6 @@ pub enum TSSRuntimeEvent {
 
 struct TssValidator {
     announcement: Option<TssMessage>,
-    announced_peers: Arc<Mutex<Vec<PeerId>>>,
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -195,11 +194,6 @@ impl<B: BlockT> Validator<B> for TssValidator {
             if let Some(announcement) = &self.announcement {
                 match announcement {
                     TssMessage::Announce(_nonce, peer_id, pubkey, sig) => {
-                        let mut announced_peers = self.announced_peers.lock().unwrap();
-                        if announced_peers.contains(who) {
-                            return;
-                        }
-
                         let mut rng = rand::thread_rng();
                         context.send_message(
                             who,
@@ -211,9 +205,6 @@ impl<B: BlockT> Validator<B> for TssValidator {
                             )
                             .encode(),
                         );
-
-                        announced_peers.push(who.clone());
-                        drop(announced_peers);
                     }
                     _ => (),
                 }
@@ -232,7 +223,7 @@ impl<B: BlockT> Validator<B> for TssValidator {
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
         // context.broadcast_message(topic, data.to_vec(), false);
 
-        ValidationResult::ProcessAndDiscard(topic)
+        ValidationResult::ProcessAndKeep(topic)
     }
 }
 
@@ -3717,7 +3708,6 @@ where
 
         let gossip_validator = Arc::new(TssValidator {
             announcement: announcement.clone(),
-            announced_peers: Arc::new(Mutex::new(Vec::new())),
         });
 
         // Set up communication channels
@@ -3786,15 +3776,13 @@ where
         );
 
         // Broadcast initial announcement if available
-        // if let Some(a) = announcement {
-        //     if let Err(e) = gossip_handler.broadcast_message(a) {
-        //         log::error!("[TSS] Failed to broadcast announcement: {:?}", e);
-        //     } else {
-        //         log::info!("[TSS] Announcement broadcasted successfully");
-        //     }
-        // }
-        /// WE DON'T SEND THE ANNOUNCEMENT HERE, WE SEND IT IN THE GOSSIP ENGINE
-        /// BASICALLY WE SEND THE ANNOUNCMENT TO THOSE CONNECTED TO US
+        if let Some(a) = announcement {
+            if let Err(e) = gossip_handler.broadcast_message(a) {
+                log::error!("[TSS] Failed to broadcast announcement: {:?}", e);
+            } else {
+                log::info!("[TSS] Announcement broadcasted successfully");
+            }
+        }
         
         // ===== RuntimeEventHandler Setup =====
         let runtime_event_handler =
