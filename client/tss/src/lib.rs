@@ -3777,7 +3777,7 @@ where
         let gossip_handler_message_receiver: Receiver<TopicNotification> =
             gossip_engine.messages_for(topic);
 
-        let gossip_handler = GossipHandler::new(
+        let mut gossip_handler = GossipHandler::new(
             gossip_engine,
             gossip_to_session_manager_tx,
             session_manager_to_gossip_rx,
@@ -3793,8 +3793,8 @@ where
         //         log::info!("[TSS] Announcement broadcasted successfully");
         //     }
         // }
-        // WE DON'T SEND THE ANNOUNCEMENT HERE, WE SEND IT IN THE GOSSIP ENGINE
-        // BASICALLY WE SEND THE ANNOUNCMENT TO THOSE CONNECTED TO US
+        /// WE DON'T SEND THE ANNOUNCEMENT HERE, WE SEND IT IN THE GOSSIP ENGINE
+        /// BASICALLY WE SEND THE ANNOUNCMENT TO THOSE CONNECTED TO US
         
         // ===== RuntimeEventHandler Setup =====
         let runtime_event_handler =
