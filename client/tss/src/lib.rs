@@ -3736,6 +3736,11 @@ where
         let storage = Arc::new(Mutex::new(MemoryStorage::new()));
         let key_storage = Arc::new(Mutex::new(FileStorage::new()));
 
+        // Try to load from file if it exists
+        let mut storage_lock = storage.lock().unwrap();
+        storage_lock.load_from_file();
+        drop(storage_lock);
+
         // Set up peer mapping
         let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants.clone())));
         {
