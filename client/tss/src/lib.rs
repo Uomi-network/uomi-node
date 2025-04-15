@@ -4,6 +4,7 @@ use frame_system::EventRecord;
 use multi_party_ecdsa::communication::sending_messages::SendingMessages;
 use rand::prelude::*;
 use sc_transaction_pool_api::{LocalTransactionPool, OffchainTransactionPoolFactory};
+use substrate_prometheus_endpoint::Registry;
 use sp_keystore::{KeystoreExt, KeystorePtr};
 use std::{
     collections::{btree_map::Keys, BTreeMap, HashMap},
@@ -255,6 +256,29 @@ impl<B: BlockT> Validator<B> for TssValidator {
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
         
         ValidationResult::ProcessAndKeep(topic)
+    }
+
+    fn message_expired<'a>(&'a self) -> Box<dyn FnMut(<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
+        Box::new(move |_topic, data| {
+            let processed_messages = self.processed_messages.lock().unwrap();
+            if let Some(_timestamp) = processed_messages.get(data) {
+                return true;
+            }
+            false
+        })
+    }
+    fn message_allowed<'a>(
+            &'a self,
+        ) -> Box<dyn FnMut(&PeerId, sc_network_gossip::MessageIntent, &<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
+        Box::new(move |_peer_id, _intent, _topic, data| {
+            // The messages are always allowed, but we need to store what data we send out
+            // to avoid sending the same message multiple times
+
+            let mut processed_messages = self.processed_messages.lock().unwrap();
+            processed_messages.insert(data.to_vec(), Instant::now());
+
+            return true;
+        })  
     }
 }
 
@@ -3678,6 +3702,7 @@ pub fn setup_gossip<C, N, B, S, TP, RE>(
     protocol_name: ProtocolName,
     keystore_container: KeystoreContainer,
     transaction_pool: Arc<TP>,
+    registry: Option<Registry>,
     _: PhantomData<B>,
     __: PhantomData<RE>,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Error>
@@ -3780,8 +3805,8 @@ where
         log::info!(
             "[TSS] Local peer ID: {:?}",
             local_peer_id.to_base58()
-        );
-        
+        ); 
+
         // ===== GossipHandler Setup =====
         let mut gossip_engine = GossipEngine::new(
             network.clone(),
@@ -3789,7 +3814,7 @@ where
             notification_service,
             protocol_name.clone(),
             gossip_validator,
-            None,
+            registry.as_ref(),
         );
 
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());

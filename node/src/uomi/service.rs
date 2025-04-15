@@ -574,6 +574,8 @@ pub fn start_node(
 
     let is_authority = config.role.is_authority();
 
+    let registry = config.prometheus_registry().cloned();
+
     let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
         network: network.clone(),
         client: client.clone(),
@@ -734,6 +736,7 @@ pub fn start_node(
                 tss_protocol_name, 
                 keystore_container,
                 transaction_pool,
+                registry,
                 PhantomData::<Block>,
                 PhantomData::<pallet_tss::Event<Runtime>>
             ).unwrap(),
