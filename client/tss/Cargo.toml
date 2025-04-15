@@ -31,6 +31,7 @@ wasmi = { version = "0.35", default-features = false }
 pallet-staking = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 uomi-primitives = { workspace = true }
+substrate-prometheus-endpoint = { workspace = true }
 rand = "0.8"
 
 # frame deps

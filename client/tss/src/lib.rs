@@ -173,6 +173,8 @@ struct TssValidator {
     processed_messages: Arc<Mutex<HashMap<Vec<u8>, Instant>>>,
     // How long to keep messages in the cache before expiring them
     message_expiry: Duration,
+    // Sent announcments, to avoid double sending
+    sent_announcements: Arc<Mutex<HashMap<PeerId, Instant>>>,
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -192,6 +194,7 @@ impl TssValidator {
             announcement,
             processed_messages: Arc::new(Mutex::new(HashMap::new())),
             message_expiry,
+            sent_announcements: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -205,25 +208,36 @@ impl<B: BlockT> Validator<B> for TssValidator {
         _role: sc_network::ObservedRole,
     ) {
         info!("[TSS]: New Peer Connected: {}", who.to_base58());
-        
-        if false {
-            if let Some(announcement) = &self.announcement {
-                match announcement {
-                    TssMessage::Announce(_nonce, peer_id, pubkey, sig) => {
-                        let mut rng = rand::thread_rng();
-                        context.send_message(
-                            who,
-                            TssMessage::Announce(
-                                rng.gen::<u16>(),
-                                peer_id.clone(),
-                                pubkey.clone(),
-                                sig.clone(),
-                            )
-                            .encode(),
-                        );
-                    }
-                    _ => (),
+
+        // Verify if we already sent an announcement to this peer
+        let mut sent_announcements = self.sent_announcements.lock().unwrap();
+
+        if sent_announcements.contains_key(who) {
+            log::info!("[TSS]: Already sent announcement to peer {}", who.to_base58());
+            return;
+        }
+
+        // If we haven't sent an announcement, send it now
+        sent_announcements.insert(who.clone(), Instant::now());
+        drop(sent_announcements);
+
+        // In this way willing or not we announced ourselves to the peer. 
+        if let Some(announcement) = &self.announcement {
+            match announcement {
+                TssMessage::Announce(_nonce, peer_id, pubkey, sig) => {
+                    let mut rng = rand::thread_rng();
+                    context.send_message(
+                        who,
+                        TssMessage::Announce(
+                            rng.gen::<u16>(),
+                            peer_id.clone(),
+                            pubkey.clone(),
+                            sig.clone(),
+                        )
+                        .encode(),
+                    );
                 }
+                _ => (),
             }
         }
     }
@@ -238,12 +252,7 @@ impl<B: BlockT> Validator<B> for TssValidator {
 
         // Safely modify the processed messages
         let mut processed_messages = self.processed_messages.lock().unwrap();
-        
-        // Check if we've already processed this message
-        if processed_messages.contains_key(data) {
-            return ValidationResult::Discard;
-        }
-        
+                
         // Mark the message as processed
         processed_messages.insert(data.to_vec(), Instant::now());
         
