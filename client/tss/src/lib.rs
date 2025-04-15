@@ -13,7 +13,7 @@ use std::{
     num::TryFromIntError,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll}, thread::sleep, time::Duration, u16
+    task::{Context, Poll}, thread::sleep, time::Duration, time::Instant, u16
 };
 
 use dkghelpers::{FileStorage, MemoryStorage, Storage, StorageType};
@@ -168,6 +168,10 @@ pub enum TSSRuntimeEvent {
 
 struct TssValidator {
     announcement: Option<TssMessage>,
+    // Track processed messages with their timestamps
+    processed_messages: Arc<Mutex<HashMap<Vec<u8>, Instant>>>,
+    // How long to keep messages in the cache before expiring them
+    message_expiry: Duration,
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -180,6 +184,17 @@ pub enum SessionManagerError {
     SignatureNotReadyYet,
 }
 // ===== TssValidator =====
+
+impl TssValidator {
+    fn new(message_expiry: Duration, announcement: Option<TssMessage>) -> Self {
+        Self {
+            announcement,
+            processed_messages: Arc::new(Mutex::new(HashMap::new())),
+            message_expiry,
+        }
+    }
+}
+
 
 impl<B: BlockT> Validator<B> for TssValidator {
     fn new_peer(
@@ -216,13 +231,29 @@ impl<B: BlockT> Validator<B> for TssValidator {
         &self,
         _context: &mut dyn ValidatorContext<B>,
         sender: &PeerId,
-        _data: &[u8],
+        data: &[u8],
     ) -> ValidationResult<B::Hash> {
         info!("[TSS]: Received message from {}", sender.to_base58());
 
+        // Safely modify the processed messages
+        let mut processed_messages = self.processed_messages.lock().unwrap();
+        
+        // Check if we've already processed this message
+        if processed_messages.contains_key(data) {
+            return ValidationResult::Discard;
+        }
+        
+        // Mark the message as processed
+        processed_messages.insert(data.to_vec(), Instant::now());
+        
+        // Cleanup can happen here or in a background task
+        let now = Instant::now();
+        processed_messages.retain(|_, timestamp| {
+            now.duration_since(*timestamp) < self.message_expiry
+        });
+        
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
-        // context.broadcast_message(topic, data.to_vec(), false);
-
+        
         ValidationResult::ProcessAndKeep(topic)
     }
 }
@@ -3706,9 +3737,7 @@ where
             None
         };
 
-        let gossip_validator = Arc::new(TssValidator {
-            announcement: announcement.clone(),
-        });
+        let gossip_validator = Arc::new(TssValidator::new(Duration::from_secs(120), announcement.clone()));
 
         // Set up communication channels
         let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
