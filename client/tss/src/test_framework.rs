@@ -309,6 +309,7 @@ impl TestNode {
             _phantom: PhantomData,
             active_participants: Arc::new(Mutex::new(HashMap::new())),
             client: TestClientManager::new(),
+            unknown_peer_queue: Arc::new(Mutex::new(HashMap::new())),
         };
 
         TestNode {

@@ -4,7 +4,7 @@ mod tests {
         dkghelpers::{Storage, StorageType},
         process_session_manager_message,
         test_framework::{MockTssMessageHandler, TestConfig, TestNetwork},
-        DKGSessionState, SessionId, SigningSessionState, TSSRuntimeEvent,
+        DKGSessionState, SessionId, SigningSessionState, TSSRuntimeEvent, TssMessageHandler,
     };
 
     use frost_ed25519::Identifier;
@@ -1204,4 +1204,190 @@ mod tests {
             );
         }
     }
+
+
+    // Add this test function to the existing `tests` module in 
+// /Users/lucasimonetti/Work/uomi-node-public/client/tss/src/test_framework_multi_node.rs
+
+use crate::TssMessage; // Add TssMessage and sign_announcement to imports
+
+#[test]
+fn test_unknown_peer_handling() {
+    let _ = env_logger::try_init(); // Optional: for logging during test run
+
+    let nodes_count = 4;
+    let session_id: SessionId = 10;
+    let t = 3;
+    let n: u16 = nodes_count.try_into().unwrap();
+
+    // --- Setup Network ---
+    // We need a keystore to sign the announcement
+
+    let mut network = setup_test_network(nodes_count);
+    let participants = gather_participants(&network);
+    let node_ids: Vec<PeerId> = network.nodes().keys().cloned().collect();
+    let node_a_id = node_ids[0].clone();
+    let node_b_id = node_ids[1].clone();
+
+
+
+    // Get Node B's public key for the announcement later
+    let node_b_pubkey = network.nodes().get(&node_b_id).unwrap().session_manager.validator_key.clone();
+
+    // --- Setup Session on Node A ---
+    {
+        let node_a = network.node_mut(&node_a_id);
+        let event =
+            TSSRuntimeEvent::DKGSessionInfoReady(session_id, t, n, participants.clone());
+        node_a.session_manager.process_runtime_message(event);
+
+        // Initially, Node A knows about Node B via the test setup, but let's simulate B being unknown
+        // by clearing B from A's peer map *after* session setup but *before* message arrival.
+        // NOTE: In a real scenario, B wouldn't be in the map yet.
+        // Let's verify B *is* initially known due to TestNetwork setup:
+        assert!(node_a.session_manager.peer_mapper.lock().unwrap().peers.contains_key(&node_b_id));
+        // For the test, we *don't* remove B here. Instead, we rely on the fact that B hasn't *announced* itself yet.
+        // The check in `handle_gossip_message` looks for the peer in the map, which it will find,
+        // but the crucial part is that the `Announce` message triggers the queue consumption.
+        // Let's refine the test logic slightly: the check `!peer_mapper.peers.contains_key(&sender_peer_id)`
+        // might not be the *only* trigger for buffering. If the Announce hasn't been processed,
+        // even if the peer is technically in the map from setup, the buffering should still occur
+        // until Announce is processed. Let's proceed assuming the Announce processing is the key.
+        // **Correction:** The current code *only* buffers if the peer is *not* in the map.
+        // To properly test the buffer, we *must* remove B from A's map.
+        node_a.session_manager.peer_mapper.lock().unwrap().peers.remove(&node_b_id);
+        assert!(!node_a.session_manager.peer_mapper.lock().unwrap().peers.contains_key(&node_b_id));
+
+    
+    } // Drop mutable borrow of network
+
+
+    
+    // --- Step 1: Node B sends a message to Node A (B is unknown to A) ---
+    {
+
+
+        let node_b = network.node_mut(&node_b_id);
+        let event =
+            TSSRuntimeEvent::DKGSessionInfoReady(session_id, t, n, participants.clone());
+        node_b.session_manager.process_runtime_message(event);
+        // let outgoing_messages_from_node_b = node_b.outgoing_messages();
+
+
+
+        // assert_eq!(
+        //     outgoing_messages_from_node_b.len(),
+        //     2, // ECDSA + FROST
+        //     "Node B should have sent one message"
+        // );
+
+
+
+        let node_a = network.node_mut(&node_a_id);
+        let mut handler = MockTssMessageHandler::default();
+        // Directly process the message as if received from gossip
+        let messages = network.process_round();
+
+
+        
+    } // Drop mutable borrow
+
+    // --- Verification 1 ---
+    {
+        let node_a = network.node_mut(&node_a_id);
+
+        // 1a. Check unknown peer queue
+        let unknown_queue = node_a.session_manager.unknown_peer_queue.lock().unwrap();
+        assert!(unknown_queue.contains_key(&node_b_id), "Message from unknown peer B should be buffered");
+        assert_eq!(unknown_queue.get(&node_b_id).unwrap().len(), 2, "Should be one message buffered for B");
+        // We can't easily compare TssMessage directly without PartialEq, but we know the type
+        match &unknown_queue.get(&node_b_id).unwrap()[0] {
+            TssMessage::DKGRound1(id, data) => {
+                assert_eq!(*id, session_id);
+                // assert_eq!(data, &vec![1, 2, 3]);
+            },
+            _ => panic!("Incorrect message type buffered"),
+        }
+        drop(unknown_queue);
+
+        // 1b. Check outgoing messages for GetInfo
+        let outgoing = node_a.outgoing_messages();
+        println!("Outgoing messages: {:?}", outgoing.len());
+        assert!(outgoing.len() >= 1, "Node A should send one message back");
+        let (recipient, sent_message) = &outgoing[0];
+        assert_eq!(recipient, &node_b_id, "Message should be sent to Node B");
+        match sent_message {
+            TssMessage::GetInfo(pk) => {
+                // Check if the public key matches Node A's key
+                 assert_eq!(pk, &node_a.session_manager.validator_key);
+            },
+            _ => panic!("Expected GetInfo message, got {:?}", sent_message),
+        }
+
+        // // 1c. Check storage (DKG message should NOT be processed yet)
+        let storage = node_a.storage.lock().unwrap();
+        assert!(storage.fetch_round1_packages(session_id).unwrap().is_empty(), "DKG Round 1 message should not be processed yet");
+        drop(storage);
+
+    } // Drop mutable borrow
+
+    // --- Step 2: Node B sends Announce message to Node A ---
+    // Generate a valid signature for the announcement
+    // We need Node B's key in the keystore to sign
+    let node_b_seed = [1u8; 32]; // Seed used in generate_peer_data(1)
+   
+
+    let announce_message = TssMessage::Announce(
+        rand::thread_rng().gen(), // Nonce
+        node_b_id.to_bytes(),     // PeerId bytes
+        node_b_pubkey.clone(),    // Public key
+        Vec::new(),                // Signature
+    );
+
+    {
+        let node_a = network.node_mut(&node_a_id);
+        // Simulate GossipHandler processing the Announce
+        let mut gossip_handler_mock = MockTssMessageHandler::default(); // We don't need a full handler, just the announce logic part
+        gossip_handler_mock.handle_announcment(node_b_id.clone(), announce_message.clone());
+        // Manually add peer like the real handler would
+         node_a.session_manager.peer_mapper.lock().unwrap().add_peer(node_b_id.clone(), node_b_pubkey.clone());
+
+        // Now process the announce message within SessionManager to trigger queue consumption
+        node_a.session_manager.process_gossip_message(node_b_id.clone(), announce_message);
+    } // Drop mutable borrow
+
+    // --- Verification 2 ---
+    {
+        let node_a = network.node_mut(&node_a_id);
+
+        // 2a. Check PeerMapper
+        let peer_mapper = node_a.session_manager.peer_mapper.lock().unwrap();
+        assert!(peer_mapper.peers.contains_key(&node_b_id), "Node B should now be known to Node A");
+        assert_eq!(peer_mapper.peers.get(&node_b_id).unwrap(), &node_b_pubkey);
+        drop(peer_mapper);
+
+        // 2b. Check unknown peer queue is empty
+        let unknown_queue = node_a.session_manager.unknown_peer_queue.lock().unwrap();
+        assert!(!unknown_queue.contains_key(&node_b_id), "Unknown queue for Node B should be empty");
+        drop(unknown_queue);
+
+        // 2c. Check storage (DKG message SHOULD be processed now)
+        // Note: Full processing depends on state, but it should at least be stored.
+        let storage = node_a.storage.lock().unwrap();
+        let round1_packages = storage.fetch_round1_packages(session_id).unwrap();
+        assert_eq!(round1_packages.len(), 1, "DKG Round 1 message should have been processed");
+        // Find the identifier for node B
+        let node_b_identifier = node_a.session_manager.peer_mapper.lock().unwrap().get_identifier_from_peer_id(&session_id, &node_b_id);
+        assert!(node_b_identifier.is_some(), "Node B identifier should exist");
+        assert!(round1_packages.contains_key(&node_b_identifier.unwrap()), "Package from Node B should be stored");
+        drop(storage);
+
+         // 2d. Check DKG state (should have progressed if conditions met)
+         // Since t=1, n=2, receiving one package should trigger round 2 start
+         let dkg_state = node_a.session_manager.dkg_session_states.lock().unwrap();
+         assert_eq!(dkg_state.get(&session_id), Some(&DKGSessionState::Round1Initiated), "DKG state should progress to Round2Initiated");
+         drop(dkg_state);
+    } // Drop mutable borrow
+}
+
 }

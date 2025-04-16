@@ -560,6 +560,7 @@ struct SessionManager<B: BlockT, C: ClientManager<B>>
     session_timeout: u64,
     // A list of participants that have actively participated so far
     active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
+    unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
 }
 
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
@@ -600,6 +601,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             session_timeout: 3600,
             session_timestamps: Arc::new(Mutex::new(empty_hash_map())),
             active_participants: Arc::new(Mutex::new(empty_hash_map())),
+            unknown_peer_queue: Arc::new(Mutex::new(empty_hash_map())),
         }
     }
     
@@ -636,6 +638,24 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         let participants = active_participants.entry(*session_id).or_insert_with(Vec::new);
         participants.push(peer_id.to_bytes());
         drop(active_participants);
+    }
+
+    // Add a TssMessage we received from an unknown peer until they announce themselves
+    fn add_unknown_peer_message(&self, peer_id: PeerId, message: TssMessage) {
+        log::info!("[TSS] Adding unknown peer message from {:?}", peer_id);
+        let mut unknown_peer_queue = self.unknown_peer_queue.lock().unwrap();
+        let messages = unknown_peer_queue.entry(peer_id).or_insert_with(Vec::new);
+        messages.push(message);
+        drop(unknown_peer_queue);
+    }
+
+    // Consume the queue of an unknown peer as soon as they have announced themselves
+    fn consume_unknown_peer_queue(&self, peer_id: PeerId) -> Vec<TssMessage> {
+        log::info!("[TSS] Consuming unknown peer queue for {:?}", peer_id);
+        let mut unknown_peer_queue = self.unknown_peer_queue.lock().unwrap();
+        let messages = unknown_peer_queue.remove(&peer_id).unwrap_or_default();
+        drop(unknown_peer_queue);
+        messages
     }
 
     /// Checks what participants have not participated actively
@@ -764,7 +784,39 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             }
         };
 
+        // Check if the sender_peer_id is present in our peer_mapper
+        let peer_mapper = self.peer_mapper.lock().unwrap();
+        if !peer_mapper.peers.contains_key(&sender_peer_id) {
+            log::warn!("[TSS] Sender peer ID not found in peer_mapper: {:?}", sender_peer_id);
+
+            // Store the message in the unknown peer queue
+            self.add_unknown_peer_message(sender_peer_id.clone(), message.clone());
+
+            // In this case we ask the peer to identify themselves and we send a GetInfo message
+            let message = TssMessage::GetInfo(self.validator_key.clone());
+            if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((sender_peer_id, message)) {
+                log::error!("[TSS] Failed to send GetInfo message: {:?}", e);
+            }
+
+            return;
+        }
+        drop(peer_mapper);
+
         match &message {
+            TssMessage::GetInfo(ref public_key) => {
+                // Someone's asking about ourselves, we need to announce ourselves
+                log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);
+                let mut rng = rand::thread_rng();
+                let announce = TssMessage::Announce(
+                    rng.gen::<u16>(),
+                    self.local_peer_id.clone(),
+                    public_key.clone(),
+                    self.validator_key.clone(),
+                );
+                if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((sender_peer_id, announce)) {
+                    log::error!("[TSS] Failed to send Announce message: {:?}", e);
+                }
+            }
             TssMessage::DKGRound1(session_id, ref bytes) => {
                 // Check if this session exists or is timed out
                 if !self.session_exists(session_id) {
@@ -946,8 +998,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 // Announcements are handled by the gossip layer directly.  The SessionManager
                 // only needs to know about them to add peers to its mapping.  The GossipHandler
                 // already does this, so nothing to do here *within* the SessionManager.
+                // We can also consume the unknown peer queue here
+                let messages = self.consume_unknown_peer_queue(sender_peer_id.clone());
+                for message in messages {
+                    self.handle_gossip_message(message, sender.clone());
+                }
             }
-            TssMessage::GetInfo(_) | TssMessage::Ping => {
+            TssMessage::Ping => {
                 //  Handle these if needed.  They are likely more relevant to the GossipHandler.
                 //  Maybe in the future we might want to implement some explicit request for information to another Peer
             }
@@ -3422,6 +3479,12 @@ fn process_session_manager_message<T: TssMessageHandler + ECDSAMessageRouter>(
         
         TssMessage::ECDSAMessageP2p(session_id, index, _peer_id, bytes, phase) => {
             handler.route_ecdsa_message(session_id, index, bytes, phase, Some(recipient))
+        }
+        TssMessage::GetInfo(_) => {
+            handler.send_message(message, recipient)
+        },
+        TssMessage::Announce(_,_,_,_) => {
+            handler.broadcast_message(message.clone())
         }
         
         _ => Ok(())
