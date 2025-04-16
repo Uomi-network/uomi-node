@@ -870,7 +870,7 @@ impl Storage for FileStorage {
 fn get_base_directory() -> PathBuf {
     env::var("TSS_STORAGE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("key-material"))
+        .unwrap_or_else(|_| PathBuf::from("/var/lib/uomi/chains/uomi/tss"))
 }
 
 pub fn store_file(filename: String, bytes: &[u8]) -> io::Result<()> {
