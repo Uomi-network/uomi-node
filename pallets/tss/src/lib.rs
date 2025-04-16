@@ -288,6 +288,10 @@ pub mod pallet {
     #[pallet::getter(fn next_validator_id)]
     pub type NextValidatorId<T: Config> = StorageValue<_, u32, ValueQuery>;
 
+    #[pallet::storage]
+    #[pallet::getter(fn previous_era)]
+    pub type PreviousEra<T: Config> = StorageValue<_, u32, ValueQuery>;
+
     // A storage to store the reported participants for a given session_id. Used to skip them during next retry
     // each participant may report multiple participants, we need to know who reported who so that we can check against
     // that and maybe exclude someone definitively
@@ -779,6 +783,18 @@ pub mod pallet {
             // Check expired sessions 
             Pallet::<T>::check_expired_sessions(n).ok();
 
+            // Report count reset
+            let previous_era = Pallet::<T>::previous_era();
+            let current_era = Pallet::<T>::get_current_era().unwrap_or(0);
+
+            // Check if the current era is different from the previous one
+            if current_era != previous_era {
+                // Reset report counts for all validators at the end of an era
+                Pallet::<T>::reset_validator_report_counts().ok();
+                // Update the previous era to the current one
+                PreviousEra::<T>::put(current_era);
+            }
+
             // Return weight for this operation (minimal)
             T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
         }
@@ -919,6 +935,37 @@ pub mod pallet {
             slashed_validators
         }
 
+        /// Reset report counts for all validators at the end of an era
+        pub fn reset_validator_report_counts() -> DispatchResult {
+            log::info!("[TSS] Resetting validator report counts at era end");
+            
+            // Get all validators with report counts
+            let reported_validators: Vec<(T::AccountId, u32)> = ParticipantReportCount::<T>::iter()
+                .filter(|(_, count)| *count > 0)
+                .collect();
+            
+            // Log detailed information about validators being reset
+            if !reported_validators.is_empty() {
+                log::info!(
+                    "[TSS] Resetting report counts for {} validators",
+                    reported_validators.len()
+                );
+                
+                for (validator, count) in reported_validators.iter() {
+                    log::info!(
+                        "[TSS] Resetting validator {:?} with report count {}",
+                        validator,
+                        count
+                    );
+                    ParticipantReportCount::<T>::insert(validator, 0);
+                }
+            } else {
+                log::info!("[TSS] No validators with positive report counts to reset");
+            }
+            
+            Ok(())
+        }
+
         pub fn report_participants(id: SessionId, reported_participants: Vec<[u8; 32]>) {
             log::info!(
                 "[TSS] Reporting participants... {:?}",
@@ -1023,6 +1070,12 @@ pub mod pallet {
             Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
 
             Ok(())
+        }
+
+        // Within your pallet's dispatchable function or helper method
+        fn get_current_era() -> Option<u32> {
+            // Access the current era from the Staking pallet
+            pallet_staking::CurrentEra::<T>::get()
         }
     }
 }
