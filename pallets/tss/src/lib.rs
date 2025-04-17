@@ -788,15 +788,14 @@ pub mod pallet {
             let current_era = Pallet::<T>::get_current_era().unwrap_or(0);
 
 
-            if n > 52000u32.into() {            
-                // Check if the current era is different from the previous one
-                if current_era != previous_era {
-                    // Reset report counts for all validators at the end of an era
-                    Pallet::<T>::reset_validator_report_counts().ok();
-                    // Update the previous era to the current one
-                    PreviousEra::<T>::put(current_era);
-                }
+            // Check if the current era is different from the previous one
+            if current_era != previous_era {
+                // Reset report counts for all validators at the end of an era
+                Pallet::<T>::reset_validator_report_counts().ok();
+                // Update the previous era to the current one
+                PreviousEra::<T>::put(current_era);
             }
+            
             // Return weight for this operation (minimal)
             T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
         }
