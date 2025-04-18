@@ -1298,6 +1298,7 @@ impl pallet_tss::Config for Runtime {
     type MaxNumberOfShares = pallet_tss::types::MaxNumberOfShares;
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
+    type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
 }
 pub struct IpfsWrapper;
 
@@ -1593,7 +1594,7 @@ parameter_types! {
     pub const MaxPointsToBalance: u8 = 10;
 }
 
-use sp_runtime::traits::Convert;
+use sp_runtime::traits::{Bounded, Convert};
 pub struct BalanceToU256;
 impl Convert<Balance, sp_core::U256> for BalanceToU256 {
     fn convert(balance: Balance) -> sp_core::U256 {
@@ -2613,6 +2614,15 @@ impl_runtime_apis! {
             pallet_tss::pallet::ValidatorIds::<Runtime>::iter()
                 .map(|(account, id)| (id, account.into()))
                 .collect()
+        }
+        fn report_participants(id: u64, reported_participants: Vec<[u8; 32]>) {
+            pallet_tss::pallet::Pallet::<Runtime>::report_participants(id, reported_participants);
+        }
+        fn submit_dkg_result(
+            session_id: u64,
+            aggregated_key: Vec<u8>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
         }
     }
 }

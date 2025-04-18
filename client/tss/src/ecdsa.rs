@@ -168,12 +168,23 @@ impl ECDSAManager {
         message: &Vec<u8>,
     ) -> Result<SendingMessages, ECDSAError> {
         println!("TSS: handle_keygen_message from index {:?}", index.get_index());
-        if let Some(mut keygen) = self.get_keygen(session_id) {
+
+        let keygen = self.get_keygen(session_id);
+
+        if keygen.is_some() {
             log::info!("[TSS] handling key gen message");
-            return keygen
+            let mut keygen = keygen.unwrap();
+            log::info!("[tss] 1");
+            let to_ret = keygen
                 .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
+            log::info!("[tss] 2");
+
+            drop(keygen);
+            log::info!("[tss] 3");
+            return to_ret;
         }
+        drop(keygen);
         // buffer the messages and throw an error
         log::info!("[TSS] buffering message to keygen");
         self.buffer_keygen
@@ -229,7 +240,9 @@ impl ECDSAManager {
         &mut self,
         session_id: SessionId,
     ) -> Result<Vec<SendingMessages>, ECDSAError> {
+        log::info!("[tss] 3.1");
         if let Some(messages) = self.buffer_keygen.get(&session_id).cloned() {
+            log::info!("4");
             let results: Result<Vec<SendingMessages>, ECDSAError> = messages
                 .into_iter()
                 .map(|(index, message)| self.handle_keygen_message(session_id, index, &message))

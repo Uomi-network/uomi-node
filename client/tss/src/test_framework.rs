@@ -3,10 +3,11 @@ use crate::*;
 use crate::{
     dkghelpers::{FileStorage, MemoryStorage},
     ecdsa::ECDSAManager,
-    DKGSessionState, PeerMapper, SessionData, SessionId, SessionManager, SigningSessionState,
-    TSSParticipant, TSSPeerId, TSSPublic, TSSRuntimeEvent, TssMessage,
+    PeerMapper, SessionId, SessionManager,
+    TSSPublic, TSSRuntimeEvent, TssMessage,
 };
 use sc_network::PeerId;
+
 use sc_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
 use std::cell::RefCell;
 use std::{
@@ -15,6 +16,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use uomi_runtime::Block;
+
 
 /// Simulates the network environment with configurable message passing
 pub struct TestNetwork {
@@ -43,10 +45,75 @@ impl Default for TestConfig {
     }
 }
 
+
+pub struct TestClientManager {
+    // spy on calls to ClientManager functions
+    submit_dkg_result_calls: RefCell<Vec<(SessionId, Vec<u8>)>>,
+    report_participants_calls: RefCell<Vec<(SessionId, Vec<[u8; 32]>)>>,
+}
+
+impl TestClientManager {
+    pub fn new() -> Self {
+        TestClientManager {
+            submit_dkg_result_calls: RefCell::new(Vec::new()),
+            report_participants_calls: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn submit_dkg_result_calls(&self) -> Vec<(SessionId, Vec<u8>)> {
+        self.submit_dkg_result_calls.borrow().clone()
+    }
+    pub fn report_participants_calls(&self) -> Vec<(SessionId, Vec<[u8; 32]>)> {
+        self.report_participants_calls.borrow().clone()
+    }
+
+    pub fn clear_calls(&self) {
+        self.submit_dkg_result_calls.borrow_mut().clear();
+        self.report_participants_calls.borrow_mut().clear();
+    }
+
+    pub fn add_submit_dkg_result_call(&self, session_id: SessionId, aggregated_key: Vec<u8>) {
+        self.submit_dkg_result_calls
+            .borrow_mut()
+            .push((session_id, aggregated_key));
+    }
+    pub fn add_report_participants_call(&self, session_id: SessionId, inactive_participants: Vec<[u8; 32]>) {
+        self.report_participants_calls
+            .borrow_mut()
+            .push((session_id, inactive_participants));
+    }
+}
+
+impl<B: BlockT> ClientManager<B> for TestClientManager {
+    fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash {
+        Default::default()
+    }
+
+    fn report_participants(
+        &self,
+        _hash: <<B as BlockT>::Header as HeaderT>::Hash, 
+        session_id: SessionId,
+        inactive_participants: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
+        // Test implementation just returns Ok
+        self.add_report_participants_call(session_id, inactive_participants);
+        Ok(())
+    }
+    fn submit_dkg_result(
+            &self,
+            _hash: <<B as BlockT>::Header as HeaderT>::Hash,
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        ) -> Result<(), String> {
+        // Test implementation just returns Ok
+        self.add_submit_dkg_result_call(session_id, aggregated_key);
+        Ok(())
+    }
+}
 /// Represents a single node in the test network
 pub struct TestNode {
     /// The core component under test
-    pub session_manager: SessionManager<Block>,
+    pub session_manager: SessionManager<Block, TestClientManager>,
     /// Transmitter for runtime events
     pub runtime_tx: TracingUnboundedSender<TSSRuntimeEvent>,
     /// Receiver for outgoing gossip messages
@@ -198,6 +265,9 @@ impl TestNetwork {
     }
 }
 
+
+
+
 impl TestNode {
     /// Create a new test node with mocked channels
     fn new(peer_id: PeerId, validator_key: TSSPublic) -> Self {
@@ -237,6 +307,10 @@ impl TestNode {
             session_timeout: 3600,
             session_timestamps: Arc::new(Mutex::new(HashMap::new())),
             _phantom: PhantomData,
+            active_participants: Arc::new(Mutex::new(HashMap::new())),
+            client: TestClientManager::new(),
+            announcement:Some(TssMessage::Announce(Default::default(), Vec::new(), Vec::new(), Vec::new())),
+            unknown_peer_queue: Arc::new(Mutex::new(HashMap::new())),
         };
 
         TestNode {
@@ -423,29 +497,3 @@ fn test_route_ecdsa_message() {
         _ => panic!("Wrong message type or recipient"),
     }
 }
-
-/// We mock the network in this way:
-///
-/// 1. MockNetwork holds references to half of the ends, specifically:
-///     a. Runtime to SessionManager transmitter
-///     b. Gossip to SessionManager transmitter
-///     c. SessionManager to Gossip receiver
-/// 2. When we mock a SessionManager, we also automatically add a node to the network, giving it the necessary channels to communicate.
-/// 3. The MockNetwork routes messages. It uses PeerId for direct messages. SessionId is used within the SessionManager to direct messages to the correct session's logic.
-/// 4. Broadcast messages are sent by the MockNetwork to all connected SessionManagers. The SessionManager then handles internal routing based on the SessionId.
-///
-/// The original creates these channels
-/// // Set up communication channels
-/// let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
-/// sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
-///     "gossip_to_session_manager",
-///     1024,
-/// );
-/// let (session_manager_to_gossip_tx, session_manager_to_gossip_rx) =
-/// sc_utils::mpsc::tracing_unbounded::<(PeerId, TssMessage)>(
-///     "session_manager_to_gossip",
-///     1024,
-/// );
-/// let (runtime_to_session_manager_tx, runtime_to_session_manager_rx) =
-/// sc_utils::mpsc::tracing_unbounded::<TSSRuntimeEvent>("runtime_to_session_manager", 1024);
-fn fake() {}
