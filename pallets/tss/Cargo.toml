@@ -31,7 +31,7 @@ sp-api = { workspace = true, feature = ["std"]}
 pallet-uomi-engine = { workspace = true }
 pallet-ipfs = { workspace = true }
 pallet-babe = { workspace = true }
-pallet-session = { workspace = true, features = ["std"] }
+pallet-session = { workspace = true }
 
 # frame deps
 frame-benchmarking = { workspace = true }
