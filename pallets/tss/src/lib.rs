@@ -170,6 +170,7 @@ pub mod pallet {
         + frame_system::offchain::SigningTypes
         + Debug
         + pallet_uomi_engine::pallet::Config
+        + pallet_session::Config<ValidatorId = <Self as frame_system::Config>::AccountId>
         + CreateSignedTransaction<Call<Self>>
     {
         // Events emitted by the pallet.
@@ -734,8 +735,8 @@ pub mod pallet {
                 return;
             }
 
-            // Get current validators from staking pallet
-            let current_validators: Vec<T::AccountId> = ActiveValidators::<T>::get().to_vec();
+            // Get current validators from session pallet
+            let current_validators = pallet_session::Validators::<T>::get();
             // Check if there are any new validators that need IDs
             let mut new_validators = Vec::new();
             for validator in current_validators.iter() {
