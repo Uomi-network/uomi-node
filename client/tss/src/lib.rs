@@ -561,6 +561,7 @@ struct SessionManager<B: BlockT, C: ClientManager<B>>
     // A list of participants that have actively participated so far
     active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
     unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
+    announcement: Option<TssMessage>,
 }
 
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
@@ -578,6 +579,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
         session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
         local_peer_id: TSSPeerId,
+        announcment: Option<TssMessage>,
         client: C,
     ) -> Self {
         Self {
@@ -602,6 +604,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             session_timestamps: Arc::new(Mutex::new(empty_hash_map())),
             active_participants: Arc::new(Mutex::new(empty_hash_map())),
             unknown_peer_queue: Arc::new(Mutex::new(empty_hash_map())),
+            announcement: announcment,
         }
     }
     
@@ -803,18 +806,17 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         drop(peer_mapper);
 
         match &message {
-            TssMessage::GetInfo(ref public_key) => {
+            TssMessage::GetInfo(ref _public_key) => {
                 // Someone's asking about ourselves, we need to announce ourselves
-                log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);
-                let mut rng = rand::thread_rng();
-                let announce = TssMessage::Announce(
-                    rng.gen::<u16>(),
-                    self.local_peer_id.clone(),
-                    public_key.clone(),
-                    self.validator_key.clone(),
-                );
-                if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((sender_peer_id, announce)) {
-                    log::error!("[TSS] Failed to send Announce message: {:?}", e);
+                log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);                
+                if let Some(announcement) = self.announcement.clone() {
+                    // Send the announcement message to the sender
+
+                    if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((sender_peer_id, announcement)) {
+                        log::error!("[TSS] Failed to send announcement message: {:?}", e);
+                    }
+                } else {
+                    log::warn!("[TSS] Announcement message is None");
                 }
             }
             TssMessage::DKGRound1(session_id, ref bytes) => {
@@ -3753,7 +3755,7 @@ where
         );
 
         // Broadcast initial announcement if available
-        if let Some(a) = announcement {
+        if let Some(a) = announcement.clone() {
             if let Err(e) = gossip_handler.broadcast_message(a) {
                 log::error!("[TSS] Failed to broadcast announcement: {:?}", e);
             } else {
@@ -3779,7 +3781,9 @@ where
             runtime_to_session_manager_rx,
             session_manager_to_gossip_tx,
             local_peer_id.to_bytes(),
+            announcement.clone(),
             ClientWrapper::new(Arc::clone(&client), keystore_container.keystore().clone(), transaction_pool.clone()),
+
         );
         
         // Configure session timeout (default is 1 hour, make it 2 hours for production)
