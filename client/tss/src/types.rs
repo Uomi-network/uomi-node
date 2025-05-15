@@ -1,5 +1,4 @@
 use frame_support::{parameter_types, BoundedVec};
-use sc_utils::mpsc::{TracingUnboundedReceiver, TracingUnboundedSender};
 
 
 const MAX_KEY_SIZE: u32 = 64;
