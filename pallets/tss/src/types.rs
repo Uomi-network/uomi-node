@@ -17,6 +17,8 @@ parameter_types! {
     pub const MaxNumberOfShares: u32 = MAX_NUMBER_OF_SHARES;
     pub const MaxMessageSize: u32 = MAX_MESSAGE_SIZE;
     pub const MaxCidSize: u32 = MAX_CID_SIZE;
+    pub const MinimumValidatorThreshold: u32 = 67; // 67% of 100
+
 
 }
 pub type Key = BoundedVec<u8, MaxKeySize>;

@@ -33,6 +33,51 @@ pub enum StorageType {
     EcdsaOnlineOutput,
 }
 
+impl TryFrom<StorageType> for u8 {
+    type Error = std::io::Error;
+
+    fn try_from(value: StorageType) -> Result<Self, Self::Error> {
+        Ok(match value {
+            StorageType::DKGRound1SecretPackage => 0,
+            StorageType::DKGRound2SecretPackage => 1,
+            StorageType::DKGRound1IdentifierPackage => 2,
+            StorageType::DKGRound2IdentifierPackage => 3,
+            StorageType::Key => 4,
+            StorageType::PubKey => 5,
+            StorageType::SigningCommitments => 6,
+            StorageType::SigningNonces => 7,
+            StorageType::SignatureShare => 8,
+            StorageType::SigningPackage => 9,
+            StorageType::EcdsaKeys => 10,
+            StorageType::EcdsaOfflineOutput => 11,
+            StorageType::EcdsaOnlineOutput => 12,
+        })
+    }
+}
+
+impl TryFrom<u8> for StorageType {
+    type Error = std::io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(StorageType::DKGRound1SecretPackage),
+            1 => Ok(StorageType::DKGRound2SecretPackage),
+            2 => Ok(StorageType::DKGRound1IdentifierPackage),
+            3 => Ok(StorageType::DKGRound2IdentifierPackage),
+            4 => Ok(StorageType::Key),
+            5 => Ok(StorageType::PubKey),
+            6 => Ok(StorageType::SigningCommitments),
+            7 => Ok(StorageType::SigningNonces),
+            8 => Ok(StorageType::SignatureShare),
+            9 => Ok(StorageType::SigningPackage),
+            10 => Ok(StorageType::EcdsaKeys),
+            11 => Ok(StorageType::EcdsaOfflineOutput),
+            12 => Ok(StorageType::EcdsaOnlineOutput),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid storage type")),
+        }
+    }
+}
+
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -266,6 +311,226 @@ impl MemoryStorage {
         }
     }
 
+    fn dump_to_file(&self) {
+        use std::fs::{self, File};
+        use std::io::{self, Write};
+        use std::path::Path;
+    
+        // Create a directory for the data if it doesn't exist
+        let data_dir = get_base_directory().join("memory_storage");
+        if !data_dir.exists() {
+            fs::create_dir_all(data_dir.clone()).expect("Failed to create storage directory");
+        }
+    
+        // Helper function to write a Vec<u8> with its length prefix
+        fn write_bytes(file: &mut File, bytes: &[u8]) -> io::Result<()> {
+            // Write length as u32
+            let len = bytes.len() as u32;
+            file.write_all(&len.to_le_bytes())?;
+            // Write actual bytes
+            file.write_all(bytes)
+        }
+    
+        // Helper function to write a String with its length prefix
+        fn write_string(file: &mut File, s: &str) -> io::Result<()> {
+            write_bytes(file, s.as_bytes())
+        }
+    
+        // Dump main data (BTreeMap<(SessionId, StorageType), Vec<u8>>)
+        {
+            let data_path = data_dir.join("data.bin");
+            let mut file = File::create(data_path).expect("Failed to create data file");
+            
+            // Write number of entries
+            let count = self.data.len() as u32;
+            file.write_all(&count.to_le_bytes()).expect("Failed to write count");
+            
+            // Write each entry
+            for ((session_id, storage_type), value) in &self.data {
+                // Write session_id (u64)
+                file.write_all(&session_id.to_le_bytes()).expect("Failed to write session_id");
+                
+                // Write storage_type (assuming it's an enum that can be converted to u8)
+                let storage_type_val: u8 = (*storage_type).try_into().unwrap();
+                file.write_all(&[storage_type_val]).expect("Failed to write storage_type");
+                
+                // Write value
+                write_bytes(&mut file, value).expect("Failed to write value");
+            }
+        }
+    
+        // Helper function to serialize a BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>
+        fn serialize_nested_map(path: &Path, map: &BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>) -> io::Result<()> {
+            let mut file = File::create(path)?;
+            
+            // Write number of outer entries
+            let count = map.len() as u32;
+            file.write_all(&count.to_le_bytes())?;
+            
+            // Write each outer entry
+            for (key, inner_map) in map {
+                // Write key string
+                write_string(&mut file, key)?;
+                
+                // Write number of inner entries
+                let inner_count = inner_map.len() as u32;
+                file.write_all(&inner_count.to_le_bytes())?;
+                
+                // Write each inner entry
+                for (inner_key, inner_value) in inner_map {
+                    // Write inner key
+                    write_bytes(&mut file, inner_key)?;
+                    
+                    // Write inner value
+                    write_bytes(&mut file, inner_value)?;
+                }
+            }
+            
+            Ok(())
+        }
+    
+        // Dump other data structures using the helper
+        serialize_nested_map(&data_dir.join("round1.bin"), &self.round1)
+            .expect("Failed to serialize round1 data");
+        
+        serialize_nested_map(&data_dir.join("round2.bin"), &self.round2)
+            .expect("Failed to serialize round2 data");
+        
+        serialize_nested_map(&data_dir.join("commitments.bin"), &self.commitments)
+            .expect("Failed to serialize commitments data");
+        
+        serialize_nested_map(&data_dir.join("signature_shares.bin"), &self.signature_shares)
+            .expect("Failed to serialize signature_shares data");
+    }
+    
+    pub fn load_from_file(&mut self) {
+        use std::fs::File;
+        use std::io::{self, Read};
+        use std::path::Path;
+    
+        // Helper function to read a Vec<u8> with its length prefix
+        fn read_bytes(file: &mut File) -> io::Result<Vec<u8>> {
+            // Read length (u32)
+            let mut len_bytes = [0u8; 4];
+            file.read_exact(&mut len_bytes)?;
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read bytes
+            let mut bytes = vec![0u8; len];
+            file.read_exact(&mut bytes)?;
+            Ok(bytes)
+        }
+    
+        // Helper function to read a String with its length prefix
+        fn read_string(file: &mut File) -> io::Result<String> {
+            let bytes = read_bytes(file)?;
+            String::from_utf8(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8"))
+        }
+    
+        let data_dir = get_base_directory().join("memory_storage");
+        if !data_dir.exists() {
+            // No data to load
+            return;
+        }
+    
+        // Load main data (BTreeMap<(SessionId, StorageType), Vec<u8>>)
+        let data_path = data_dir.join("data.bin");
+        if data_path.exists() {
+            let mut file = File::open(data_path).expect("Failed to open data file");
+            
+            // Read number of entries
+            let mut count_bytes = [0u8; 4];
+            file.read_exact(&mut count_bytes).expect("Failed to read count");
+            let count = u32::from_le_bytes(count_bytes) as usize;
+            
+            // Clear existing data
+            self.data.clear();
+            
+            // Read each entry
+            for _ in 0..count {
+                // Read session_id (u64)
+                let mut session_id_bytes = [0u8; 8];
+                file.read_exact(&mut session_id_bytes).expect("Failed to read session_id");
+                let session_id = u64::from_le_bytes(session_id_bytes);
+                
+                // Read storage_type (assuming it's an enum that can be converted from u8)
+                let mut storage_type_byte = [0u8; 1];
+                file.read_exact(&mut storage_type_byte).expect("Failed to read storage_type");
+                let storage_type: StorageType = storage_type_byte[0].try_into().expect("Failed to convert byte to StorageType");
+                
+                // Read value
+                let value = read_bytes(&mut file).expect("Failed to read value");
+                
+                // Insert into map
+                self.data.insert((session_id, storage_type), value);
+            }
+        }
+    
+        // Helper function to deserialize a BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>
+        fn deserialize_nested_map(path: &Path) -> io::Result<BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>> {
+            let mut result = BTreeMap::new();
+            
+            if !path.exists() {
+                return Ok(result);
+            }
+            
+            let mut file = File::open(path)?;
+            
+            // Read number of outer entries
+            let mut count_bytes = [0u8; 4];
+            file.read_exact(&mut count_bytes)?;
+            let count = u32::from_le_bytes(count_bytes) as usize;
+            
+            // Read each outer entry
+            for _ in 0..count {
+                // Read key string
+                let key = read_string(&mut file)?;
+                
+                // Read number of inner entries
+                let mut inner_count_bytes = [0u8; 4];
+                file.read_exact(&mut inner_count_bytes)?;
+                let inner_count = u32::from_le_bytes(inner_count_bytes) as usize;
+                
+                // Create inner map
+                let mut inner_map = BTreeMap::new();
+                
+                // Read each inner entry
+                for _ in 0..inner_count {
+                    // Read inner key
+                    let inner_key = read_bytes(&mut file)?;
+                    
+                    // Read inner value
+                    let inner_value = read_bytes(&mut file)?;
+                    
+                    // Insert into inner map
+                    inner_map.insert(inner_key, inner_value);
+                }
+                
+                // Insert into result
+                result.insert(key, inner_map);
+            }
+            
+            Ok(result)
+        }
+    
+        // Load other data structures using the helper
+        if let Ok(round1_data) = deserialize_nested_map(&data_dir.join("round1.bin")) {
+            self.round1 = round1_data;
+        }
+        
+        if let Ok(round2_data) = deserialize_nested_map(&data_dir.join("round2.bin")) {
+            self.round2 = round2_data;
+        }
+        
+        if let Ok(commitments_data) = deserialize_nested_map(&data_dir.join("commitments.bin")) {
+            self.commitments = commitments_data;
+        }
+        
+        if let Ok(signature_shares_data) = deserialize_nested_map(&data_dir.join("signature_shares.bin")) {
+            self.signature_shares = signature_shares_data;
+        }
+    }
+
     fn fetch_data_for_round1(
         &self,
         session_id: SessionId,
@@ -318,7 +583,7 @@ impl MemoryStorage {
             .entry(id)
             .or_insert_with(BTreeMap::new)
             .insert(identifier.serialize(), data.to_vec());
-
+        self.dump_to_file();
         Ok(())
     }
 
@@ -334,6 +599,7 @@ impl MemoryStorage {
             .entry(id)
             .or_insert_with(BTreeMap::new)
             .insert(identifier.serialize(), data.to_vec());
+        self.dump_to_file();
 
         Ok(())
     }
@@ -390,6 +656,7 @@ impl MemoryStorage {
             .entry(id)
             .or_insert_with(BTreeMap::new)
             .insert(identifier.serialize(), data.to_vec());
+        self.dump_to_file();
 
         Ok(())
     }
@@ -406,6 +673,7 @@ impl MemoryStorage {
             .entry(id)
             .or_insert_with(BTreeMap::new)
             .insert(identifier.serialize(), data.to_vec());
+        self.dump_to_file();
 
         Ok(())
     }
@@ -440,6 +708,7 @@ impl Storage for MemoryStorage {
         _identifier: Option<&[u8]>,
     ) -> io::Result<()> {
         self.data.insert((session_id, storage_type), data.to_vec()); // Store a copy of data
+        self.dump_to_file();
         Ok(())
     }
 
@@ -516,7 +785,7 @@ impl Storage for MemoryStorage {
         // Also remove from signature_shares storage
         let id = format_filename(session_id, &StorageType::SignatureShare, None);
         self.signature_shares.remove(&id);
-        
+        self.dump_to_file();
         Ok(())
     }
 }
@@ -601,7 +870,7 @@ impl Storage for FileStorage {
 fn get_base_directory() -> PathBuf {
     env::var("TSS_STORAGE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("key-material"))
+        .unwrap_or_else(|_| PathBuf::from("/var/lib/uomi/chains/uomi/tss"))
 }
 
 pub fn store_file(filename: String, bytes: &[u8]) -> io::Result<()> {

@@ -3,6 +3,9 @@ use ecdsa::{ECDSAError, ECDSAIndexWrapper, ECDSAManager};
 use frame_system::EventRecord;
 use multi_party_ecdsa::communication::sending_messages::SendingMessages;
 use rand::prelude::*;
+use sc_transaction_pool_api::{LocalTransactionPool, OffchainTransactionPoolFactory};
+use substrate_prometheus_endpoint::Registry;
+use sp_keystore::{KeystoreExt, KeystorePtr};
 use std::{
     collections::{btree_map::Keys, BTreeMap, HashMap},
     fmt::Debug,
@@ -11,7 +14,7 @@ use std::{
     num::TryFromIntError,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll}, thread::sleep, time::Duration, u16
+    task::{Context, Poll}, thread::sleep, time::Duration, time::Instant, u16
 };
 
 use dkghelpers::{FileStorage, MemoryStorage, Storage, StorageType};
@@ -29,10 +32,9 @@ use frost_ed25519::{
 };
 use futures::{channel::mpsc::Receiver, prelude::*, select, stream::FusedStream};
 use log::info;
-use sc_service::KeystoreContainer;
+use sc_service::{KeystoreContainer, TransactionPool};
 use sp_core::{sr25519, ByteArray};
-
-use sc_client_api::BlockchainEvents;
+use sc_client_api::{BlockchainEvents, HeaderBackend};
 use sc_network::{
     config::{self, NonDefaultSetConfig, SetConfig}, utils::interval, NetworkSigner, NetworkStateInfo, NotificationService, PeerId, ProtocolName
 };
@@ -41,7 +43,7 @@ use sc_network_gossip::{
     ValidatorContext,
 };
 use sc_utils::mpsc::{TracingUnboundedReceiver, TracingUnboundedSender, TrySendError};
-use sp_api::ProvideRuntimeApi;
+use sp_api::{ApiExt, ProvideRuntimeApi};
 use sp_io::crypto::sr25519_verify;
 use sp_runtime::app_crypto::Ss58Codec;
 use uomi_runtime::pallet_uomi_engine::crypto::CRYPTO_KEY_TYPE as UOMI;
@@ -55,7 +57,7 @@ use sp_runtime::{
 
 use uomi_runtime::{
     pallet_tss::{types::SessionId, Event as TssEvent, TssApi},
-    AccountId,
+    AccountId
 };
 
 use uomi_runtime::RuntimeEvent;
@@ -167,6 +169,12 @@ pub enum TSSRuntimeEvent {
 
 struct TssValidator {
     announcement: Option<TssMessage>,
+    // Track processed messages with their timestamps
+    processed_messages: Arc<Mutex<HashMap<Vec<u8>, Instant>>>,
+    // How long to keep messages in the cache before expiring them
+    message_expiry: Duration,
+    // Sent announcments, to avoid double sending
+    sent_announcements: Arc<Mutex<HashMap<PeerId, Instant>>>,
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -180,6 +188,18 @@ pub enum SessionManagerError {
 }
 // ===== TssValidator =====
 
+impl TssValidator {
+    fn new(message_expiry: Duration, announcement: Option<TssMessage>) -> Self {
+        Self {
+            announcement,
+            processed_messages: Arc::new(Mutex::new(HashMap::new())),
+            message_expiry,
+            sent_announcements: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+
 impl<B: BlockT> Validator<B> for TssValidator {
     fn new_peer(
         &self,
@@ -188,25 +208,36 @@ impl<B: BlockT> Validator<B> for TssValidator {
         _role: sc_network::ObservedRole,
     ) {
         info!("[TSS]: New Peer Connected: {}", who.to_base58());
-        
-        if false {
-            if let Some(announcement) = &self.announcement {
-                match announcement {
-                    TssMessage::Announce(_nonce, peer_id, pubkey, sig) => {
-                        let mut rng = rand::thread_rng();
-                        context.send_message(
-                            who,
-                            TssMessage::Announce(
-                                rng.gen::<u16>(),
-                                peer_id.clone(),
-                                pubkey.clone(),
-                                sig.clone(),
-                            )
-                            .encode(),
-                        );
-                    }
-                    _ => (),
+
+        // Verify if we already sent an announcement to this peer
+        let mut sent_announcements = self.sent_announcements.lock().unwrap();
+
+        if sent_announcements.contains_key(who) {
+            log::info!("[TSS]: Already sent announcement to peer {}", who.to_base58());
+            return;
+        }
+
+        // If we haven't sent an announcement, send it now
+        sent_announcements.insert(who.clone(), Instant::now());
+        drop(sent_announcements);
+
+        // In this way willing or not we announced ourselves to the peer. 
+        if let Some(announcement) = &self.announcement {
+            match announcement {
+                TssMessage::Announce(_nonce, peer_id, pubkey, sig) => {
+                    let mut rng = rand::thread_rng();
+                    context.send_message(
+                        who,
+                        TssMessage::Announce(
+                            rng.gen::<u16>(),
+                            peer_id.clone(),
+                            pubkey.clone(),
+                            sig.clone(),
+                        )
+                        .encode(),
+                    );
                 }
+                _ => (),
             }
         }
     }
@@ -215,14 +246,48 @@ impl<B: BlockT> Validator<B> for TssValidator {
         &self,
         _context: &mut dyn ValidatorContext<B>,
         sender: &PeerId,
-        _data: &[u8],
+        data: &[u8],
     ) -> ValidationResult<B::Hash> {
         info!("[TSS]: Received message from {}", sender.to_base58());
 
+        // Safely modify the processed messages
+        let mut processed_messages = self.processed_messages.lock().unwrap();
+                
+        // Mark the message as processed
+        processed_messages.insert(data.to_vec(), Instant::now());
+        
+        // Cleanup can happen here or in a background task
+        let now = Instant::now();
+        processed_messages.retain(|_, timestamp| {
+            now.duration_since(*timestamp) < self.message_expiry
+        });
+        
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
-        // context.broadcast_message(topic, data.to_vec(), false);
-
+        
         ValidationResult::ProcessAndKeep(topic)
+    }
+
+    fn message_expired<'a>(&'a self) -> Box<dyn FnMut(<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
+        Box::new(move |_topic, data| {
+            let processed_messages = self.processed_messages.lock().unwrap();
+            if let Some(_timestamp) = processed_messages.get(data) {
+                return true;
+            }
+            false
+        })
+    }
+    fn message_allowed<'a>(
+            &'a self,
+        ) -> Box<dyn FnMut(&PeerId, sc_network_gossip::MessageIntent, &<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
+        Box::new(move |_peer_id, _intent, _topic, data| {
+            // The messages are always allowed, but we need to store what data we send out
+            // to avoid sending the same message multiple times
+
+            let mut processed_messages = self.processed_messages.lock().unwrap();
+            processed_messages.insert(data.to_vec(), Instant::now());
+
+            return true;
+        })  
     }
 }
 
@@ -469,7 +534,10 @@ pub enum SessionError {
     GenericError(String),
 }
 
-struct SessionManager<B: BlockT> {
+
+
+struct SessionManager<B: BlockT, C: ClientManager<B>>
+{
     storage: Arc<Mutex<MemoryStorage>>,
     key_storage: Arc<Mutex<FileStorage>>,
     sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
@@ -485,13 +553,19 @@ struct SessionManager<B: BlockT> {
     session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
     buffer: Arc<Mutex<HashMap<SessionId, Vec<(TSSPeerId, TssMessage)>>>>,
     local_peer_id: TSSPeerId,
+    client: C,
     // Track session creation timestamps for timeout enforcement
     session_timestamps: Arc<Mutex<HashMap<SessionId, std::time::Instant>>>,
     // Maximum session lifetime (in seconds)
     session_timeout: u64,
+    // A list of participants that have actively participated so far
+    active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
+    unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
+    announcement: Option<TssMessage>,
 }
 
-impl<B: BlockT> SessionManager<B> {
+impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
+{
     fn new(
         storage: Arc<Mutex<MemoryStorage>>,
         key_storage: Arc<Mutex<FileStorage>>,
@@ -505,6 +579,8 @@ impl<B: BlockT> SessionManager<B> {
         runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
         session_manager_to_gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
         local_peer_id: TSSPeerId,
+        announcment: Option<TssMessage>,
+        client: C,
     ) -> Self {
         Self {
             storage,
@@ -521,10 +597,14 @@ impl<B: BlockT> SessionManager<B> {
             _phantom: PhantomData,
             buffer: Arc::new(Mutex::new(empty_hash_map())),
             local_peer_id,
+            client,
             ecdsa_manager: Arc::new(Mutex::new(ECDSAManager::new())),
             // Default session timeout to 1 hour (3600 seconds)
             session_timeout: 3600,
             session_timestamps: Arc::new(Mutex::new(empty_hash_map())),
+            active_participants: Arc::new(Mutex::new(empty_hash_map())),
+            unknown_peer_queue: Arc::new(Mutex::new(empty_hash_map())),
+            announcement: announcment,
         }
     }
     
@@ -552,6 +632,75 @@ impl<B: BlockT> SessionManager<B> {
         );
         drop(peer_mapper);
         id.is_some()
+    }
+
+    // Add the participant as active, so that it doesn't get reported as bad actor
+    fn add_active_participant(&self, session_id: &SessionId, peer_id: &PeerId) {
+        log::info!("[TSS] Adding Active Participant {:?}", peer_id);
+        let mut active_participants = self.active_participants.lock().unwrap();
+        let participants = active_participants.entry(*session_id).or_insert_with(Vec::new);
+        participants.push(peer_id.to_bytes());
+        drop(active_participants);
+    }
+
+    // Add a TssMessage we received from an unknown peer until they announce themselves
+    fn add_unknown_peer_message(&self, peer_id: PeerId, message: TssMessage) {
+        log::info!("[TSS] Adding unknown peer message from {:?}", peer_id);
+        let mut unknown_peer_queue = self.unknown_peer_queue.lock().unwrap();
+        let messages = unknown_peer_queue.entry(peer_id).or_insert_with(Vec::new);
+        messages.push(message);
+        drop(unknown_peer_queue);
+    }
+
+    // Consume the queue of an unknown peer as soon as they have announced themselves
+    fn consume_unknown_peer_queue(&self, peer_id: PeerId) -> Vec<TssMessage> {
+        log::info!("[TSS] Consuming unknown peer queue for {:?}", peer_id);
+        let mut unknown_peer_queue = self.unknown_peer_queue.lock().unwrap();
+        let messages = unknown_peer_queue.remove(&peer_id).unwrap_or_default();
+        drop(unknown_peer_queue);
+        messages
+    }
+
+    /// Checks what participants have not participated actively
+    fn get_inactive_participants(&self, session_id: &SessionId) -> Vec<[u8; 32]> {
+
+        if !self.is_authorized_for_session(session_id) {
+            return Vec::new();
+        }
+        let mut inactive_participants = Vec::new();
+
+        let sessions_data = self.sessions_data.lock().unwrap();
+        let session_data = sessions_data.get(session_id).cloned();
+        drop(sessions_data);
+        
+        if let Some((_, _, _, _)) = session_data {
+            let peer_mapper = self.peer_mapper.lock().unwrap();
+            let participants = peer_mapper.sessions_participants.lock().unwrap().clone();
+            drop(peer_mapper);
+            let mut peer_mapper = self.peer_mapper.lock().unwrap();
+            let active_participants = self.active_participants.lock().unwrap();
+            let empty_vec = Vec::new();
+            let active_participants_in_session = active_participants.get(session_id).unwrap_or(&empty_vec);
+            log::info!("[TSS] Active Participants In Session: {:?}", active_participants_in_session);
+            if let Some(session_participants) = participants.get(session_id) {
+                for (_identifier, account_id) in session_participants.iter() {
+                    let peer_id = peer_mapper.get_peer_id_from_account_id(account_id);
+                    if let Some(peer_id) = peer_id {
+                        if peer_id.to_bytes() != self.local_peer_id && !active_participants_in_session.contains(&peer_id.to_bytes()) {
+                            inactive_participants.push(account_id.clone().try_into().unwrap());
+                        }
+                    } else {
+                        // If the peer_id is not found, we assume it's inactive
+                        inactive_participants.push(account_id.clone().try_into().unwrap());
+                    }
+                }
+            }
+            drop(active_participants);
+            drop(participants);
+            drop(peer_mapper);
+        }
+        inactive_participants
+
     }
 
     /// Add session data with validation
@@ -638,7 +787,38 @@ impl<B: BlockT> SessionManager<B> {
             }
         };
 
+        // Check if the sender_peer_id is present in our peer_mapper
+        let peer_mapper = self.peer_mapper.lock().unwrap();
+        if !peer_mapper.peers.contains_key(&sender_peer_id) {
+            log::warn!("[TSS] Sender peer ID not found in peer_mapper: {:?}", sender_peer_id);
+
+            // Store the message in the unknown peer queue
+            self.add_unknown_peer_message(sender_peer_id.clone(), message.clone());
+
+            // In this case we ask the peer to identify themselves and we send a GetInfo message
+            let message = TssMessage::GetInfo(self.validator_key.clone());
+            if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((sender_peer_id, message)) {
+                log::error!("[TSS] Failed to send GetInfo message: {:?}", e);
+            }
+
+            return;
+        }
+        drop(peer_mapper);
+
         match &message {
+            TssMessage::GetInfo(ref _public_key) => {
+                // Someone's asking about ourselves, we need to announce ourselves
+                log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);                
+                if let Some(announcement) = self.announcement.clone() {
+                    // Send the announcement message to the sender
+
+                    if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((sender_peer_id, announcement)) {
+                        log::error!("[TSS] Failed to send announcement message: {:?}", e);
+                    }
+                } else {
+                    log::warn!("[TSS] Announcement message is None");
+                }
+            }
             TssMessage::DKGRound1(session_id, ref bytes) => {
                 // Check if this session exists or is timed out
                 if !self.session_exists(session_id) {
@@ -655,6 +835,12 @@ impl<B: BlockT> SessionManager<B> {
                 
                 if self.is_session_timed_out(session_id) {
                     log::warn!("[TSS] Received DKGRound1 message for timed out session {}", session_id);
+                    return;
+                }
+
+                // Check if the node is authorized for this session
+                if !self.is_authorized_for_session(session_id) {
+                    log::warn!("[TSS] Node not authorized for session {}", session_id);
                     return;
                 }
 
@@ -677,6 +863,8 @@ impl<B: BlockT> SessionManager<B> {
                             log::error!("[TSS] Error handling DKGRound1 for session {}: {:?}", session_id, error);
                         },
                     }
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
             TssMessage::DKGRound2(session_id, ref bytes, ref recipient) => {
@@ -688,6 +876,12 @@ impl<B: BlockT> SessionManager<B> {
                 
                 if self.is_session_timed_out(session_id) {
                     log::warn!("[TSS] Received DKGRound2 message for timed out session {}", session_id);
+                    return;
+                }
+
+                // Check if the node is authorized for this session
+                if !self.is_authorized_for_session(session_id) {
+                    log::warn!("[TSS] Node not authorized for session {}", session_id);
                     return;
                 }
 
@@ -724,6 +918,8 @@ impl<B: BlockT> SessionManager<B> {
                             log::error!("[TSS] Error handling DKGRound2 for session {}: {:?}", session_id, error);
                         },
                     }
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
             TssMessage::SigningCommitment(session_id, ref bytes) => {
@@ -745,6 +941,8 @@ impl<B: BlockT> SessionManager<B> {
                 ) {
                     // only the coordinator is supposed to receive this
                     log::error!("[TSS] Error Handling Signing Commitment for session {}: {:?}", session_id, error);
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
             TssMessage::SigningShare(session_id, ref bytes) => {
@@ -766,8 +964,10 @@ impl<B: BlockT> SessionManager<B> {
                     sender_peer_id,
                 ) {
                     Err(error) => log::error!("[TSS] Error Handling Signing Share for session {}: {:?}", session_id, error),
-                    Ok(signature) => log::debug!("[TSS] Signature: {:?}", signature)
-                }
+                    Ok(_signature) => {
+                        self.add_active_participant(session_id, &sender_peer_id);
+                    }
+                } 
             }
 
             TssMessage::SigningPackage(session_id, bytes) => {
@@ -791,6 +991,8 @@ impl<B: BlockT> SessionManager<B> {
                     sender_peer_id,
                 ) {
                     log::error!("[TSS] Error Handling Signing Package for session {}: {:?}", session_id, error);
+                } else {
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
             }
 
@@ -798,8 +1000,13 @@ impl<B: BlockT> SessionManager<B> {
                 // Announcements are handled by the gossip layer directly.  The SessionManager
                 // only needs to know about them to add peers to its mapping.  The GossipHandler
                 // already does this, so nothing to do here *within* the SessionManager.
+                // We can also consume the unknown peer queue here
+                let messages = self.consume_unknown_peer_queue(sender_peer_id.clone());
+                for message in messages {
+                    self.handle_gossip_message(message, sender.clone());
+                }
             }
-            TssMessage::GetInfo(_) | TssMessage::Ping => {
+            TssMessage::Ping => {
                 //  Handle these if needed.  They are likely more relevant to the GossipHandler.
                 //  Maybe in the future we might want to implement some explicit request for information to another Peer
             }
@@ -878,6 +1085,8 @@ impl<B: BlockT> SessionManager<B> {
                 if let Err(error) = &sending_messages {
                     log::error!("[TSS] Error sending messages for session {}: {:?}", session_id, error);
                     return;
+                } else{
+                    self.add_active_participant(session_id, &sender_peer_id);
                 }
                 log::debug!("[TSS] calling handle_ecdsa_sending_messages()");
 
@@ -1270,6 +1479,11 @@ impl<B: BlockT> SessionManager<B> {
                 if let None = index {
                     log::error!("[TSS] Index is not, shouldn't have happened, returning");
                     return;
+                }
+
+                // Publish to the chain
+                if let Err(err) = self.client.submit_dkg_result(self.client.best_hash(), session_id, msg.as_bytes().to_vec()) {
+                    log::error!("[TSS] Error submitting DKG result to chain: {:?}", err);
                 }
 
                 let session_data = self.get_session_data(&session_id);
@@ -2675,7 +2889,14 @@ impl<B: BlockT> SessionManager<B> {
         // Clean up expired sessions
         for session_id in expired_sessions {
             log::info!("[TSS] Cleaning up expired session {}", session_id);
-            
+
+            // Get the inactive participants for reporting them
+            let inactive_participants = self.get_inactive_participants(&session_id);
+            if inactive_participants.len() > 0 { 
+                let best_hash = self.client.best_hash();
+                let _ = self.client.report_participants(best_hash, session_id, inactive_participants.clone());
+            }
+
             // Remove from all session data structures
             {
                 let mut session_data = self.sessions_data.lock().unwrap();
@@ -2772,6 +2993,13 @@ impl<B: BlockT> SessionManager<B> {
         
         log::info!("[TSS] Successfully added data for DKG session {}", id);
         
+        // Check if the node is authorized for this session
+        if !self.is_authorized_for_session(&id) {
+            log::warn!("[TSS] Node not authorized for session {}", id);
+            return Err(format!("Node not authorized for session {}", id));
+        }
+        
+
         self.dkg_handle_session_created(id, n.into(), t.into(), participants.clone())
             .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
         
@@ -3254,6 +3482,12 @@ fn process_session_manager_message<T: TssMessageHandler + ECDSAMessageRouter>(
         TssMessage::ECDSAMessageP2p(session_id, index, _peer_id, bytes, phase) => {
             handler.route_ecdsa_message(session_id, index, bytes, phase, Some(recipient))
         }
+        TssMessage::GetInfo(_) => {
+            handler.send_message(message, recipient)
+        },
+        TssMessage::Announce(_,_,_,_) => {
+            handler.broadcast_message(message.clone())
+        }
         
         _ => Ok(())
     }
@@ -3297,181 +3531,128 @@ impl<B: BlockT> Future for GossipHandler<B> {
     }
 }
 
-// impl<B: BlockT> Future for GossipHandler<B> {
-   // type Output = ();
+// ===== Client Manager =====
 
-    // fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    //     loop {
-    //         match Pin::new(&mut self.gossip_engine).poll(cx) {
-    //             Poll::Ready(e) => e,
-    //             Poll::Pending => break,
-    //         }
-    //     }
+struct ClientWrapper<B: BlockT, C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static, TP> where 
+TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
+{
+    client: Arc<C>,
+    phantom: PhantomData<B>,
+    keystore: KeystorePtr,
+    transaction_pool: Arc<TP>,
+}   
+impl <B: BlockT, C: BlockchainEvents<B> + ProvideRuntimeApi<B, Api=T> + HeaderBackend<B> + Send + Sync + 'static, T:TssApi<B>, TP> ClientWrapper<B, C, TP> where 
+TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static
+ {
+    fn new(client: Arc<C>, keystore: KeystorePtr, transaction_pool: Arc<TP> ) -> Self {
+        Self {
+            client,
+            phantom: Default::default(),
+            keystore,
+            transaction_pool
+        }
+    }
+}
 
-    //     loop {
-    //         match self.gossip_handler_message_receiver.poll_next_unpin(cx) {
-    //             Poll::Ready(Some(notification)) => {
-    //                 if let Some(sender) = notification.sender {
-    //                     if let Ok(message) = TssMessage::decode(&mut &notification.message[..]) {
-    //                         match message {
-    //                             TssMessage::Announce(_, _, _, _) => {
-    //                                 self.handle_announcment(sender, message);
-    //                             }
-    //                             _ => {
-    //                                 let _ = self
-    //                                     .gossip_to_session_manager_tx
-    //                                     .unbounded_send((sender, message));
-    //                             }
-    //                         }
-    //                     }
-    //                 } else {
-    //                     log::info!("[TSS] This is weird {:?}", notification.message);
-    //                 }
-    //             }
-    //             Poll::Ready(None) => return Poll::Ready(()),
-    //             Poll::Pending => break,
-    //         }
-    //     }
+trait ClientManager<B: BlockT> {
+    fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash;
+    fn report_participants(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        inactive_participants: Vec<[u8; 32]>,
+    ) -> Result<(), String>;
+    fn submit_dkg_result(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        aggregated_key: Vec<u8>,
+    ) -> Result<(), String>;
+}
 
-    //     loop {
-    //         match self.session_manager_to_gossip_rx.poll_next_unpin(cx) {
-    //             Poll::Ready(Some((recipient, message))) => match message {
-    //                 TssMessage::DKGRound1(id, bytes) => {
-    //                     if let Err(e) = self.broadcast_message(TssMessage::DKGRound1(id, bytes)) {
-    //                         log::error!("[TSS] Error broadcasting TssMessage::DKGRound1 for session_id {:?} with error {:?}", id, e);
-    //                     }
-    //                 }
-    //                 TssMessage::DKGRound2(id, bytes, recipient) => {
-    //                     if let Err(e) = self.send_message(
-    //                         TssMessage::DKGRound2(id, bytes, recipient.clone()),
-    //                         PeerId::from_bytes(&recipient[..]).unwrap(),
-    //                     ) {
-    //                         log::error!("[TSS] Error sending TssMessage::DKGRound2 for session_id {:?}, peer_id {:?} with error {:?}", id, recipient, e);
-    //                     }
-    //                 }
+impl<B: BlockT, C, TP> ClientManager<B> for ClientWrapper<B, C, TP>
+where
+    C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static,
+    C::Api: uomi_runtime::pallet_tss::TssApi<B>,
+    TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
+{
+    fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash {
+        self.client.info().best_hash
+    }
 
-    //                 TssMessage::SigningPackage(id, bytes) => {
-    //                     if let Err(e) =
-    //                         self.send_message(TssMessage::SigningPackage(id, bytes), recipient)
-    //                     {
-    //                         log::error!("[TSS] Error sending TssMessage::SigningPackage for session_id {:?}, peer_id {:?} with error {:?}", id, recipient, e);
-    //                     }
-    //                 }
-    //                 TssMessage::SigningCommitment(id, bytes) => {
-    //                     if let Err(e) =
-    //                         self.send_message(TssMessage::SigningCommitment(id, bytes), recipient)
-    //                     {
-    //                         log::error!("[TSS] Error sending TssMessage::SigningCommitment for session_id {:?}, peer_id {:?} with error {:?}", id, recipient, e);
-    //                     }
-    //                 }
-    //                 TssMessage::SigningShare(id, bytes) => {
-    //                     if let Err(e) =
-    //                         self.send_message(TssMessage::SigningShare(id, bytes), recipient)
-    //                     {
-    //                         log::error!("[TSS] Error sending TssMessage::SigningShare for session_id {:?}, peer_id {:?} with error {:?}", id, recipient, e);
-    //                     }
-    //                 }
+    fn report_participants(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        inactive_participants: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
 
-    //                 TssMessage::ECDSAMessageBroadcast(session_id, index, bytes, phase)
-    //                 | TssMessage::ECDSAMessageSubset(session_id, index, bytes, phase) => {
-    //                     log::debug!(
-    //                         "[TSS] Sending message to all peers for session_id {:?} with phase {:?}",
-    //                         session_id,
-    //                         phase
-    //                     );
+        let mut runtime = self.client.runtime_api();
+        runtime.register_extension(KeystoreExt(self.keystore.clone()));
+    
+        let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+        runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
 
-    //                     match phase {
-    //                         ECDSAPhase::Key => match self.broadcast_message(TssMessage::ECDSAMessageKeygen(
-    //                             session_id, index, bytes,
-    //                         )) {
-    //                             Err(error) => log::error!("[TSS] Error broadcasting TssMessage::ECDSAMessageKeygen for session_id {:?} with error {:?}", session_id, error),
-    //                             _ => ()
-    //                         },
-    //                         ECDSAPhase::Sign => match self.broadcast_message(TssMessage::ECDSAMessageSign(
-    //                             session_id, index, bytes,
-    //                         )) {
-    //                             Err(error) => log::error!("[TSS] Error broadcasting TssMessage::ECDSAMessageSign for session_id {:?} with error {:?}", session_id, error),
-    //                             _ => ()
-    //                         },
-    //                         ECDSAPhase::SignOnline => match self.broadcast_message(TssMessage::ECDSAMessageSignOnline(
-    //                             session_id, index, bytes,
-    //                         )) {
-    //                             Err(error) => log::error!("[TSS] Error broadcasting TssMessage::ECDSAMessageSignOnline for session_id {:?} with error {:?}", session_id, error),
-    //                             _ => ()
-    //                         },
-    //                     }
-    //                 }
-    //                 TssMessage::ECDSAMessageP2p(session_id, index, _peer_id, bytes, phase) => {
-    //                     log::debug!(
-    //                         "[TSS] Sending message to peer_id {:?} for session_id {:?}, phase is {:?}",
-    //                         recipient,
-    //                         session_id,
-    //                         phase
-    //                     );
+        runtime
+            .report_participants(hash, session_id, inactive_participants)
+            .map_err(|e| format!("Failed to report participants: {:?}", e))
+    }
 
-    //                     match phase {
-    //                         ECDSAPhase::Key => match self.send_message(
-    //                             TssMessage::ECDSAMessageKeygen(session_id, index, bytes),
-    //                             recipient,
-    //                         ) {
-    //                             Err(error) => log::error!("[TSS] Error sending message to TssMessage::ECDSAMessageKeygen for session_id {:?} with error {:?}", session_id, error),
-    //                             _ => ()
-    //                         },
-    //                         ECDSAPhase::Sign => match self.send_message(
-    //                             TssMessage::ECDSAMessageSign(session_id, index, bytes),
-    //                             recipient,
-    //                         ) {
-    //                             Err(error) => log::error!("[TSS] Error sending message to TssMessage::ECDSAMessageSign for session_id {:?} with error {:?}", session_id, error),
-    //                             _ => ()
-    //                         },
-    //                         ECDSAPhase::SignOnline => match self.send_message(
-    //                             TssMessage::ECDSAMessageSignOnline(session_id, index, bytes),
-    //                             recipient,
-    //                         ) {
-    //                             Err(error) => log::error!("[TSS] Error sending message to TssMessage::ECDSAMessageSignOnline for session_id {:?} with error {:?}", session_id, error),
-    //                             _ => ()
-    //                         },
-    //                     }
-    //                 }
-    //                 _ => (),
-    //             },
-    //             Poll::Ready(None) => return Poll::Ready(()),
-    //             Poll::Pending => break,
-    //         }
-    //     }
+    fn submit_dkg_result(
+            &self,
+            hash: <<B as BlockT>::Header as HeaderT>::Hash,
+            session_id: SessionId,
+            aggregated_key: Vec<u8>,
+        ) -> Result<(), String> {
+            let mut runtime = self.client.runtime_api();
+            runtime.register_extension(KeystoreExt(self.keystore.clone()));
+        
+            let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+            runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
+    
+            runtime
+                .submit_dkg_result(hash, session_id, aggregated_key)
+                .map_err(|e| format!("Failed to submit DKG result: {:?}", e))
+    }
+}
 
-    //     Poll::Pending
-    // }
-    // Main poll method
-// }
+
 // ===== Main Setup Function =====
 
-pub fn setup_gossip<C, N, B, S, RE>(
+pub fn setup_gossip<C, N, B, S, TP, RE>(
     client: Arc<C>,
     network: N,
     sync: S,
     notification_service: Box<dyn NotificationService>,
     protocol_name: ProtocolName,
     keystore_container: KeystoreContainer,
+    transaction_pool: Arc<TP>,
+    registry: Option<Registry>,
     _: PhantomData<B>,
     __: PhantomData<RE>,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Error>
 where
     B: BlockT,
-    C: BlockchainEvents<B> + ProvideRuntimeApi<B> + Send + Sync + 'static,
+    C: BlockchainEvents<B> + ProvideRuntimeApi<B> + HeaderBackend<B> + Send + Sync + 'static,
     C::Api: uomi_runtime::pallet_tss::TssApi<B>,
     N: Network<B> + Clone + Send + Sync + 'static + NetworkStateInfo + NetworkSigner,
     S: Syncing<B> + Clone + Send + 'static,
+    TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
     RE: EncodeLike + Eq + Debug + Parameter + Sync + Send + Member,
 {
     let mut rng = rand::thread_rng();
 
+
     let setup_gossip_pin = move || {
+        // Create Arc clone of client that will be moved into the future
+        let client = Arc::clone(&client);
+        
         // Wait until the key is available. This might not be right away, so check every 30s
         while get_validator_key_from_keystore(&keystore_container).is_none() {
             log::warn!("[TSS] No validator key found in keystore. Waiting for key");
             sleep(Duration::from_secs(30));
         }
+    
 
         // As soon as the key is ready we can break the loop and we can start the actual thing
 
@@ -3506,9 +3687,7 @@ where
             None
         };
 
-        let gossip_validator = Arc::new(TssValidator {
-            announcement: announcement.clone(),
-        });
+        let gossip_validator = Arc::new(TssValidator::new(Duration::from_secs(120), announcement.clone()));
 
         // Set up communication channels
         let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
@@ -3536,6 +3715,11 @@ where
         let storage = Arc::new(Mutex::new(MemoryStorage::new()));
         let key_storage = Arc::new(Mutex::new(FileStorage::new()));
 
+        // Try to load from file if it exists
+        let mut storage_lock = storage.lock().unwrap();
+        storage_lock.load_from_file();
+        drop(storage_lock);
+
         // Set up peer mapping
         let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants.clone())));
         {
@@ -3546,8 +3730,8 @@ where
         log::info!(
             "[TSS] Local peer ID: {:?}",
             local_peer_id.to_base58()
-        );
-        
+        ); 
+
         // ===== GossipHandler Setup =====
         let mut gossip_engine = GossipEngine::new(
             network.clone(),
@@ -3555,7 +3739,7 @@ where
             notification_service,
             protocol_name.clone(),
             gossip_validator,
-            None,
+            registry.as_ref(),
         );
 
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
@@ -3571,7 +3755,7 @@ where
         );
 
         // Broadcast initial announcement if available
-        if let Some(a) = announcement {
+        if let Some(a) = announcement.clone() {
             if let Err(e) = gossip_handler.broadcast_message(a) {
                 log::error!("[TSS] Failed to broadcast announcement: {:?}", e);
             } else {
@@ -3584,7 +3768,7 @@ where
             RuntimeEventHandler::<B, C>::new(client.clone(), runtime_to_session_manager_tx);
 
         // ===== SessionManager Setup =====
-        let mut session_manager = SessionManager::<B>::new(
+        let mut session_manager = SessionManager::<B, _>::new(
             storage.clone(),
             key_storage.clone(),
             sessions_participants.clone(),
@@ -3597,10 +3781,13 @@ where
             runtime_to_session_manager_rx,
             session_manager_to_gossip_tx,
             local_peer_id.to_bytes(),
+            announcement.clone(),
+            ClientWrapper::new(Arc::clone(&client), keystore_container.keystore().clone(), transaction_pool.clone()),
+
         );
         
         // Configure session timeout (default is 1 hour, make it 2 hours for production)
-        session_manager.session_timeout = 7200; // 2 hours in seconds
+        session_manager.session_timeout = 15; // 2 hours in seconds
 
         // ===== Start the components =====
         let runtime_event_handler_future = runtime_event_handler.run();
