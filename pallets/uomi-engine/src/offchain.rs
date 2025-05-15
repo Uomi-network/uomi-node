@@ -12,6 +12,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
+use crate::OpocLevel;
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION, TEMP_BLOCK_FOR_NEW_OPOC},
     ipfs::IpfsInterface,
@@ -93,7 +94,7 @@ impl<T: Config> Pallet<T> {
         }
 
         // Find the request with less expiration block number to execute
-        let (request_id, expiration_block_number) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
+        let (request_id, (expiration_block_number, _opoc_level)) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
             // Unlock the semaphore
             semaphore.store(false, Ordering::Release);
@@ -104,7 +105,7 @@ impl<T: Config> Pallet<T> {
         let (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
 
         // Detect the level of opoc the execution should have
-        let opoc_level = Self::offchain_detect_opoc_level(&request_id, &nft_required_consensus);
+        let opoc_level = Self::offchain_detect_opoc_level(&request_id);
 
         // Load wasm associated to the request nft_id
         let wasm = match Self::offchain_load_wasm_from_nft_id(&nft_id, &nft_file_cid) {
@@ -122,7 +123,7 @@ impl<T: Config> Pallet<T> {
         };
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, opoc_level, request_id) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id, opoc_level) {
             Ok(output_data) => {
                 // Store the output data
                 Self::offchain_store_output_data(&request_id, &output_data).unwrap_or_else(|e| {
@@ -144,8 +145,8 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn offchain_find_request_with_min_expiration_block_number(account_id: &T::AccountId) -> (RequestId, BlockNumber) {
-        let mut opoc_assignments = Vec::<(RequestId, BlockNumber)>::new();
+    fn offchain_find_request_with_min_expiration_block_number(account_id: &T::AccountId) -> (RequestId, (BlockNumber,OpocLevel)) {
+        let mut opoc_assignments = Vec::<(RequestId, (BlockNumber, OpocLevel))>::new();
         let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
 
         for (request_id, _) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
@@ -163,10 +164,10 @@ impl<T: Config> Pallet<T> {
             }
 
             // Read the expiration_block_number from the OpocAssignment storage
-            let expiration_block_number = OpocAssignment::<T>::get(*request_id, &account_id);
+            let opoc_assignement_data = OpocAssignment::<T>::get(*request_id, &account_id);
 
             // Add the request_id and expiration_block_number to the opoc_assignment vector
-            opoc_assignments.push((*request_id, expiration_block_number));
+            opoc_assignments.push((*request_id, opoc_assignement_data));//TODO LUCA SISTEMARE
 
         }
 
@@ -176,7 +177,7 @@ impl<T: Config> Pallet<T> {
         }
 
         // Sort opoc_assignments by expiration block number
-        opoc_assignments.sort_by(|a, b| a.1.cmp(&b.1));
+        opoc_assignments.sort_by(|a, b| a.1.0.cmp(&b.1.0));
 
         // Return first request
         opoc_assignments[0]
@@ -223,7 +224,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, request_id: RequestId, opoc_level:OpocLevel) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
         // Convert address to a Vec<u8>
@@ -343,7 +344,7 @@ impl<T: Config> Pallet<T> {
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
             let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, opoc_level, *call_ai_counter.read().unwrap(), request_id) {
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, *call_ai_counter.read().unwrap(), request_id, opoc_level) {
                 Ok(output) => output,
                 Err(error) => {
                     log::error!("Error calling the AI: {:?}", error);
@@ -415,7 +416,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId, opoc_level:OpocLevel) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
@@ -445,8 +446,9 @@ impl<T: Config> Pallet<T> {
             log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
             DispatchError::Other("Invalid UTF-8 in final local name")
         })?;
- 
-        if opoc_level < 1 { // For finney update. remove on turing
+
+
+        if opoc_level == OpocLevel::Level0 { 
             let body_data = CallAiRequestWithoutProof {
                 model: model.clone(),
                 input: input_data.clone(),
@@ -502,12 +504,16 @@ impl<T: Config> Pallet<T> {
 
             Ok(output.to_vec())
         } else {
+
             let mut proof: Data = Data::default();
-            for (_account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
+            for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
                 let (inference_index, inference_proof) = inference_data;
                 if inference_index == counter {
-                    proof = inference_proof;
-                    break;
+                    let opoc_assignment = OpocAssignment::<T>::try_get(request_id, account_id);
+                    if opoc_assignment.is_ok() && opoc_assignment.unwrap().1 == OpocLevel::Level0 {
+                        proof = inference_proof;
+                        break;
+                    }
                 }
             }
 
@@ -548,6 +554,7 @@ impl<T: Config> Pallet<T> {
 
             Ok(output.to_vec())
         }
+    
     }
     
     fn offchain_worker_call_ai_send_request(body: String) -> Result<Data, DispatchError> {
@@ -665,27 +672,14 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn offchain_detect_opoc_level(request_id: &RequestId, nft_required_consensus: &U256) -> u8 {
-        let opoc_assignments_of_level_0 = 1 as usize;
-        let opoc_assignments_of_level_1 = nft_required_consensus.as_u32() as usize;
-
-        let opoc_assignment_count = OpocAssignment::<T>::iter_prefix(*request_id).count();
-
-        let opoc_level = match opoc_assignment_count {
-            0 => { // NOTE: This case should never happen, but check to avoid runtime error
-                u8::from(0)
-            },
-            x if x == opoc_assignments_of_level_0 => {
-                u8::from(0)
-            },
-            x if x == opoc_assignments_of_level_1 => {
-                u8::from(1)
-            },
-            _ => {
-                u8::from(2)
-            },
-        };
-
-        opoc_level
+    /// Basically we get one "random" assignment and check the OpocLevel it has
+    /// Before we counted them. Both checks are founded on the same premise
+    /// i.e. the fact that at each time step there's only one "kind" of assignemt going on
+    /// per each reqquest
+    fn offchain_detect_opoc_level(request_id: &RequestId) -> OpocLevel {
+        match OpocAssignment::<T>::iter_prefix(*request_id).last() {
+            Some((_, (_, opoc_level))) => opoc_level,
+            None => OpocLevel::Level0,
+        }
     }
 }
