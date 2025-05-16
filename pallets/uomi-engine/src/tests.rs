@@ -1177,7 +1177,7 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
     
 }
 
-#[test]
+#[test] // This test is for the case when all the validators have the same output
 fn test_inherent_opoc_level_1_completed_valid() {
     make_logger();
         
@@ -1249,7 +1249,7 @@ fn test_inherent_opoc_level_1_completed_valid() {
     });
 }
 
-#[test]
+#[test] // This test is for a case when one node on opoc level 1 has a different output than the others
 fn test_inherent_opoc_level_1_completed_invalid() {
   make_logger();
     
@@ -1257,12 +1257,12 @@ fn test_inherent_opoc_level_1_completed_invalid() {
     let empty_cid = Cid::default();
     //make an example of bounded vec with data inside
     let bounded_vec: BoundedVec<u8, MaxDataSize> = BoundedVec::try_from(vec![1, 2, 3, 4, 5]).expect("Vector exceeds the bound");
+    let different_bounded_vec: BoundedVec<u8, MaxDataSize> = BoundedVec::try_from(vec![1, 6, 3, 4, 5]).expect("Vector exceeds the bound");
     
     let stake = 10_000_000_000_000_000_000;
     let num_validators = 30;
     let validators = create_validators(num_validators, stake);
-    let default_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
-        
+
     // Set current block
     System::set_block_number(3);
     let current_block_number = System::block_number();
@@ -1292,9 +1292,10 @@ fn test_inherent_opoc_level_1_completed_invalid() {
         NodesOutputs::<Test>::insert(request_id, validators[i].clone(), bounded_vec.clone());
     }
     
+    // Insert an assignment and an output for the other validator
     OpocAssignment::<Test>::insert(U256::from(1), validators[3].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
     NodesWorks::<Test>::insert(validators[3].clone(), request_id, true);
-    NodesOutputs::<Test>::insert(request_id, validators[3].clone(), default_bounded_vec.clone());
+    NodesOutputs::<Test>::insert(request_id, validators[3].clone(), different_bounded_vec.clone());
     
     let inherent_data = InherentData::new();
     let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
@@ -1304,12 +1305,78 @@ fn test_inherent_opoc_level_1_completed_invalid() {
     let runtime_call: RuntimeCall = inherent_call.into();
     assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
       
-    //check if opoc assignment has numv_validators elements
+    //check if opoc assignment has nft_required_consensus elements
     let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
-    assert_eq!(opoc_assignments.len() as u32, 4 + 1+((num_validators - 4)*2/3));
-      
+    assert_eq!(opoc_assignments.len() as u32, 4 + 1 + ((num_validators - 4) * 2 / 3));
   });
 }
+
+#[test] // This test is for a case when one node on opoc level 1 has a empty output
+fn test_inherent_opoc_level_1_completed_empty() {
+  make_logger();
+    
+  new_test_ext().execute_with(|| {
+    let empty_cid = Cid::default();
+    //make an example of bounded vec with data inside
+    let bounded_vec: BoundedVec<u8, MaxDataSize> = BoundedVec::try_from(vec![1, 2, 3, 4, 5]).expect("Vector exceeds the bound");
+    let empty_bounded_vec: BoundedVec<u8, MaxDataSize> = BoundedVec::default();
+    
+    let stake = 10_000_000_000_000_000_000;
+    let num_validators = 30;
+    let validators = create_validators(num_validators, stake);
+
+    // Set current block
+    System::set_block_number(3);
+    let current_block_number = System::block_number();
+
+    // Insert an input on the Inputs storage
+    let request_id: U256 = U256::from(1);
+    Inputs::<Test>::insert(request_id, (
+        U256::zero(),
+        H160::repeat_byte(0xAA),
+        U256::zero(),
+        U256::from(5), // nft_required_consensus
+        U256::from(25), // nft_execution_max_time
+        empty_cid.clone(),
+        bounded_vec.clone(),
+        empty_cid.clone(),
+    ));
+
+    // Insert an assignment for the first validator
+    OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
+    // Insert the output for the first validator
+    NodesOutputs::<Test>::insert(request_id, validators[4].clone(), bounded_vec.clone());
+
+    // Insert an assignment and an output for the other 4 validators
+    for i in 0..3 {
+        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
+        NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
+        NodesOutputs::<Test>::insert(request_id, validators[i].clone(), bounded_vec.clone());
+    }
+    
+    // Insert an assignment and an output for the other validator
+    OpocAssignment::<Test>::insert(U256::from(1), validators[3].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
+    NodesWorks::<Test>::insert(validators[3].clone(), request_id, true);
+    NodesOutputs::<Test>::insert(request_id, validators[3].clone(), empty_bounded_vec.clone());
+    
+    let inherent_data = InherentData::new();
+    let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
+    System::set_block_number(2);
+    assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
+    assert!(TestingPallet::is_inherent(&inherent_call));
+    let runtime_call: RuntimeCall = inherent_call.into();
+    assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+      
+    //check if opoc assignment has 5 elements
+    let opoc_assignments: Vec<(U256, OpocLevel)> = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+    assert_eq!(opoc_assignments.len() as u32, 5);
+
+    //check that storage_opoc_timeouts has 1 element
+    let opoc_timeouts = OpocTimeouts::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+    assert_eq!(opoc_timeouts.len() as u32, 1);
+  });
+}
+
 
 #[test]
 fn test_inherent_opoc_level_2_completed() {

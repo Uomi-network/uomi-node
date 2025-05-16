@@ -437,7 +437,116 @@ impl<T: Config> Pallet<T> {
                         continue;
                     }
 
-                    //for every key in output do Self::opoc_deassignment_per_completed
+                    // Manage presence of outputs with Data::default(); in this case we need to deassign the request from the validator and assign it to another validator for a limited number of retries
+                    let validators_with_empty_output = output
+                        .iter()
+                        .filter(|(_, output)| output == &&Data::default())
+                        .map(|(validator, _)| validator.clone())
+                        .collect::<Vec<T::AccountId>>();
+                    if validators_with_empty_output.len() > 0 {
+                        let number_of_retries = Self::opoc_timeouts_operations_count(
+                            &opoc_timeouts_operations,
+                            &request_id,
+                        );
+
+                        if number_of_retries + validators_with_empty_output.len() as u32 > MAX_REQUEST_RETRIES {
+                            // Clean all timeouts for the request
+                            Self::opoc_timeouts_operations_clean(
+                                &mut opoc_timeouts_operations,
+                                &request_id
+                            );
+
+                            // Deassign the request from all validators per completion
+                            for validator in output.keys() {
+                                match
+                                    Self::opoc_deassignment_per_completed(
+                                        &mut nodes_works_operations,
+                                        &validator,
+                                        &request_id
+                                    )
+                                {
+                                    Err(error) => {
+                                        log::error!(
+                                            "Failed to deassign request from validator of OPoC level 1 for completion. error: {:?}",
+                                            error
+                                        );
+                                        // NOTE: This case should not happen, but if it does, we need to handle it is some way...
+                                    }
+                                    _ => (),
+                                }
+                            }
+
+                            // Complete the request with Data::default()
+                            let executions = 0 as u32;
+                            match
+                                Self::opoc_complete(
+                                    &mut outputs_operations,
+                                    &request_id,
+                                    &Data::default(),
+                                    &executions,
+                                    &executions
+                                )
+                            {
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to complete request at OPoC level 1 per max retries. error: {:?}",
+                                        error
+                                    );
+                                }
+                                _ => (),
+                            }
+                        } else {
+                            // Deassign the request from the validators with empty output
+                            for validator in validators_with_empty_output.iter() {
+                                match
+                                    Self::opoc_deassignment_per_timeout(
+                                        &mut opoc_blacklist_operations,
+                                        &mut opoc_assignment_operations,
+                                        &mut opoc_timeouts_operations,
+                                        &mut nodes_works_operations,
+                                        &request_id,
+                                        &validator
+                                    )
+                                {
+                                    Err(error) => {
+                                        log::error!(
+                                            "Failed to deassign request from validator of OPoC level 1 for timeout. error: {:?}",
+                                            error
+                                        );
+                                        // NOTE: This case should not happen, but if it does, we need to handle it is some way...
+                                    }
+                                    _ => (),
+                                }
+                            }
+
+                            // Reassign the request to other validators
+                            match
+                                Self::opoc_assignment(
+                                    &mut opoc_blacklist_operations,
+                                    &mut opoc_assignment_operations,
+                                    &mut nodes_works_operations,
+                                    &request_id,
+                                    &current_block,
+                                    OpocLevel::Level1,
+                                    validators_with_empty_output.len() as u32,
+                                    vec![],
+                                    false
+                                )
+                            {
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to assign request to random validators for OPoC level 1 after timeout. error: {:?}",
+                                        error
+                                    );
+                                }
+                                _ => (),
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    // For every key in output do Self::opoc_deassignment_per_completed
                     for validator in output.keys() {
                         match
                             Self::opoc_deassignment_per_completed(
