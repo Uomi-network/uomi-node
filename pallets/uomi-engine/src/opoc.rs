@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Chilling, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
 impl<T: Config> Pallet<T> {
@@ -987,19 +987,9 @@ impl<T: Config> Pallet<T> {
     ) -> Result<Vec<T::AccountId>, DispatchError> {
         let number_usize = number.low_u64() as usize;
 
-        // Take list of chilling validators
-        let validators_chilling: Vec<T::AccountId> = Chilling::<T>::iter().map(|(account_id, chill)| {
-            if chill {
-                Some(account_id)
-            } else {
-                None
-            }
-        }).collect::<Vec<Option<T::AccountId>>>().into_iter().filter_map(|x| x).collect();
-
         // Get active validators excluding specified ones
         let validators: Vec<T::AccountId> = Self::get_active_validators()
             .into_iter()
-            .filter(|account_id| !validators_chilling.contains(account_id)) // filter out the chilling validators
             .filter(|account_id| !validators_to_exclude.contains(account_id)) // filter out the validators to exclude
             .collect();
     

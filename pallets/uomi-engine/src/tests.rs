@@ -1,7 +1,7 @@
 use pallet_ipfs::types::Cid;
 use pallet_ipfs::CidsStatus;
 use crate::{
-    mock::*, Chilling, Event, InherentDidUpdate, Inputs, MaxDataSize, OpocErrors, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
+    mock::*, Event, InherentDidUpdate, Inputs, MaxDataSize, OpocErrors, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
 };
 use crate::types::{Address, NftId, RequestId};
 use sp_std::vec;
@@ -1632,95 +1632,6 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
     });
 }
 
-#[test]
-fn test_opoc_assignment_for_one_validator_free_in_chilling() {
-    make_logger();
-
-    new_test_ext().execute_with(|| {
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 5;
-        let validators = create_validators(num_validators, stake);
-        let main_validator = validators[0].clone();
-        let request_id: U256 = U256::from(1);
-        let current_block: U256 = U256::from(1);
-
-        let mut opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
-        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), (U256, OpocLevel)>::new();
-        let mut nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
-
-        // Add request_id to the Inputs storage to permit the calculation of the expiration block number works correctly
-        Inputs::<Test>::insert(request_id, (
-            U256::zero(),
-            H160::repeat_byte(0xAA),
-            U256::zero(),
-            U256::from(1), // nft_required_consensus
-            U256::from(45), // nft_execution_max_time
-            Cid::default(),
-            BoundedVec::<u8, MaxDataSize>::default(),
-            Cid::default(),
-        ));
-
-        // Put all validators except main_validator in nodes_works
-        let mut request_id_true = BTreeMap::<U256, bool>::new();
-        request_id_true.insert(request_id, true);
-        for i in 1..(num_validators as usize) {
-            let validator = validators[i].clone();
-            if validator != main_validator {
-                nodes_works_operations.insert(validator, request_id_true.clone());
-            }
-        }
-
-        // Put main_validator in chilling
-        Chilling::<Test>::insert(&main_validator, true);
-
-        // Run the opoc_assignment function
-        let assigned_completed = match TestingPallet::opoc_assignment(
-            &mut opoc_blacklist_operations,
-            &mut opoc_assignment_operations,
-            &mut nodes_works_operations,
-            &request_id,
-            &current_block,
-            crate::OpocLevel::Level0,
-            1,
-            vec![],
-            true
-        ) {
-            Ok(_) => true,
-            Err(_) => false
-        };
-        assert_eq!(assigned_completed, true);
-
-        // Be sure that the main_validator is not on the opoc_assignment_operations
-        let opoc_assignment = opoc_assignment_operations.get(&(request_id, main_validator));
-        assert_eq!(opoc_assignment, None);
-
-        // Remove the chilling from the main_validator
-        Chilling::<Test>::remove(&main_validator);
-
-        // Run the opoc_assignment function
-        let assigned_completed = match TestingPallet::opoc_assignment(
-            &mut opoc_blacklist_operations,
-            &mut opoc_assignment_operations,
-            &mut nodes_works_operations,
-            &request_id,
-            &current_block,
-            crate::OpocLevel::Level0,
-            1,
-            vec![],
-            true
-        ) {
-            Ok(_) => true,
-            Err(_) => false
-        };
-        assert_eq!(assigned_completed, true);
-
-        // Be sure that the main_validator is on the opoc_assignment_operations with the expiration block number set to the current block number + nft_execution_max_time
-        let (opoc_assignment, opoc_level) = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
-        assert_eq!(*opoc_assignment, U256::from(1 + 45));
-        assert_eq!(*opoc_level, OpocLevel::Level0);
-    });
-}
-
 // OFFCHAIN WORKER CALL AI FUNCTIONS
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -1762,92 +1673,6 @@ fn test_opoc_assignment_for_one_validator_free_in_chilling() {
 //         log::info!("RESPONSE: {:?}", response);
 //     });
 // }
-
-// SET CHILLING FUNCTIONS
-//////////////////////////////////////////////////////////////////////////////////
-
-#[test]
-fn test_set_chilling_true() {
-    make_logger();
-    
-    new_test_ext().execute_with(|| {
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 1;
-        let validators = create_validators(num_validators, stake);
-        let validator = validators[0].clone();
-        
-        // be sure chilling storage does not contain the validator
-        let chilling = Chilling::<Test>::get(&validator);
-        assert_eq!(chilling, false);
-
-        // call the function using validator as origin
-        let response = TestingPallet::set_chilling(RuntimeOrigin::signed(validator.clone()), true);
-
-        // be sure response is ok
-        assert_eq!(response, Ok(()));
-        
-        // be sure chilling storage contains the validator
-        let chilling = Chilling::<Test>::get(&validator);
-        assert_eq!(chilling, true);
-    });
-}
-
-#[test]
-fn test_set_chilling_false() {
-    make_logger();
-    
-    new_test_ext().execute_with(|| {
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 1;
-        let validators = create_validators(num_validators, stake);
-        let validator = validators[0].clone();
-
-        // add the validator to the chilling storage
-        Chilling::<Test>::insert(&validator, true);
-        
-        // be sure chilling storage does contain the validator
-        let chilling = Chilling::<Test>::get(&validator);
-        assert_eq!(chilling, true);
-
-        // call the function using validator as origin
-        let response = TestingPallet::set_chilling(RuntimeOrigin::signed(validator.clone()), false);
-        
-        // be sure response is ok
-        assert_eq!(response, Ok(()));
-        
-        // be sure chilling storage does not contain the validator
-        let chilling = Chilling::<Test>::get(&validator);
-        assert_eq!(chilling, false);
-    });
-}
-
-#[test]
-fn test_set_chilling_called_by_a_non_validator() {
-    make_logger();
-    
-    // NOTE: I'm not sure this is the best way to create a not valid validator but it works =)
-    let mut ext = new_test_ext();
-    let keystore = Arc::new(MemoryKeystore::new());
-    keystore.sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None).unwrap();
-    ext.register_extension(KeystoreExt(keystore.clone()));
-    let validator = keystore.sr25519_public_keys(crate::crypto::CRYPTO_KEY_TYPE).swap_remove(0);
-    
-    ext.execute_with(|| {
-        // be sure chilling storage does not contain the validator
-        let chilling = Chilling::<Test>::get(&validator);
-        assert_eq!(chilling, false);
-
-        // call the function using a non-validator as origin
-        let response = TestingPallet::set_chilling(RuntimeOrigin::signed(validator), true);
-
-        // be sure response is an error
-        assert_eq!(response, Err("Only validators can call this function".into()));
-        
-        // be sure chilling storage does not contain the validator
-        let chilling = Chilling::<Test>::get(&validator);
-        assert_eq!(chilling, false);
-    });
-}
 
 // HELPERS
 //////////////////////////////////////////////////////////////////////////////////

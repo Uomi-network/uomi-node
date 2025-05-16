@@ -312,16 +312,6 @@ pub mod pallet {
 		ValueQuery
 	>;
 
-    // Chilling storage is used to store the validators sets in chilling mode.
-    #[pallet::storage]
-    pub type Chilling<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId, // account_id
-        bool, // is_chilling
-        ValueQuery
-    >;
-
     // AIModels storage is used to store the AI models and their versions.
     #[pallet::storage]
     pub type AIModels<T: Config> = StorageMap<
@@ -522,26 +512,6 @@ pub mod pallet {
 
         #[pallet::call_index(3)]
         #[pallet::weight(0)]
-        pub fn set_chilling(origin: OriginFor<T>, value: bool) -> DispatchResult {
-            let account_id = ensure_signed(origin)?;
-
-            // check if account_id is a validator
-            if !Self::address_is_active_validator(&account_id) {
-                return Err("Only validators can call this function".into());
-            }
-
-            // set chilling value
-            if value {
-                Chilling::<T>::insert(account_id, true);
-            } else {
-                Chilling::<T>::remove(account_id);
-            }
-
-            Ok(())
-        }
-
-        #[pallet::call_index(4)]
-        #[pallet::weight(0)]
         pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult {
             log::info!("UOMI-ENGINE: Cleaning up inputs");
             let _ = ensure_signed(origin)?;
@@ -556,7 +526,7 @@ pub mod pallet {
         }
        
 
-        #[pallet::call_index(5)]
+        #[pallet::call_index(4)]
         #[pallet::weight(0)]
         pub fn store_nodes_opoc_l0_inferences(
             origin: OriginFor<T>, 
