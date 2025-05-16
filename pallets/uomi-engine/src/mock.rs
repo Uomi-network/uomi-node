@@ -48,7 +48,6 @@ use crate as pallet_uomi_engine;
 use pallet_uomi_engine::Call as UomiCall;
 
 type Balance = u128;
-// type BlockNumber = u64;
 type AccountId = Public;
 
 frame_support::construct_runtime!(
@@ -135,8 +134,8 @@ impl MockInherentDataProvider {
         BTreeMap<AccountId, bool>,
         BTreeMap<(RequestId, AccountId), (BlockNumber, OpocLevel)>,
         BTreeMap<AccountId, BTreeMap<RequestId, bool>>,
-        BTreeMap<AccountId, u32>,
-        BTreeMap<AccountId, u32>,
+        BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
+        BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
         BTreeMap<RequestId, (Data, u32, u32)>
     ), DispatchError> {
         Ok((
@@ -368,7 +367,6 @@ impl pallet_ipfs::Config for Test {
 impl pallet_uomi_engine::Config for Test {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Test>; // for finney update. remove on turing
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();

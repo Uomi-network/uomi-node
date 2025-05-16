@@ -113,7 +113,6 @@ pub mod pallet {
 	pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> + session::Config + pallet_ipfs::Config {
 		type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-        type RandomnessOld: Randomness<<Self as frame_system::Config>::Hash, BlockNumberFor<Self>>; // For finney update. remove on turing
 		type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
@@ -209,26 +208,6 @@ pub mod pallet {
 		ValueQuery
 	>;
 
-    // NodesTimeouts storage is used to store the number of timeouts that have every validator
-	#[pallet::storage]
-	pub type NodesTimeouts<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId, // account_id
-        u32, // number_of_timeouts
-        ValueQuery
-	>;
-
-    // NodesErrors storage is used to store the number of errors that have every validator
-    #[pallet::storage]
-    pub type NodesErrors<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId, // account_id
-        u32, // number_of_errors
-        ValueQuery
-    >;
-
     // NodesVersions storage is used to store the versions of the nodes.
     #[pallet::storage]
     pub type NodesVersions<T: Config> = StorageMap<
@@ -307,6 +286,30 @@ pub mod pallet {
         T::AccountId, // account_id
         (BlockNumber, OpocLevel), // expiration_block_number
         ValueQuery
+	>;
+
+    // OpocTimeouts storage is used to store the number of timeouts that have every validator
+	#[pallet::storage]
+	pub type OpocTimeouts<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+		T::AccountId, // account_id
+		bool, // status of timeout
+		ValueQuery
+	>;
+
+    // OpocErrors storage is used to store the number of errors that have every validator
+    #[pallet::storage]
+    pub type OpocErrors<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+        T::AccountId, // account_id
+		bool, // status of error
+		ValueQuery
 	>;
 
     // Chilling storage is used to store the validators sets in chilling mode.
@@ -392,11 +395,6 @@ pub mod pallet {
                         return InvalidTransaction::BadProof.into();
                     }
 
-                    // Existing validation for store_nodes_outputs
-                    if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        return InvalidTransaction::BadSigner.into()
-                    }
-
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(&call)
@@ -410,11 +408,6 @@ pub mod pallet {
                         return InvalidTransaction::BadProof.into();
                     }
 
-                    // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        return InvalidTransaction::BadSigner.into()
-                    }
-    
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(&call)
@@ -426,11 +419,6 @@ pub mod pallet {
 
                     if !Self::verify_signature(payload.public.clone(), payload, signature) {
                         return InvalidTransaction::BadProof.into();
-                    }
-                    
-                    // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        return InvalidTransaction::BadSigner.into()
                     }
 
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -455,11 +443,11 @@ pub mod pallet {
 		pub fn set_inherent_data(
 			origin: OriginFor<T>,
 			opoc_operations: (
-                BTreeMap<T::AccountId, bool>, 
+                BTreeMap<T::AccountId, bool>,
                 BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
-                BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, 
-                BTreeMap<T::AccountId, u32>, 
-                BTreeMap<T::AccountId, u32>, 
+                BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
+                BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
+                BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
                 BTreeMap<RequestId, (Data, u32, u32)>
             ),
             aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
@@ -648,8 +636,8 @@ pub mod pallet {
                             return Err(InherentError::InvalidInherentValue);
                         },
                     };
-                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, nodes_timeouts_operations, outputs_operations, nodes_errors_operations) = opoc_operations;
-                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_nodes_timeouts_operations, expected_outputs_operations, expected_nodes_errors_operations) = expected_opoc_operations;
+                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, opoc_timeouts_operations, outputs_operations, opoc_errors_operations) = opoc_operations;
+                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_opoc_timeouts_operations, expected_outputs_operations, expected_opoc_errors_operations) = expected_opoc_operations;
                     
                     if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
                         log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
@@ -666,9 +654,9 @@ pub mod pallet {
                         log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
                         return Err(InherentError::InvalidInherentValue);
                     }
-                    if nodes_timeouts_operations != &expected_nodes_timeouts_operations {
-                        log::info!("failed check nodes_timeouts_operations: {:?}", nodes_timeouts_operations);
-                        log::info!("expected_nodes_timeouts_operations: {:?}", expected_nodes_timeouts_operations);
+                    if opoc_timeouts_operations != &expected_opoc_timeouts_operations {
+                        log::info!("failed check opoc_timeouts_operations: {:?}", opoc_timeouts_operations);
+                        log::info!("expected_opoc_timeouts_operations: {:?}", expected_opoc_timeouts_operations);
                         return Err(InherentError::InvalidInherentValue);
                     }
                     if outputs_operations != &expected_outputs_operations {
@@ -676,9 +664,9 @@ pub mod pallet {
                         log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
                         return Err(InherentError::InvalidInherentValue);
                     }
-                    if nodes_errors_operations != &expected_nodes_errors_operations {
-                        log::info!("failed check nodes_errors_operations: {:?}", nodes_errors_operations);
-                        log::info!("expected_nodes_errors_operations: {:?}", expected_nodes_errors_operations);
+                    if opoc_errors_operations != &expected_opoc_errors_operations {
+                        log::info!("failed check opoc_errors_operations: {:?}", opoc_errors_operations);
+                        log::info!("expected_opoc_errors_operations: {:?}", expected_opoc_errors_operations);
                         return Err(InherentError::InvalidInherentValue);
                     }
 
@@ -810,39 +798,6 @@ impl<T: Config> Pallet<T> {
 
         // Store the inputs in the Inputs storage
         Inputs::<T>::insert(request_id, (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
-
-        // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-        if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {
-            let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
-            let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), (U256, OpocLevel)>::new();
-            let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<U256, bool>>::new();
-            let current_block = frame_system::Pallet::<T>::block_number().into();
-            match Self::opoc_assignment_finney_v1(
-                &mut opoc_blacklist_operations,
-                &mut opoc_assignment_operations,
-                &mut nodes_works_operations,
-                &request_id,
-                &current_block,
-                1,
-                vec![],
-                true
-            ) {
-                Ok(_) => {
-                    Self::opoc_store_operations((
-                        opoc_blacklist_operations,
-                        opoc_assignment_operations,
-                        nodes_works_operations,
-                        BTreeMap::<T::AccountId, u32>::new(),
-                        BTreeMap::<T::AccountId, u32>::new(),
-                        BTreeMap::<RequestId, (Data, u32, u32)>::new()
-                    ))?;
-                },
-                Err(error) => {
-                    log::error!("UOMI-ENGINE: Failed to assign request to a random validator for OPoC level 0 on run_request. error: {:?}", error);
-                    // NOTE: If assigned is not valid, is not a problem, the request should be assigned by the opoc execution
-                },
-            };
-        }
 
         // Emit the RequestAccepted event
         Self::deposit_event(Event::RequestAccepted { request_id, address, nft_id });

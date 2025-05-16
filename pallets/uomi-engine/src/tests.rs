@@ -1,7 +1,7 @@
 use pallet_ipfs::types::Cid;
 use pallet_ipfs::CidsStatus;
 use crate::{
-    mock::*, Chilling, Event, InherentDidUpdate, Inputs, MaxDataSize, NodesErrors, NodesOutputs, NodesTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
+    mock::*, Chilling, Event, InherentDidUpdate, Inputs, MaxDataSize, OpocErrors, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
 };
 use crate::types::{Address, NftId, RequestId};
 use sp_std::vec;
@@ -772,8 +772,8 @@ fn test_inherent_opoc_level_0_no_timeout() {
         let opoc_blacklist = OpocBlacklist::<Test>::get(validators[0].clone());
         assert_eq!(opoc_blacklist, false);
         // The validator should not have timeouts
-        let nodes_timeouts = NodesTimeouts::<Test>::get(validators[0].clone());
-        assert_eq!(nodes_timeouts, 0 as u32);
+        let nodes_timeouts = OpocTimeouts::<Test>::get(request_id, validators[0].clone());
+        assert_eq!(nodes_timeouts, false);
     });
 }
 
@@ -827,8 +827,8 @@ fn test_inherent_opoc_level_0_timeout() {
         let opoc_blacklist = OpocBlacklist::<Test>::get(validators[0].clone());
         assert_eq!(opoc_blacklist, true);
         // The validator should have timeouts
-        let nodes_timeouts = NodesTimeouts::<Test>::get(validators[0].clone());
-        assert_eq!(nodes_timeouts, 1 as u32);
+        let nodes_timeouts = OpocTimeouts::<Test>::get(request_id, validators[0].clone());
+        assert_eq!(nodes_timeouts, true);
     });
 }
 
@@ -954,7 +954,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
         let opoc_blacklist = OpocBlacklist::<Test>::iter().collect::<Vec<_>>();
         assert_eq!(opoc_blacklist.len() as u32, 0);
         //check that storage_nodes_timeouts is empty
-        let nodes_timeouts = NodesTimeouts::<Test>::iter().collect::<Vec<_>>();
+        let nodes_timeouts = OpocTimeouts::<Test>::iter().collect::<Vec<_>>();
         assert_eq!(nodes_timeouts.len() as u32, 0); 
     });
 }
@@ -1104,8 +1104,8 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
         let opoc_blacklist = OpocBlacklist::<Test>::get(validators[3].clone());
         assert_eq!(opoc_blacklist, true);
         // The validator should have timeouts
-        let nodes_timeouts = NodesTimeouts::<Test>::get(validators[3].clone());
-        assert_eq!(nodes_timeouts, 1 as u32);
+        let nodes_timeouts = OpocTimeouts::<Test>::get(request_id, validators[3].clone());
+        assert_eq!(nodes_timeouts, true);
     });
     
 }
@@ -1177,7 +1177,7 @@ fn test_inherent_opoc_level_1_completed_valid() {
         let opoc_blacklist = OpocBlacklist::<Test>::iter().collect::<Vec<_>>();
         assert_eq!(opoc_blacklist.len() as u32, 0);
         //check that storage_nodes_timeouts is empty
-        let nodes_timeouts = NodesTimeouts::<Test>::iter().collect::<Vec<_>>();
+        let nodes_timeouts = OpocTimeouts::<Test>::iter().collect::<Vec<_>>();
         assert_eq!(nodes_timeouts.len() as u32, 0); 
     });
 }
@@ -1315,10 +1315,10 @@ fn test_inherent_opoc_level_2_completed() {
     let opoc_blacklist = OpocBlacklist::<Test>::iter().collect::<Vec<_>>();
     assert_eq!(opoc_blacklist.len() as u32, 3);
     // check that storage_nodes_errors has 3 elements
-    let nodes_error = NodesErrors::<Test>::iter().collect::<Vec<_>>();
+    let nodes_error = OpocErrors::<Test>::iter().collect::<Vec<_>>();
     assert_eq!(nodes_error.len() as u32, 3);
     //check that storage_nodes_timeouts is empty
-    let nodes_timeouts = NodesTimeouts::<Test>::iter().collect::<Vec<_>>();
+    let nodes_timeouts = OpocTimeouts::<Test>::iter().collect::<Vec<_>>();
     assert_eq!(nodes_timeouts.len() as u32, 0);   
   });
 }

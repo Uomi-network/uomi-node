@@ -14,7 +14,7 @@ static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
 
 use crate::OpocLevel;
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION, TEMP_BLOCK_FOR_NEW_OPOC},
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
     ipfs::IpfsInterface,
     payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},

@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::MAX_INPUTS_MANAGED_PER_BLOCK, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Chilling, Config, Event, Inputs, NodesErrors, NodesOpocL0Inferences, NodesOutputs, NodesTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Chilling, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
 impl<T: Config> Pallet<T> {
@@ -16,8 +16,8 @@ impl<T: Config> Pallet<T> {
             BTreeMap<T::AccountId, bool>, // opoc_blacklist_operations
             BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, // opoc_assignment_operations
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
-            BTreeMap<T::AccountId, u32>, // nodes_timeouts_operations
-            BTreeMap<T::AccountId, u32>, // nodes_errors_operations
+            BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
+            BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
             BTreeMap<RequestId, (Data, u32, u32)>, // outputs_operations
         ),
         DispatchError
@@ -28,8 +28,8 @@ impl<T: Config> Pallet<T> {
             (BlockNumber, OpocLevel)
         >::new();
         let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<RequestId, bool>>::new();
-        let mut nodes_timeouts_operations = BTreeMap::<T::AccountId, u32>::new();
-        let mut nodes_errors_operations = BTreeMap::<T::AccountId, u32>::new();
+        let mut opoc_timeouts_operations = BTreeMap::<RequestId, BTreeMap<T::AccountId, bool>>::new();
+        let mut opoc_errors_operations = BTreeMap::<RequestId, BTreeMap<T::AccountId, bool>>::new();
         let mut outputs_operations = BTreeMap::<RequestId, (Data, u32, u32)>::new();
 
         let ipfs_min_expire_duration = U256::from(MinExpireDuration::get());
@@ -158,8 +158,8 @@ impl<T: Config> Pallet<T> {
                             Self::opoc_deassignment_per_timeout(
                                 &mut opoc_blacklist_operations,
                                 &mut opoc_assignment_operations,
+                                &mut opoc_timeouts_operations,
                                 &mut nodes_works_operations,
-                                &mut nodes_timeouts_operations,
                                 &request_id,
                                 &validator
                             )
@@ -281,8 +281,8 @@ impl<T: Config> Pallet<T> {
                                 Self::opoc_deassignment_per_timeout(
                                     &mut opoc_blacklist_operations,
                                     &mut opoc_assignment_operations,
+                                    &mut opoc_timeouts_operations,
                                     &mut nodes_works_operations,
-                                    &mut nodes_timeouts_operations,
                                     &request_id,
                                     &validator
                                 )
@@ -398,6 +398,9 @@ impl<T: Config> Pallet<T> {
                             .into_iter()
                             .filter(|account_id| !validators_to_exclude.contains(account_id))
                             .collect::<Vec<T::AccountId>>();
+
+                        // TO CHECK: QUI STIAMO PRENDENDO number_of_validators NON COME 2/3+1 DELLA CHAIN, MA 2/3+1 DEI NODI DELLA CHAIN TOLTI QUELLI CHE HANNO GIA ESEGUITO LA RICHIESTA
+                        // DA CAPIRE SE E CORRETTO O MENO
                         let number_of_validators = active_validators_without_exclude.len() as u32;
                         let number_of_validators = (number_of_validators * 2 / 3) + 1;
                         
@@ -443,8 +446,8 @@ impl<T: Config> Pallet<T> {
                                 Self::opoc_deassignment_per_timeout(
                                     &mut opoc_blacklist_operations,
                                     &mut opoc_assignment_operations,
+                                    &mut opoc_timeouts_operations,
                                     &mut nodes_works_operations,
-                                    &mut nodes_timeouts_operations,
                                     &request_id,
                                     &validator
                                 )
@@ -482,8 +485,8 @@ impl<T: Config> Pallet<T> {
                                 Self::opoc_deassignment_per_invalid_output(
                                     &mut opoc_blacklist_operations,
                                     &mut opoc_assignment_operations,
+                                    &mut opoc_errors_operations,
                                     &mut nodes_works_operations,
-                                    &mut nodes_errors_operations,
                                     &request_id,
                                     &validator
                                 )
@@ -554,8 +557,8 @@ impl<T: Config> Pallet<T> {
             opoc_blacklist_operations,
             opoc_assignment_operations,
             nodes_works_operations,
-            nodes_timeouts_operations,
-            nodes_errors_operations,
+            opoc_timeouts_operations,
+            opoc_errors_operations,
             outputs_operations,
         ))
     }
@@ -625,8 +628,8 @@ impl<T: Config> Pallet<T> {
             BTreeMap<T::AccountId, bool>, // opoc_blacklist_operations
             BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, // opoc_assignment_operations
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
-            BTreeMap<T::AccountId, u32>, // nodes_timeouts_operations
-            BTreeMap<T::AccountId, u32>, // nodes_errors_operations
+            BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
+            BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
             BTreeMap<U256, (Data, u32, u32)>, // outputs_operations
         )
     ) -> Result<(), DispatchError> {
@@ -635,8 +638,8 @@ impl<T: Config> Pallet<T> {
             opoc_blacklist_operations,
             opoc_assignment_operations,
             nodes_works_operations,
-            nodes_timeouts_operations,
-            nodes_errors_operations,
+            opoc_timeouts_operations,
+            opoc_errors_operations,
             outputs_operations,
         ) = operations;
 
@@ -683,12 +686,25 @@ impl<T: Config> Pallet<T> {
             }
         }
 
-        // set nodes_timeouts_operations
-        for (account_id, timeouts_number) in nodes_timeouts_operations.iter() {
-            if timeouts_number == &0 {
-                NodesTimeouts::<T>::remove(account_id);
-            } else {
-                NodesTimeouts::<T>::insert(account_id, timeouts_number);
+        // set opoc_timeouts_operations
+        for (account_id, requests) in opoc_timeouts_operations.iter() {
+            for (request_id, is_assigned) in requests.iter() {
+                if *is_assigned {
+                    OpocTimeouts::<T>::insert(account_id, request_id, is_assigned);
+                } else {
+                    OpocTimeouts::<T>::remove(account_id, request_id);
+                }
+            }
+        }
+
+        // set opoc_errors_operations
+        for (account_id, requests) in opoc_errors_operations.iter() {
+            for (request_id, is_assigned) in requests.iter() {
+                if *is_assigned {
+                    OpocErrors::<T>::insert(account_id, request_id, is_assigned);
+                } else {
+                    OpocErrors::<T>::remove(account_id, request_id);
+                }
             }
         }
 
@@ -723,14 +739,6 @@ impl<T: Config> Pallet<T> {
             // remove all inferences from NodesOpocL0Inferences
             for (account_id, _) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) {
                 NodesOpocL0Inferences::<T>::remove(request_id, account_id);
-            }
-        }
-
-        for (account_id, errors_number) in nodes_errors_operations.iter() {
-            if errors_number == &0 {
-                NodesErrors::<T>::remove(account_id);
-            } else {
-                NodesErrors::<T>::insert(account_id, errors_number);
             }
         }
 
@@ -790,15 +798,8 @@ impl<T: Config> Pallet<T> {
         }
     
         // Get random seed
-        let current_block = U256::zero() + frame_system::Pallet::<T>::block_number();
-        let random_bytes: Vec<u8>;
-        if current_block < U256::from(720000) {
-            let random_seed = T::RandomnessOld::random(&b"validator_selection"[..]);
-            random_bytes = random_seed.0.encode();
-        } else {
-            let random_seed = T::Randomness::random(&b"validator_selection"[..]);
-            random_bytes = random_seed.0.encode();
-        }
+        let random_seed = T::Randomness::random(&b"validator_selection"[..]);
+        let random_bytes = random_seed.0.encode();
 
         let mut selected_validators = Vec::with_capacity(number_usize);
         let mut used_indices = Vec::new();
@@ -848,8 +849,8 @@ impl<T: Config> Pallet<T> {
     fn opoc_deassignment_per_invalid_output(
         opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
         opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
+        opoc_errors_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
-        nodes_errors_operations: &mut BTreeMap<T::AccountId, u32>,
         request_id: &RequestId,
         validator: &T::AccountId
     ) -> Result<(), DispatchError> {
@@ -858,7 +859,7 @@ impl<T: Config> Pallet<T> {
         // Remove the request from the OpocAssignment storage
         Self::opoc_assignment_operations_remove(opoc_assignment_operations, request_id, validator);
         // Increment the number of errors of the validator
-        Self::opoc_nodes_errors_operations_incr(nodes_errors_operations, validator);
+        Self::opoc_opoc_errors_operations_add(opoc_errors_operations, validator, request_id);
         // Set the validator as blacklisted
         Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator);
 
@@ -868,8 +869,8 @@ impl<T: Config> Pallet<T> {
     fn opoc_deassignment_per_timeout(
         opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
         opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
+        opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
-        nodes_timeouts_operations: &mut BTreeMap<T::AccountId, u32>,
         request_id: &RequestId,
         validator: &T::AccountId
     ) -> Result<(), DispatchError> {
@@ -878,7 +879,7 @@ impl<T: Config> Pallet<T> {
         // Remove the request from the OpocAssignment storage
         Self::opoc_assignment_operations_remove(opoc_assignment_operations, request_id, validator);
         // Increment the number of timeouts of the validator
-        Self::opoc_nodes_timeouts_operations_incr(nodes_timeouts_operations, validator);
+        Self::opoc_opoc_timeouts_operations_add(opoc_timeouts_operations, validator, request_id);
         // Set the validator as blacklisted
         Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator);
 
@@ -1104,63 +1105,49 @@ impl<T: Config> Pallet<T> {
         }
     }
 
-    fn opoc_nodes_errors_operations_incr(
-        nodes_errors_operations: &mut BTreeMap<T::AccountId, u32>,
-        validator: &T::AccountId
-    ) -> u32 {
-        match nodes_errors_operations.get(&validator) {
-            Some(&failures) => {
-                nodes_errors_operations.insert(validator.clone(), failures + 1);
-                failures + 1
+    fn opoc_opoc_errors_operations_add(
+        opoc_errors_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
+        validator: &T::AccountId,
+        request_id: &RequestId
+    ) -> bool {
+        //add the request_id to the errors of the validator
+        match opoc_errors_operations.get(&request_id) {
+            Some(errors) => {
+                let mut errors = errors.clone();
+                errors.insert(validator.clone(), true);
+                opoc_errors_operations.insert(request_id.clone(), errors);
+                true
             }
             None => {
-                let failures = NodesErrors::<T>::get(&validator);
-                nodes_errors_operations.insert(validator.clone(), failures + 1);
-                failures + 1
+                let mut errors = BTreeMap::<T::AccountId, bool>::new();
+                errors.insert(validator.clone(), true);
+                opoc_errors_operations.insert(request_id.clone(), errors);
+                true
             }
         }
     }
 
-    fn opoc_nodes_timeouts_operations_incr(
-        nodes_timeouts_operations: &mut BTreeMap<T::AccountId, u32>,
-        validator: &T::AccountId
-    ) -> u32 {
-        match nodes_timeouts_operations.get(&validator) {
-            Some(&failures) => {
-                nodes_timeouts_operations.insert(validator.clone(), failures + 1);
-                failures + 1
+    fn opoc_opoc_timeouts_operations_add(
+        opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
+        validator: &T::AccountId,
+        request_id: &RequestId
+    ) -> bool {
+        //add the request_id to the timeouts of the validator
+        match opoc_timeouts_operations.get(&request_id) {
+            Some(timeouts) => {
+                let mut timeouts = timeouts.clone();
+                timeouts.insert(validator.clone(), true);
+                opoc_timeouts_operations.insert(request_id.clone(), timeouts);
+                true
             }
             None => {
-                let failures = NodesTimeouts::<T>::get(&validator);
-                nodes_timeouts_operations.insert(validator.clone(), failures + 1);
-                failures + 1
+                let mut timeouts = BTreeMap::<T::AccountId, bool>::new();
+                timeouts.insert(validator.clone(), true);
+                opoc_timeouts_operations.insert(request_id.clone(), timeouts);
+                true
             }
         }
     }
-
-    // NOTE: Commented because it's not used for now
-    // fn opoc_nodes_timeouts_operations_decr(
-    // 	nodes_timeouts_operations: &mut BTreeMap<T::AccountId, u32>,
-    // 	validator: &T::AccountId,
-    // ) -> u32 {
-    // 	match nodes_timeouts_operations.get(&validator) {
-    // 		Some(&failures) => {
-    // 			if failures > 0 {
-    // 				nodes_timeouts_operations.insert(validator.clone(), failures - 1);
-    // 				return failures - 1;
-    // 			}
-    // 			failures
-    // 		},
-    // 		None => {
-    // 			let failures = NodesTimeouts::<T>::get(&validator);
-    // 			if failures > 0 {
-    // 				nodes_timeouts_operations.insert(validator.clone(), failures - 1);
-    // 				return failures - 1;
-    // 			}
-    // 			failures
-    // 		},
-    // 	}
-    // }
 
     fn opoc_complete(
         outputs_operations: &mut BTreeMap<RequestId, (Data, u32, u32)>,
@@ -1175,143 +1162,5 @@ impl<T: Config> Pallet<T> {
             *total_consensus,
         ));
         Ok(())
-    }
-
-    // NOTE: The following functions are used to maintain retro-compatibility with the finney chain.
-    pub fn opoc_assignment_finney_v1(
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
-        nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<U256, bool>>,
-        request_id: &RequestId,
-        current_block: &BlockNumber,
-        validators_amount: u32,
-        validators_to_exclude: Vec<T::AccountId>,
-        first_free: bool
-    ) -> Result<(), DispatchError> {
-        let random_validators = match
-            Self::opoc_assignment_get_random_validators_finney_v1(
-                nodes_works_operations,
-                U256::from(validators_amount),
-                first_free,
-                validators_to_exclude
-            )
-        {
-            Ok(validators) => validators,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-
-        for validator in random_validators {
-            let is_blacklisted = Self::opoc_blacklist_operations_check(
-                opoc_blacklist_operations,
-                &validator
-            );
-
-            // if black listed, remove the validator from the list of validators
-            if is_blacklisted {
-                Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &validator);
-            }
-
-            // increment the number of works of the validator
-            Self::opoc_nodes_works_operations_add(nodes_works_operations, &validator, &request_id);
-
-            // calculate expiration_block_number after the add of the request
-            let works_execution_max_time_sum =
-                Self::opoc_nodes_works_operations_sum_execution_max_time(
-                    nodes_works_operations,
-                    &validator
-                );
-            let expiration_block_number = current_block + works_execution_max_time_sum;
-
-            // assign the request to the validator
-            Self::opoc_assignment_operations_add(
-                opoc_assignment_operations,
-                &request_id,
-                &validator,
-                &expiration_block_number,
-                OpocLevel::Level0
-            );
-        }
-
-        Ok(())
-    }
-    fn opoc_assignment_get_random_validators_finney_v1(
-        nodes_works_operations: &BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
-        number: U256,
-        first_free: bool,
-        validators_to_exclude: Vec<T::AccountId>
-    ) -> Result<Vec<T::AccountId>, DispatchError> {
-        let number_usize = number.low_u64() as usize;
-
-        // Take all validators from the network excluding the ones that should be excluded
-        let validators: Vec<T::AccountId> = Self::get_active_validators()
-            .into_iter()
-            .filter(|account_id| !validators_to_exclude.contains(account_id))
-            .collect();
-
-        // Take potential validators from the validators list
-        // - If first_free is true, take only the validators that have not been assigned any work, it the number of free validators is less than the number of validators needed, take all the validators
-        // - If first_free is false, take all the validators
-        let potential_validators: Vec<T::AccountId> = if first_free {
-            let free_validators: Vec<T::AccountId> = validators
-                .iter()
-                .filter(
-                    |account_id|
-                        Self::opoc_nodes_works_operations_count(
-                            nodes_works_operations,
-                            account_id
-                        ) == 0
-                )
-                .cloned()
-                .collect();
-
-            if free_validators.len() >= number_usize {
-                free_validators
-            } else {
-                validators
-            }
-        } else {
-            validators
-        };
-
-        // Be sure there are enough validators to assign the work
-        let validator_count = potential_validators.len();
-        if validator_count < number_usize {
-            return Err(DispatchError::Other("Not enough validators"));
-        }
-
-        // Usa BABE VRF per la randomness
-        let random_seed = T::Randomness::random(&b"validator_selection"[..]);
-        let random_bytes = random_seed.0.encode();
-
-        let mut selected_validators = Vec::with_capacity(number_usize);
-        let mut used_indices = Vec::new();
-
-        for i in 0..number_usize {
-            let random_value = U256::from_big_endian(&random_bytes[i * 4..(i + 1) * 4]);
-            let mut index = (random_value % U256::from(validator_count)).low_u64() as usize;
-
-            // Trova il prossimo indice non usato
-            let count = 0;
-            while used_indices.contains(&index) {
-                index = (index + 1) % validator_count;
-                if count == validator_count {
-                    break;
-                }
-            }
-            used_indices.push(index);
-
-            if let Some(validator) = potential_validators.get(index) {
-                selected_validators.push(validator.clone());
-            }
-        }
-
-        // Be sure the selected validators are in the correct number
-        if selected_validators.len() < number_usize {
-            return Err(DispatchError::Other("Failed to select enough unique validators"));
-        }
-
-        Ok(selected_validators)
     }
 }
