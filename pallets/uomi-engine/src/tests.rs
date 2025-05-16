@@ -1390,8 +1390,8 @@ fn test_inherent_opoc_level_2_completed() {
     let stake = 10_000_000_000_000_000_000;
     let num_validators = 10;
     let validators = create_validators(num_validators, stake);
-    let default_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
-        
+    let different_bounded_vec = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3, 7, 5]).expect("Vector exceeds the bound");
+
     // Set current block
     System::set_block_number(3);
     let current_block_number = System::block_number();
@@ -1420,7 +1420,7 @@ fn test_inherent_opoc_level_2_completed() {
     for i in 7..10 {
         OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level2));
         NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
-        NodesOutputs::<Test>::insert(request_id, validators[i].clone(), default_bounded_vec.clone());
+        NodesOutputs::<Test>::insert(request_id, validators[i].clone(), different_bounded_vec.clone());
     }
     
     let inherent_data = InherentData::new();

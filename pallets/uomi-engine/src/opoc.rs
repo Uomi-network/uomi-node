@@ -640,13 +640,12 @@ impl<T: Config> Pallet<T> {
                     let (output, validators_not_completed, validators_in_timeout) =
                         Self::opoc_get_outputs(&request_id, &current_block)?;
 
-                    //if validators_not_completed is not empty, wait next block to check again
+                    // If validators_not_completed is not empty, wait next block to check again
                     if validators_not_completed.len() > 0 {
                         continue;
                     }
 
-                    //if some validators are in timeout, remove the assignment from them, register the timeout
-
+                    // If some validators are in timeout, remove the assignment from them, register the timeout
                     if validators_in_timeout.len() > 0 {
                         for validator in validators_in_timeout.iter() {
                             // Deassign the request from the validator
@@ -671,10 +670,37 @@ impl<T: Config> Pallet<T> {
                         }
                     }
 
+                    // Filter output by removing the records with Data::default() as value and deassign per timeout the validators
+                    let mut filtered_output = BTreeMap::<T::AccountId, Data>::new();
+                    for (validator, output) in output.iter() {
+                        if output != &Data::default() {
+                            filtered_output.insert(validator.clone(), output.clone());
+                        } else {
+                            match
+                                Self::opoc_deassignment_per_timeout(
+                                    &mut opoc_blacklist_operations,
+                                    &mut opoc_assignment_operations,
+                                    &mut opoc_timeouts_operations,
+                                    &mut nodes_works_operations,
+                                    &request_id,
+                                    &validator
+                                )
+                            {
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to deassign request from validator of OPoC level 2 for timeout. error: {:?}",
+                                        error
+                                    );
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+
                     let mut value_counts: BTreeMap<&Data, usize> = BTreeMap::new();
 
-                    // Count occurrences of each value
-                    for value in output.values() {
+                    // Count occurrences of each value except for Data::default()
+                    for value in filtered_output.values() {
                         *value_counts.entry(value).or_insert(0) += 1;
                     }
 
@@ -687,7 +713,7 @@ impl<T: Config> Pallet<T> {
                     let output_completed = Some((*max_value).clone());
 
                     // loop the output
-                    output.iter().for_each(|(validator, output)| {
+                    filtered_output.iter().for_each(|(validator, output)| {
                         if Some(output) != output_completed.as_ref() {
                             match
                                 Self::opoc_deassignment_per_invalid_output(
@@ -726,7 +752,7 @@ impl<T: Config> Pallet<T> {
                         }
                     });
 
-                    let output_values_len = output.len() as u32;
+                    let output_values_len = filtered_output.len() as u32;
 
                     let consensus_output = output_completed.as_ref().unwrap();
                     let output_consensus_len = value_counts
