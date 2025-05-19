@@ -224,9 +224,3 @@ SE opoc_assignment_count > opoc_assignments_of_level_1 ALLORA
   CONCLUDO ESECUZIONE
 FINE
 ```
-
-## To-do
-
-- [x] Convertire nodes errors e nodes timeouts da storage con contatore a coppia account-request_id. Questo ci permette di monitorare il numero massimo di ri-assegnazioni e di rimmuovere la penalità in caso in cui l'errore sia riconducibile al wasm.
-
-- [ ] Implementare nuovo algoritmo opoc (modifiche all'attuale)
