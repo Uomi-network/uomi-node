@@ -921,23 +921,23 @@ impl<T: Config> Pallet<T> {
         }
 
         // set opoc_timeouts_operations
-        for (account_id, requests) in opoc_timeouts_operations.iter() {
-            for (request_id, is_assigned) in requests.iter() {
+        for (request_id, requests) in opoc_timeouts_operations.iter() {
+            for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
-                    OpocTimeouts::<T>::insert(account_id, request_id, is_assigned);
+                    OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
                 } else {
-                    OpocTimeouts::<T>::remove(account_id, request_id);
+                    OpocTimeouts::<T>::remove(request_id, account_id);
                 }
             }
         }
 
         // set opoc_errors_operations
-        for (account_id, requests) in opoc_errors_operations.iter() {
-            for (request_id, is_assigned) in requests.iter() {
+        for (request_id, requests) in opoc_errors_operations.iter() {
+            for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
-                    OpocErrors::<T>::insert(account_id, request_id, is_assigned);
+                    OpocErrors::<T>::insert(request_id, account_id, is_assigned);
                 } else {
-                    OpocErrors::<T>::remove(account_id, request_id);
+                    OpocErrors::<T>::remove(request_id, account_id);
                 }
             }
         }
