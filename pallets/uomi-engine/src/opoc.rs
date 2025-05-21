@@ -184,7 +184,7 @@ impl<T: Config> Pallet<T> {
                                 &current_block,
                                 OpocLevel::Level0,
                                 1,
-                                vec![],
+                                vec![validator],
                                 true
                             )
                         {
@@ -287,7 +287,7 @@ impl<T: Config> Pallet<T> {
                                     &current_block,
                                     OpocLevel::Level0,
                                     1,
-                                    vec![],
+                                    vec![validator],
                                     true
                                 )
                             {
@@ -529,7 +529,7 @@ impl<T: Config> Pallet<T> {
                                     &current_block,
                                     OpocLevel::Level1,
                                     validators_with_empty_output.len() as u32,
-                                    vec![],
+                                    validators_with_empty_output,
                                     false
                                 )
                             {
@@ -1138,7 +1138,7 @@ impl<T: Config> Pallet<T> {
         let mut validators_in_timeout = Vec::<T::AccountId>::new();
 
         let opoc_assignments = OpocAssignment::<T>::iter_prefix(*request_id);
-        for (validator, (expiration_block_number, opoc_level)) in opoc_assignments {
+        for (validator, (expiration_block_number, _opoc_level)) in opoc_assignments {
             // Check if the validator has responded to the request
             // IMPORTANT: The check is done by iterating over the outputs of the request_id and checking if the validator is in the outputs BTreeMap
             // because the validator could have written the output as an empty value, so the output is empty but the validator has responded.
