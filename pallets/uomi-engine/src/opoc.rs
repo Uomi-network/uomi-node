@@ -211,7 +211,7 @@ impl<T: Config> Pallet<T> {
                             &request_id,
                         );
 
-                        if number_of_retries >= MAX_REQUEST_RETRIES {
+                        if number_of_retries + 1 >= MAX_REQUEST_RETRIES { // +1 because we consider the current retry
                             // Clean all timeouts for the request
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
@@ -449,7 +449,7 @@ impl<T: Config> Pallet<T> {
                             &request_id,
                         );
 
-                        if number_of_retries + validators_with_empty_output.len() as u32 > MAX_REQUEST_RETRIES {
+                        if number_of_retries + validators_with_empty_output.len() as u32 >= MAX_REQUEST_RETRIES {
                             // Clean all timeouts for the request
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
@@ -1412,11 +1412,11 @@ impl<T: Config> Pallet<T> {
 
         // add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
         let storage_timeouts_for_request_id = OpocTimeouts::<T>::iter_prefix(request_id);
+        let mut timeouts = BTreeMap::<T::AccountId, bool>::new();
         for (validator, _is_timeout) in storage_timeouts_for_request_id {
-            let mut timeouts = BTreeMap::<T::AccountId, bool>::new();
             timeouts.insert(validator.clone(), false);
-            opoc_timeouts_operations.insert(request_id.clone(), timeouts);
         }
+        opoc_timeouts_operations.insert(request_id.clone(), timeouts);
 
         true
     }
