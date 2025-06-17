@@ -810,6 +810,7 @@ impl<T: Config> Pallet<T> {
     ) -> Result<(), DispatchError> {
         let random_validators = match
             Self::opoc_assignment_get_random_validators(
+                opoc_blacklist_operations,
                 nodes_works_operations,
                 U256::from(validators_amount),
                 first_free,
@@ -980,6 +981,7 @@ impl<T: Config> Pallet<T> {
     }
 
     pub fn opoc_assignment_get_random_validators(
+        opoc_blacklist_operations: &BTreeMap<T::AccountId, bool>,
         nodes_works_operations: &BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         number: U256,
         first_free: bool,
@@ -991,6 +993,12 @@ impl<T: Config> Pallet<T> {
         let validators: Vec<T::AccountId> = Self::get_active_validators()
             .into_iter()
             .filter(|account_id| !validators_to_exclude.contains(account_id)) // filter out the validators to exclude
+            .collect();
+
+        // TEMPORARY MOD FOR TURING TESTNET: We remove from the validators list nodes that are blacklisted
+        let validators: Vec<T::AccountId> = validators
+            .into_iter()
+            .filter(|account_id| !Self::opoc_blacklist_operations_check(opoc_blacklist_operations, account_id))
             .collect();
     
         // Get potential validators based on first_free flag

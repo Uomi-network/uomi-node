@@ -1482,79 +1482,80 @@ fn test_inherent_in_block() {
 // OPOC ASSIGNMENT FUNCTIONS
 //////////////////////////////////////////////////////////////////////////////////
 
-#[test]
-fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
-    make_logger();
+// NOTE: This test is disabled because the turing testnet does not assign requests to blacklisted validators.
+// #[test]
+// fn test_opoc_assignment_for_one_validator_free_in_blacklist() {
+//     make_logger();
 
-    new_test_ext().execute_with(|| {
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 5;
-        let validators = create_validators(num_validators, stake);
-        let main_validator = validators[0].clone();
-        let request_id: U256 = U256::from(1);
-        let current_block: U256 = U256::from(1);
+//     new_test_ext().execute_with(|| {
+//         let stake = 10_000_000_000_000_000_000;
+//         let num_validators = 5;
+//         let validators = create_validators(num_validators, stake);
+//         let main_validator = validators[0].clone();
+//         let request_id: U256 = U256::from(1);
+//         let current_block: U256 = U256::from(1);
 
-        let mut opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
-        let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), (U256, OpocLevel)>::new();
-        let mut nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
+//         let mut opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
+//         let mut opoc_assignment_operations = BTreeMap::<(U256, AccountId), (U256, OpocLevel)>::new();
+//         let mut nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
 
-        // Add request_id to the Inputs storage to permit the calculation of the expiration block number works correctly
-        Inputs::<Test>::insert(request_id, (
-            U256::zero(),
-            H160::repeat_byte(0xAA),
-            U256::zero(),
-            U256::from(1), // nft_required_consensus
-            U256::from(45), // nft_execution_max_time
-            Cid::default(),
-            BoundedVec::<u8, MaxDataSize>::default(),
-            Cid::default(),
-        ));
+//         // Add request_id to the Inputs storage to permit the calculation of the expiration block number works correctly
+//         Inputs::<Test>::insert(request_id, (
+//             U256::zero(),
+//             H160::repeat_byte(0xAA),
+//             U256::zero(),
+//             U256::from(1), // nft_required_consensus
+//             U256::from(45), // nft_execution_max_time
+//             Cid::default(),
+//             BoundedVec::<u8, MaxDataSize>::default(),
+//             Cid::default(),
+//         ));
 
-        // Put main_validator in blacklist
-        opoc_blacklist_operations.insert(main_validator.clone(), true);
+//         // Put main_validator in blacklist
+//         opoc_blacklist_operations.insert(main_validator.clone(), true);
 
-        // Put all validators except main_validator in nodes_works
-        let mut request_id_true = BTreeMap::<U256, bool>::new();
-        request_id_true.insert(request_id, true);
-        for i in 1..(num_validators as usize) {
-            let validator = validators[i].clone();
-            if validator != main_validator {
-                nodes_works_operations.insert(validator, request_id_true.clone());
-            }
-        }
+//         // Put all validators except main_validator in nodes_works
+//         let mut request_id_true = BTreeMap::<U256, bool>::new();
+//         request_id_true.insert(request_id, true);
+//         for i in 1..(num_validators as usize) {
+//             let validator = validators[i].clone();
+//             if validator != main_validator {
+//                 nodes_works_operations.insert(validator, request_id_true.clone());
+//             }
+//         }
 
-        // Run the opoc_assignment function
-        let assigned_completed = match TestingPallet::opoc_assignment(
-            &mut opoc_blacklist_operations,
-            &mut opoc_assignment_operations,
-            &mut nodes_works_operations,
-            &request_id,
-            &current_block,
-            crate::OpocLevel::Level0,
-            1,
-            vec![],
-            true
-        ) {
-            Ok(_) => true,
-            Err(_) => false
-        };
-        assert_eq!(assigned_completed, true);
+//         // Run the opoc_assignment function
+//         let assigned_completed = match TestingPallet::opoc_assignment(
+//             &mut opoc_blacklist_operations,
+//             &mut opoc_assignment_operations,
+//             &mut nodes_works_operations,
+//             &request_id,
+//             &current_block,
+//             crate::OpocLevel::Level0,
+//             1,
+//             vec![],
+//             true
+//         ) {
+//             Ok(_) => true,
+//             Err(_) => false
+//         };
+//         assert_eq!(assigned_completed, true);
 
-        // Be sure that the main_validator is not more on the blacklist
-        let opoc_blacklist = opoc_blacklist_operations.get(&main_validator).unwrap();
-        assert_eq!(*opoc_blacklist, false);
+//         // Be sure that the main_validator is not more on the blacklist
+//         let opoc_blacklist = opoc_blacklist_operations.get(&main_validator).unwrap();
+//         assert_eq!(*opoc_blacklist, false);
 
-        // Be sure that the main_validator is on the opoc_assignment_operations with the expiration block number set to the current block number + nft_execution_max_time
-        let (opoc_assignment, opoc_level) = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
-        assert_eq!(*opoc_assignment, U256::from(1 + 45));
-        assert_eq!(*opoc_level, crate::OpocLevel::Level0);
+//         // Be sure that the main_validator is on the opoc_assignment_operations with the expiration block number set to the current block number + nft_execution_max_time
+//         let (opoc_assignment, opoc_level) = opoc_assignment_operations.get(&(request_id, main_validator)).unwrap();
+//         assert_eq!(*opoc_assignment, U256::from(1 + 45));
+//         assert_eq!(*opoc_level, crate::OpocLevel::Level0);
 
-        // Be sure that the main_validator is on the nodes_works_operations with the request_id set to true
-        let nodes_works = nodes_works_operations.get(&main_validator).unwrap();
-        let request_id_true = nodes_works.get(&request_id).unwrap();
-        assert_eq!(*request_id_true, true);
-    });
-}
+//         // Be sure that the main_validator is on the nodes_works_operations with the request_id set to true
+//         let nodes_works = nodes_works_operations.get(&main_validator).unwrap();
+//         let request_id_true = nodes_works.get(&request_id).unwrap();
+//         assert_eq!(*request_id_true, true);
+//     });
+// }
 
 // OPOC ASSIGNMENT GET RANDOM VALIDATORS FUNCTIONS
 //////////////////////////////////////////////////////////////////////////////////
@@ -1568,10 +1569,12 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
         let num_validators = 100;
         let _validators = create_validators(num_validators, stake);
 
+        let opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
         let nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
 
         // Request 100 validators, all available
         let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
             &nodes_works_operations,
             U256::from(100),
             false,
@@ -1581,6 +1584,7 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
 
         // Request 50 validators, all available
         let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
             &nodes_works_operations,
             U256::from(50),
             false,
@@ -1590,6 +1594,7 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
 
         // Request 1 validator, all available
         let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
             &nodes_works_operations,
             U256::from(1),
             false,
@@ -1599,6 +1604,7 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
 
         // Request 101 validators, not enough available
         let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
             &nodes_works_operations,
             U256::from(101),
             false,
@@ -1609,6 +1615,7 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
         // Request 50 validators, exclude 50 validators
         let excluded_validators: Vec<AccountId> = (0..50).map(|i| AccountId::from_raw([i as u8; 32])).collect();
         let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
             &nodes_works_operations,
             U256::from(50),
             false,
@@ -1623,6 +1630,7 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
         // Request 50 validators, exclude 51 validators
         let excluded_validators: Vec<AccountId> = (0..51).map(|i| AccountId::from_raw([i as u8; 32])).collect();
         let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
             &nodes_works_operations,
             U256::from(50),
             false,
