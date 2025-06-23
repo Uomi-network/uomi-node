@@ -293,6 +293,12 @@ pub mod pallet {
     #[pallet::getter(fn previous_era)]
     pub type PreviousEra<T: Config> = StorageValue<_, u32, ValueQuery>;
 
+    // Add storage for tracking previous validator set to detect changes
+    #[pallet::storage]
+    #[pallet::getter(fn previous_era_validators)]
+    pub type PreviousEraValidators<T: Config> =
+        StorageValue<_, BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>, ValueQuery>;
+
     // A storage to store the reported participants for a given session_id. Used to skip them during next retry
     // each participant may report multiple participants, we need to know who reported who so that we can check against
     // that and maybe exclude someone definitively
@@ -796,12 +802,16 @@ pub mod pallet {
             if current_era != previous_era {
                 // Reset report counts for all validators at the end of an era
                 Pallet::<T>::reset_validator_report_counts().ok();
+                
+                // Handle validator changes at era end
+                Pallet::<T>::handle_era_transition(current_era).ok();
+                
                 // Update the previous era to the current one
                 PreviousEra::<T>::put(current_era);
             }
             
-            // Return weight for this operation (minimal)
-            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
+            // Return weight for this operation (including potential DKG regeneration)
+            T::DbWeight::get().reads(3) + T::DbWeight::get().writes(3)
         }
     }
 
@@ -1081,6 +1091,76 @@ pub mod pallet {
         fn get_current_era() -> Option<u32> {
             // Access the current era from the Staking pallet
             pallet_staking::CurrentEra::<T>::get()
+        }
+
+        /// Handle era transition: check for validator changes and trigger DKG reshare if needed
+        pub fn handle_era_transition(current_era: u32) -> DispatchResult {
+            log::debug!("TSS: Handling era transition to era {}", current_era);
+            
+            // Get current and previous validator sets
+            let current_validators = ActiveValidators::<T>::get();
+            let previous_validators = PreviousEraValidators::<T>::get();
+            
+            // Compare validator sets to detect changes
+            let validators_changed = current_validators.len() != previous_validators.len() ||
+                !current_validators.iter().all(|v| previous_validators.contains(v));
+            
+            if validators_changed {
+                log::info!("TSS: Validator set changed at era {}, triggering DKG reshare", current_era);
+                
+                // Check if we have an existing TSS key that requires resharing
+                let has_existing_key = !TSSKey::<T>::get().is_empty();
+
+                if has_existing_key && !previous_validators.is_empty() {
+                    // Create reshare DKG session for the validator set change
+                    Self::create_reshare_session_for_validator_change(&previous_validators)?;
+                    log::info!("TSS: Reshare DKG session created for validator set change");
+                } else {
+                    log::info!("TSS: No existing TSS key or no previous validators, skipping reshare");
+                }
+            } else {
+                log::debug!("TSS: No validator set changes detected at era {}", current_era);
+            }
+            
+            // Update stored validator set for next era comparison
+            PreviousEraValidators::<T>::put(current_validators);
+            
+            Ok(())
+        }
+
+        /// Create a reshare DKG session for validator set changes
+        fn create_reshare_session_for_validator_change(
+            old_participants: &BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>
+        ) -> DispatchResult {
+            // For validator set changes, we need to reshare ALL existing agent keys
+            // Find all active DKG sessions that have completed and need resharing
+            let mut reshare_created = false;
+            
+            for (_session_id, session) in DkgSessions::<T>::iter() {
+                if session.state == SessionState::DKGComplete {
+                    // Create a reshare session for this specific agent/NFT
+                    let threshold = session.threshold;
+                    let origin = frame_system::RawOrigin::None.into();
+                    
+                    if let Err(e) = Self::create_reshare_dkg_session(
+                        origin,
+                        session.nft_id.clone(),
+                        threshold,
+                        old_participants.clone(),
+                    ) {
+                        log::error!("TSS: Failed to create reshare session for NFT {:?}: {:?}", session.nft_id, e);
+                    } else {
+                        log::info!("TSS: Created reshare session for NFT {:?}", session.nft_id);
+                        reshare_created = true;
+                    }
+                }
+            }
+            
+            if !reshare_created {
+                log::warn!("TSS: No completed DKG sessions found to reshare during validator set change");
+            }
+            
+            Ok(())
         }
     }
 }
