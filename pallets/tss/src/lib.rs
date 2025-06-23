@@ -1114,9 +1114,10 @@ impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
         let nft_id_bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
         let nft_id: crate::types::NftId = BoundedVec::try_from(nft_id_bytes)
             .map_err(|_| frame_support::pallet_prelude::DispatchError::Other("Invalid NFT ID"))?;
-        
+        // use none origin to avoid permission checks
+        let origin = frame_system::RawOrigin::None.into();
         Pallet::<T>::create_dkg_session(
-            frame_system::RawOrigin::Root.into(),
+            origin,
             nft_id,
             80,
         )?;
