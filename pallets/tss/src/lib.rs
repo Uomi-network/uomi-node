@@ -1221,7 +1221,6 @@ impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
     }
     
     fn get_agent_wallet_address(nft_id: sp_core::U256) -> Option<sp_core::H160> {
-        // TODO: Return the actual wallet address from storage
         log::info!("TSS: Getting wallet address for agent {}", nft_id);
 
         // Convert nft_id to BoundedVec
