@@ -21,7 +21,7 @@ use scale_info::TypeInfo;
 pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
-use types::{ PublicKey, SessionId};
+use types::{PublicKey, SessionId};
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
 pub struct EmptyInherent;
@@ -318,7 +318,7 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn proposed_public_keys)]
     pub type ProposedPublicKeys<T: Config> =
-        StorageDoubleMap<_, Blake2_128Concat, SessionId, Blake2_128Concat, u32, PublicKey, OptionQuery>;
+        StorageDoubleMap<_, Blake2_128Concat, NftId, Blake2_128Concat, u32, PublicKey, OptionQuery>;
 
     
 
@@ -510,6 +510,9 @@ pub mod pallet {
                 Error::<T>::InvalidSessionState
             );
 
+            // Get the NFT ID from the session
+            let nft_id = session.nft_id.clone();
+
             // Check if the validator was involved in the DKG session
             let validator_id = ValidatorIds::<T>::get(who.clone()).ok_or(Error::<T>::UnauthorizedParticipation)?;
             ensure!(
@@ -518,14 +521,14 @@ pub mod pallet {
             );
 
             // Add the vote to the proposed public keys
-            ProposedPublicKeys::<T>::insert(session_id, validator_id, aggregated_key.clone());
+            ProposedPublicKeys::<T>::insert(nft_id.clone(), validator_id, aggregated_key.clone());
 
             let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
 
             // Check if the number of votes meets the threshold
             let mut votes = 0;
             
-            for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(session_id) {
+            for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(nft_id) {
                 if key == aggregated_key {
                     votes += 1;
                 }
@@ -1100,5 +1103,67 @@ sp_api::decl_runtime_apis! {
             session_id: SessionId,
             aggregated_key: Vec<u8>,
         );
+    }
+}
+
+impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
+    fn create_agent_wallet(nft_id: sp_core::U256) -> frame_support::pallet_prelude::DispatchResult {
+        log::info!("TSS: Creating wallet for agent {}", nft_id);
+
+        // Convert nft_id to BoundedVec
+        let nft_id_bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+        let nft_id: crate::types::NftId = BoundedVec::try_from(nft_id_bytes)
+            .map_err(|_| frame_support::pallet_prelude::DispatchError::Other("Invalid NFT ID"))?;
+        
+        Pallet::<T>::create_dkg_session(
+            frame_system::RawOrigin::Root.into(),
+            nft_id,
+            80,
+        )?;
+        
+        Ok(())
+    }
+    
+    fn agent_wallet_exists(nft_id: sp_core::U256) -> bool {
+        log::info!("TSS: Checking if wallet exists for agent {}", nft_id);
+
+        // Convert nft_id to BoundedVec
+        let nft_id_bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+        let nft_id: crate::types::NftId = BoundedVec::try_from(nft_id_bytes)
+            .map_err(|_| frame_support::pallet_prelude::DispatchError::Other("Invalid NFT ID"))
+            .unwrap();
+
+        // Check if the ProposedPublicKeys storage has any keys for this nft_id
+        let exists = ProposedPublicKeys::<T>::iter_prefix(nft_id.clone()).next().is_some();
+        log::info!("TSS: Wallet exists for agent {:?}: {}", nft_id, exists);
+        exists
+    }
+    
+    fn get_agent_wallet_address(nft_id: sp_core::U256) -> Option<sp_core::H160> {
+        // TODO: Return the actual wallet address from storage
+        log::info!("TSS: Getting wallet address for agent {}", nft_id);
+
+        // Convert nft_id to BoundedVec
+        let nft_id_bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+        let nft_id: crate::types::NftId = BoundedVec::try_from(nft_id_bytes)
+            .map_err(|_| frame_support::pallet_prelude::DispatchError::Other("Invalid NFT ID"))
+            .unwrap();
+
+        // Use ProposedPublicKeys to get the address. ProposedPublicKeys key is a tuple of (nft_id, validator_id), so we need to take the value that has most votes
+        let mut proposed_keys = ProposedPublicKeys::<T>::iter_prefix(nft_id)
+            .map(|(_validator_id, key)| key)
+            .collect::<Vec<crate::types::PublicKey>>();
+        proposed_keys.sort_by(|a, b| a.len().cmp(&b.len()));
+        if let Some(key) = proposed_keys.last() {
+            // Decode the key to H160
+            if let Ok(address) = sp_core::H160::decode(&mut &key[..]) {
+                return Some(address);
+            }
+        }
+        // log::warn!("TSS: No wallet address found for agent {:?}", nft_id);
+        
+
+
+        None
     }
 }
