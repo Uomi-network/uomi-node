@@ -305,7 +305,7 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn pin_agent(origin: OriginFor<T>, cid: Cid, nft_id: NftId) -> DispatchResult {
+        pub fn pin_agent(origin: OriginFor<T>, cid: Cid, nft_id: NftId, threshold: u8) -> DispatchResult {
             let _who = ensure_signed(origin)?;
 
             if AgentsPins::<T>::contains_key(nft_id) {
@@ -342,8 +342,10 @@ pub mod pallet {
 
                 // Check if wallet already exists for this agent
                 if !T::TssInterface::agent_wallet_exists(nft_id) {
+                    // TODO:
+                    let threshold: u8 = 90;
                     // Create new wallet for the agent
-                    if let Err(e) = T::TssInterface::create_agent_wallet(nft_id) {
+                    if let Err(e) = T::TssInterface::create_agent_wallet(nft_id, threshold) {
                         log::error!("IPFS: Failed to create agent wallet: {:?}", e);
                         return Err(Error::<T>::SomethingWentWrong.into());
                     }

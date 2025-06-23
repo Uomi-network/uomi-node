@@ -76,7 +76,7 @@ pub type Nonce = u32;
 /// This allows other pallets to interact with TSS without direct dependencies
 pub trait TssInterface<T: frame_system::Config> {
     /// Create a new wallet for an agent
-    fn create_agent_wallet(nft_id: sp_core::U256) -> frame_support::pallet_prelude::DispatchResult;
+    fn create_agent_wallet(nft_id: sp_core::U256, threshold: u8) -> frame_support::pallet_prelude::DispatchResult;
     
     /// Check if a wallet exists for an agent
     fn agent_wallet_exists(nft_id: sp_core::U256) -> bool;

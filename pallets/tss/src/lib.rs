@@ -1187,8 +1187,11 @@ sp_api::decl_runtime_apis! {
 }
 
 impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
-    fn create_agent_wallet(nft_id: sp_core::U256) -> frame_support::pallet_prelude::DispatchResult {
+    fn create_agent_wallet(nft_id: sp_core::U256, threshold: u8) -> frame_support::pallet_prelude::DispatchResult {
         log::info!("TSS: Creating wallet for agent {}", nft_id);
+
+        ensure!(threshold >= 50, frame_support::pallet_prelude::DispatchError::Other("Threshold must be at least 50%"));
+        ensure!(threshold <= 100, frame_support::pallet_prelude::DispatchError::Other("Threshold must be at most 100%"));
 
         // Convert nft_id to BoundedVec
         let nft_id_bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
