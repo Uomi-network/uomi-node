@@ -1,9 +1,12 @@
-# **UOMI Engine Feature Proposal: On-Chain Action Elaboration System**
+# **UOMI Improvement Proposal: On-Chain Action Elaboration System**
 
-**Document Version:** 1.0  
-**Date:** June 23, 2025  
-**Author:** Development Team  
+**UIP Number:** UIP-001  
+**Title:** On-Chain Action Elaboration System  
 **Status:** Draft  
+**Type:** Core  
+**Category:** Engine Enhancement  
+**Created:** June 24, 2025  
+**Author:** Development Team  
 
 ---
 
@@ -451,7 +454,7 @@ The On-Chain Action Elaboration System represents a fundamental evolution of the
 
 The proposed system leverages existing UOMI infrastructure while adding powerful new capabilities, ensuring both compatibility and innovation. Each agent output can contain multiple coordinated actions, enabling sophisticated multi-step workflows. The phased implementation approach minimizes risk while delivering incremental value, and the extensible architecture provides a foundation for future enhancements.
 
-**Recommendation:** Proceed with implementation to validate the core concept and demonstrate the system's potential, with full commitment to the complete feature roadmap.
+**Recommendation:** Proceed with implementation to validate the core concept and demonstrate the system's potential, with full commitment to the complete UIP roadmap.
 
 ---
 
@@ -600,8 +603,8 @@ pub enum Event<T: Config> {
 **Document Control:**
 - **Review Required:** Technical Lead, Security Team, Product Manager
 - **Approval Required:** CTO, Head of Product
-- **Next Review Date:** July 15, 2025
+- **Next Review Date:** July 24, 2025
 - **Distribution:** Engineering Team, Product Team, Executive Team
-- **Document Location:** `/docs/FEATURE_PROPOSAL_Action_Elaboration_System.md`
+- **Document Location:** `/docs/UIP-001_Action_Elaboration_System.md`
 - **Version History:**
-  - v1.0 (June 23, 2025): Initial draft
+  - v1.0 (June 24, 2025): Initial UIP draft
