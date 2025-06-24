@@ -1,8 +1,7 @@
-# Changelog for v0.2.2
+# Changelog for v0.2.3
 
 ## Changes
-- fix: new release
-- Merge pull request #8 from Uomi-network/hotfix/deactivate-tss
-- fix(tss): Adds message expiry to TSS validator
-- fix(tss): Comments out TSS P2P gossip setup
+- feat: new release
+- Merge pull request #9 from Uomi-network/feat/deepseek-models
+- feat: update AI model versions and increment pallet version to 6
 
