@@ -29,4 +29,3 @@ pub type Share = BoundedVec<u8, MaxShareSize>;
 pub type PublicKey = BoundedVec<u8, MaxPublicKeySize>;
 pub type Signature = BoundedVec<u8, MaxSignatureSize>;
 pub type NftId = BoundedVec<u8, MaxCidSize>;
-

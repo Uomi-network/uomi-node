@@ -6,6 +6,8 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+mod fsa;
+
 use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
 use sp_std::prelude::*;
@@ -63,6 +65,15 @@ pub struct ReportParticipantsPayload<T: Config> {
     public: T::Public,
 }
 
+/// A struct for a report participants payload
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+pub struct CreateSigningSessionPayload<T: Config> {
+    nft_id: sp_core::U256,
+    message: BoundedVec<u8, types::MaxMessageSize>,
+    public: T::Public,
+}
+
+
 /// A struct for a report participants count payload
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
 pub struct ReportParticipantsCountPayload<T: Config> {
@@ -114,6 +125,12 @@ impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsCountPaylo
 }
 
 impl<T: SigningTypes + Config> SignedPayload<T> for SubmitDKGResultPayload<T> {
+    fn public(&self) -> T::Public {
+        self.public.clone()
+    }
+}
+
+impl<T: SigningTypes + Config> SignedPayload<T> for CreateSigningSessionPayload<T> {
     fn public(&self) -> T::Public {
         self.public.clone()
     }
@@ -292,6 +309,10 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn previous_era)]
     pub type PreviousEra<T: Config> = StorageValue<_, u32, ValueQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn last_opoc_request_id)]
+    pub type LastOpocRequestId<T: Config> = StorageValue<_, u32, ValueQuery>;
 
     // Add storage for tracking previous validator set to detect changes
     #[pallet::storage]
@@ -491,6 +512,27 @@ pub mod pallet {
             Self::deposit_event(Event::SigningSessionCreated(session_id, dkg_session_id));
 
             Ok(())
+        }
+
+        #[pallet::weight(10_000)]
+        #[pallet::call_index(7)]
+        pub fn create_signing_session_unsigned(
+            origin: OriginFor<T>,
+            payload: CreateSigningSessionPayload<T>,
+            _signature: T::Signature,
+        ) -> DispatchResult {
+            ensure_none(origin)?;
+
+            // Convert U256 to NftId (BoundedVec<u8, MaxCidSize>)
+            let nft_id_bytes: Vec<u8> = payload.nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id = BoundedVec::try_from(nft_id_bytes)
+                .map_err(|_| Error::<T>::DecodingError)?;
+
+            Self::create_signing_session(
+                frame_system::RawOrigin::None.into(),
+                nft_id,
+                payload.message,
+            )
         }
 
         #[pallet::call_index(3)]
@@ -727,6 +769,14 @@ pub mod pallet {
                         .propagate(true)
                         .build();
                 }
+                Call::create_signing_session_unsigned { .. } => {
+                    return ValidTransaction::with_tag_prefix("TssPallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(call.encode())
+                        .longevity(64)
+                        .propagate(true)
+                        .build();
+                }
 
                 // Reject all other unsigned calls
                 _ => {
@@ -773,6 +823,46 @@ pub mod pallet {
                     },
                     |payload, signature| Call::update_validators { payload, signature },
                 );
+
+
+
+                // Process OPOC requests
+                match Self::process_opoc_requests() {
+                    Ok((requests, _last_request_id)) => {
+                        // loop the requests and invoke a transaction for each. THe function to call is create_signing_session
+                        for (request_id, request) in requests {
+                            let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+                            if !signer.can_sign() {
+                                log::error!("TSS: No accounts available to sign create_signing_session");
+                                return; 
+                            }
+
+                            // Convert Vec<u8> to BoundedVec<u8, MaxMessageSize>
+                            let message = match BoundedVec::try_from(request.1) {
+                                Ok(msg) => msg,
+                                Err(_) => {
+                                    log::error!("TSS: Failed to convert message to BoundedVec");
+                                    continue;
+                                }
+                            };
+
+                            let _ = signer.send_unsigned_transaction(
+                                |acct| CreateSigningSessionPayload::<T> {
+                                    nft_id: request_id,
+                                    message: message.clone(),
+                                    public: acct.public.clone(),
+                                },
+                                |payload, signature| Call::create_signing_session_unsigned { payload, signature },
+                            );
+
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("TSS: Failed to process OPOC requests: {:?}", e);
+                    }
+                }
+            
+
             }
 
             // Rest of your existing offchain worker logic
@@ -809,7 +899,7 @@ pub mod pallet {
                 // Update the previous era to the current one
                 PreviousEra::<T>::put(current_era);
             }
-            
+
             // Return weight for this operation (including potential DKG regeneration)
             T::DbWeight::get().reads(3) + T::DbWeight::get().writes(3)
         }
