@@ -101,8 +101,8 @@ impl<T: Config> Pallet<T> {
         map.insert(5 as u32, version_5);
 
         let mut version_6 = BTreeMap::new();
-        version_6.insert(AiModelKey::from(1), deepseek_deepseek_thinking.clone());
-        version_6.insert(AiModelKey::from(2), deepseek_deepseek_non_thinking.clone());
+        version_6.insert(AiModelKey::from(1), qwen_deepseek_non_thinking.clone());
+        version_6.insert(AiModelKey::from(2), qwen_deepseek_non_thinking.clone());
         version_6.insert(AiModelKey::from(3), dobby3_1_8b.clone());
         version_6.insert(AiModelKey::from(100), sana_1600m.clone());
         map.insert(6 as u32, version_6);
