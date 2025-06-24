@@ -1,6 +1,7 @@
 use sp_std::collections::btree_map::BTreeMap;
 use sp_std::prelude::*;
 use sp_std::vec::Vec;
+use scale_info::prelude::string::String;
 use crate::{Config, LastOpocRequestId};
 use miniserde::Deserialize;
 
@@ -13,7 +14,7 @@ pub enum ProcessingError {
     /// Failed to parse output for a specific request ID
     ParseError(u32),
     /// Invalid action type
-    UnsupportedActionType(String),
+    UnsupportedActionType(&'static str),
 }
 
 impl ProcessingError {
@@ -131,7 +132,7 @@ fn handle_action_type(
         "transaction" => Ok(handle_transaction_action(data, chain_id)),
         unsupported => {
             log::warn!("Unsupported action type: {}", unsupported);
-            Err(ProcessingError::UnsupportedActionType(String::from(unsupported)))
+            Err(ProcessingError::UnsupportedActionType("Unsupported action type"))
         }
     }
 }

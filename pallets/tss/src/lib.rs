@@ -6,7 +6,6 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-#[cfg(feature = "std")]
 mod fsa;
 
 use core::fmt::Debug;
