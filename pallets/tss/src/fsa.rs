@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-
+use sp_std::collections::btree_map::BTreeMap;
 use sp_std::prelude::*;
 use sp_std::vec::Vec;
 use crate::{Config, LastOpocRequestId};
@@ -132,7 +131,7 @@ fn handle_action_type(
         "transaction" => Ok(handle_transaction_action(data, chain_id)),
         unsupported => {
             log::warn!("Unsupported action type: {}", unsupported);
-            Err(ProcessingError::UnsupportedActionType(unsupported.to_string()))
+            Err(ProcessingError::UnsupportedActionType(String::from(unsupported)))
         }
     }
 }
