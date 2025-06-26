@@ -7,11 +7,13 @@ mod mock;
 mod tests;
 
 mod fsa;
+mod multichain;
 
 use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
 use sp_std::prelude::*;
 pub mod types;
+use frame_support::BoundedVec;
 
 use frame_support::inherent::IsFatalError;
 use frame_system::offchain::SendUnsignedTransaction;
@@ -347,6 +349,27 @@ pub mod pallet {
     pub type ProposedPublicKeys<T: Config> =
         StorageDoubleMap<_, Blake2_128Concat, NftId, Blake2_128Concat, u32, PublicKey, OptionQuery>;
 
+    /// Storage for tracking multi-chain transaction status
+    /// Maps (chain_id, tx_hash) -> transaction_status
+    #[pallet::storage]
+    #[pallet::getter(fn multi_chain_transactions)]
+    pub type MultiChainTransactions<T: Config> =
+        StorageDoubleMap<_, Blake2_128Concat, u32, Blake2_128Concat, BoundedVec<u8, crate::types::MaxTxHashSize>, crate::types::TransactionStatus, OptionQuery>;
+
+    /// Storage for supported chain configurations
+    /// Maps chain_id -> (name, rpc_url, is_testnet)
+    #[pallet::storage]
+    #[pallet::getter(fn chain_configs)]
+    pub type ChainConfigs<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, (BoundedVec<u8, crate::types::MaxChainNameSize>, BoundedVec<u8, crate::types::MaxRpcUrlSize>, bool), OptionQuery>;
+
+    /// Storage for tracking transaction nonces per chain per agent
+    /// Maps (agent_nft_id, chain_id) -> nonce
+    #[pallet::storage]
+    #[pallet::getter(fn agent_nonces)]
+    pub type AgentNonces<T: Config> =
+        StorageDoubleMap<_, Blake2_128Concat, NftId, Blake2_128Concat, u32, u64, ValueQuery>;
+
     
 
     #[pallet::event]
@@ -361,6 +384,12 @@ pub mod pallet {
         SignatureSubmitted(SessionId),               // When signature is stored
         ValidatorIdAssigned(T::AccountId, u32),      // Validator account, ID
         DKGFailed(SessionId),                        // DKG session failed
+        
+        /// Multi-chain transaction events
+        MultiChainTransactionSubmitted(u32, Vec<u8>), // Chain ID, Transaction hash
+        MultiChainTransactionConfirmed(u32, Vec<u8>), // Chain ID, Transaction hash
+        MultiChainTransactionFailed(u32, Vec<u8>),    // Chain ID, Transaction hash
+        ChainConfigurationUpdated(u32),               // Chain ID updated
     }
 
     #[pallet::error]
@@ -379,6 +408,15 @@ pub mod pallet {
         InvalidSessionState,
         SigningSessionNotFound,
         DecodingError,
+        
+        /// Multi-chain related errors
+        UnsupportedChain,
+        TransactionSubmissionFailed,
+        InvalidChainConfig,
+        ChainConnectionFailed,
+        InvalidTransactionData,
+        InsufficientGasLimit,
+        InvalidNonce,
     }
 
     #[pallet::call]
@@ -712,6 +750,126 @@ pub mod pallet {
                     payload.reported_participants.clone(),
                 );
             }
+            Ok(())
+        }
+
+        /// Submit a signed transaction to a specific blockchain network
+        #[pallet::weight(10_000)]
+        #[pallet::call_index(8)]
+        pub fn submit_multi_chain_transaction(
+            origin: OriginFor<T>,
+            chain_id: u32,
+            signed_transaction: Vec<u8>,
+        ) -> DispatchResult {
+            let _who = ensure_signed(origin)?;
+
+            // Validate chain is supported
+            ensure!(
+                Self::is_chain_supported(chain_id),
+                Error::<T>::UnsupportedChain
+            );
+
+            // Submit transaction
+            match Self::submit_multi_chain_transaction_to_chain(chain_id, &signed_transaction) {
+                Ok(response) => {
+                    // Store transaction status
+                    if let Some(ref tx_hash) = response.tx_hash {
+                        let tx_hash_bytes = tx_hash.as_bytes().to_vec();
+                        let bounded_tx_hash: BoundedVec<u8, crate::types::MaxTxHashSize> = 
+                            tx_hash_bytes.clone().try_into()
+                                .map_err(|_| Error::<T>::InvalidTransactionData)?;
+                        
+                        MultiChainTransactions::<T>::insert(
+                            chain_id,
+                            bounded_tx_hash.clone(),
+                            response.status.clone(),
+                        );
+
+                        // Emit event
+                        Self::deposit_event(Event::MultiChainTransactionSubmitted(
+                            chain_id,
+                            tx_hash_bytes,
+                        ));
+                    }
+                    Ok(())
+                }
+                Err(_) => Err(Error::<T>::TransactionSubmissionFailed.into()),
+            }
+        }
+
+        /// Update the configuration for a supported blockchain network
+        #[pallet::weight(10_000)]
+        #[pallet::call_index(9)]
+        pub fn update_chain_config(
+            origin: OriginFor<T>,
+            chain_id: u32,
+            name: Vec<u8>,
+            rpc_url: Vec<u8>,
+            is_testnet: bool,
+        ) -> DispatchResult {
+            let _who = ensure_signed(origin)?;
+
+            // Basic validation
+            ensure!(!name.is_empty(), Error::<T>::InvalidChainConfig);
+            ensure!(!rpc_url.is_empty(), Error::<T>::InvalidChainConfig);
+
+            // Convert to BoundedVec
+            let bounded_name: BoundedVec<u8, crate::types::MaxChainNameSize> = 
+                name.try_into().map_err(|_| Error::<T>::InvalidChainConfig)?;
+            let bounded_rpc_url: BoundedVec<u8, crate::types::MaxRpcUrlSize> = 
+                rpc_url.try_into().map_err(|_| Error::<T>::InvalidChainConfig)?;
+
+            // Store chain configuration
+            ChainConfigs::<T>::insert(chain_id, (bounded_name, bounded_rpc_url, is_testnet));
+
+            // Emit event
+            Self::deposit_event(Event::ChainConfigurationUpdated(chain_id));
+
+            Ok(())
+        }
+
+        /// Get the current nonce for an agent on a specific chain
+        #[pallet::weight(10_000)]
+        #[pallet::call_index(10)]
+        pub fn get_agent_nonce(
+            origin: OriginFor<T>,
+            nft_id: NftId,
+            chain_id: u32,
+        ) -> DispatchResult {
+            let _who = ensure_signed(origin)?;
+
+            // Validate chain is supported
+            ensure!(
+                Self::is_chain_supported(chain_id),
+                Error::<T>::UnsupportedChain
+            );
+
+            let _current_nonce = AgentNonces::<T>::get(&nft_id, chain_id);
+            
+            // In a real implementation, this would return the nonce
+            // For now, we just validate the request
+            Ok(())
+        }
+
+        /// Increment the nonce for an agent on a specific chain
+        #[pallet::weight(10_000)]
+        #[pallet::call_index(11)]
+        pub fn increment_agent_nonce(
+            origin: OriginFor<T>,
+            nft_id: NftId,
+            chain_id: u32,
+        ) -> DispatchResult {
+            let _who = ensure_signed(origin)?;
+
+            // Validate chain is supported
+            ensure!(
+                Self::is_chain_supported(chain_id),
+                Error::<T>::UnsupportedChain
+            );
+
+            // Increment nonce
+            AgentNonces::<T>::mutate(&nft_id, chain_id, |nonce| *nonce += 1);
+
             Ok(())
         }
     }
@@ -1338,5 +1496,92 @@ impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
 
 
         None
+    }
+}
+
+impl<T: Config> Pallet<T> {
+    /// Multi-chain transaction submission function
+    /// Submits a signed transaction to the specified blockchain network via Ankr RPC
+    pub fn submit_multi_chain_transaction_to_chain(
+        chain_id: u32,
+        signed_transaction: &[u8],
+    ) -> Result<crate::types::RpcResponse, &'static str> {
+        use crate::fsa::submit_transaction_to_chain;
+        
+        log::info!("Submitting multi-chain transaction to chain ID: {}", chain_id);
+        
+        submit_transaction_to_chain(chain_id, signed_transaction)
+            .map_err(|e| {
+                log::error!("Failed to submit transaction: {:?}", e);
+                "Failed to submit multi-chain transaction"
+            })
+    }
+
+    /// Check the status of a transaction on a specific blockchain
+    pub fn check_multi_chain_transaction_status_on_chain(
+        chain_id: u32,
+        tx_hash: &str,
+    ) -> Result<crate::types::RpcResponse, &'static str> {
+        use crate::fsa::check_transaction_status;
+        
+        log::info!("Checking transaction status for hash: {} on chain ID: {}", tx_hash, chain_id);
+        
+        check_transaction_status(chain_id, tx_hash)
+            .map_err(|e| {
+                log::error!("Failed to check transaction status: {:?}", e);
+                "Failed to check transaction status"
+            })
+    }
+
+    /// Get supported chain configurations
+    pub fn get_supported_chains() -> Vec<(u32, &'static str)> {
+        use crate::multichain::SupportedChain;
+        
+        vec![
+            (SupportedChain::Ethereum.get_chain_id(), "Ethereum"),
+            (SupportedChain::BinanceSmartChain.get_chain_id(), "Binance Smart Chain"),
+            (SupportedChain::Polygon.get_chain_id(), "Polygon"),
+            (SupportedChain::Avalanche.get_chain_id(), "Avalanche"),
+            (SupportedChain::Arbitrum.get_chain_id(), "Arbitrum"),
+            (SupportedChain::Optimism.get_chain_id(), "Optimism"),
+            (SupportedChain::Fantom.get_chain_id(), "Fantom"),
+        ]
+    }
+
+    /// Validate if a chain ID is supported
+    pub fn is_chain_supported(chain_id: u32) -> bool {
+        use crate::multichain::MultiChainRpcClient;
+        
+        MultiChainRpcClient::get_chain_config(chain_id).is_ok()
+    }
+
+    /// Build a transaction for a specific chain
+    pub fn build_chain_transaction(
+        chain_id: u32,
+        to: &str,
+        value: u64,
+        data: &[u8],
+        gas_limit: u64,
+        gas_price: u64,
+        nonce: u64,
+    ) -> Result<Vec<u8>, &'static str> {
+        use crate::multichain::TransactionBuilder;
+        
+        // Validate chain is supported
+        if !Self::is_chain_supported(chain_id) {
+            return Err("Unsupported chain ID");
+        }
+
+        log::info!("Building transaction for chain ID: {}", chain_id);
+        
+        // For now, we support Ethereum-compatible chains
+        match chain_id {
+            1 | 56 | 137 | 43114 | 42161 | 10 | 250 => {
+                Ok(TransactionBuilder::build_ethereum_transaction(
+                    to, value, data, gas_limit, gas_price, nonce, chain_id
+                ))
+            }
+            _ => Err("Chain not supported for transaction building"),
+        }
     }
 }
