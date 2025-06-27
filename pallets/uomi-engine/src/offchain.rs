@@ -361,6 +361,28 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
+        // --- New: read_chain_state host function ---
+        let read_chain_state = move |mut caller: wasmtime::Caller<'_, HostState>, pallet_ptr: i32, pallet_len: i32, storage_ptr: i32, storage_len: i32, key_ptr: i32, key_len: i32, output_ptr: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut pallet_buf = vec![0u8; pallet_len as usize];
+            let mut storage_buf = vec![0u8; storage_len as usize];
+            let mut key_buf = vec![0u8; key_len as usize];
+            memory.read(&caller, pallet_ptr as usize, &mut pallet_buf).expect("Failed to read memory");
+            memory.read(&caller, storage_ptr as usize, &mut storage_buf).expect("Failed to read memory");
+            memory.read(&caller, key_ptr as usize, &mut key_buf).expect("Failed to read memory");
+
+            let pallet = String::from_utf8_lossy(&pallet_buf).to_string();
+            let storage = String::from_utf8_lossy(&storage_buf).to_string();
+
+            let result = Self::offchain_read_chain_state(pallet, storage, key_buf);
+            let data_to_write = match result {
+                Ok(data) => Self::offchain_worker_generate_data_for_wasm(data),
+                Err(_) => Self::offchain_worker_generate_data_for_wasm(vec![]),
+            };
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+        // --- End new host function ---
+
         let mut linker = wasmtime::Linker::new(&engine);
         linker.func_wrap("env", "get_input_file", get_input_file).unwrap();
         linker.func_wrap("env", "get_input_data", get_input_data).unwrap();
@@ -370,6 +392,7 @@ impl<T: Config> Pallet<T> {
         linker.func_wrap("env", "get_request_sender", get_request_sender).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
         linker.func_wrap("env", "call_ai", call_ai).unwrap();
+        linker.func_wrap("env", "read_chain_state", read_chain_state).unwrap();
 
         let instance = match linker.instantiate(&mut store, &module) {
             Ok(instance) => instance,
@@ -686,6 +709,25 @@ impl<T: Config> Pallet<T> {
         match OpocAssignment::<T>::iter_prefix(*request_id).last() {
             Some((_, (_, opoc_level))) => opoc_level,
             None => OpocLevel::Level0,
+        }
+    }
+
+    #[cfg(feature = "std")]
+    pub fn offchain_read_chain_state(
+        pallet: String,
+        storage: String,
+        key: Vec<u8>,
+    ) -> Result<Vec<u8>, DispatchError> {
+        // Compose the storage key: Twox128(pallet) ++ Twox128(storage) ++ key
+        let mut storage_key = sp_std::vec::Vec::new();
+        storage_key.extend(sp_io::hashing::twox_128(pallet.as_bytes()));
+        storage_key.extend(sp_io::hashing::twox_128(storage.as_bytes()));
+        storage_key.extend(key);
+        // Read the storage value
+        let value = sp_io::storage::get(&storage_key);
+        match value {
+            Some(data) => Ok(data.to_vec()),
+            None => Err(DispatchError::Other("Chain state not found")),
         }
     }
 }
