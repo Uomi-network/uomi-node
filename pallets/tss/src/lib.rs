@@ -8,6 +8,7 @@ mod tests;
 
 mod fsa;
 mod multichain;
+mod payloads;
 
 use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
@@ -17,7 +18,7 @@ use frame_support::BoundedVec;
 
 use frame_support::inherent::IsFatalError;
 use frame_system::offchain::SendUnsignedTransaction;
-use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
+use frame_system::offchain::{SignedPayload, Signer};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
 use scale_info::TypeInfo;
@@ -25,18 +26,10 @@ use scale_info::TypeInfo;
 pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
-use types::{PublicKey, SessionId};
+use types::SessionId;
+pub use payloads::*;
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct EmptyInherent;
-
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct AggregatedKeyInherent {
-    pub session_id: SessionId,
-    pub public_key: Vec<u8>,
-}
-
-// Prima delle implementazioni del pallet, aggiungi:
+// Inherent error definitions:
 #[derive(Encode)]
 #[cfg_attr(feature = "std", derive(Debug, Decode))]
 pub enum InherentError {
@@ -52,91 +45,6 @@ impl IsFatalError for InherentError {
     }
 }
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-#[scale_info(skip_type_params(T))]
-pub struct UpdateValidatorsPayload<T: Config> {
-    validators: Vec<T::AccountId>,
-    public: T::Public,
-}
-
-/// A struct for a report participants payload
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct ReportParticipantsPayload<T: Config> {
-    session_id: SessionId,
-    reported_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
-    public: T::Public,
-}
-
-/// A struct for a report participants payload
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct CreateSigningSessionPayload<T: Config> {
-    nft_id: sp_core::U256,
-    message: BoundedVec<u8, types::MaxMessageSize>,
-    public: T::Public,
-}
-
-
-/// A struct for a report participants count payload
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct ReportParticipantsCountPayload<T: Config> {
-    session_id: SessionId,
-    public: T::Public,
-}
-
-impl<T: Config> ReportParticipantsPayload<T> {
-    pub fn new(
-        session_id: SessionId,
-        reported_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
-        public: T::Public,
-    ) -> Self {
-        Self {
-            session_id,
-            reported_participants,
-            public,
-        }
-    }
-}
-
-
-/// A struct for the payload of the SubmitDKGResult call
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct SubmitDKGResultPayload<T: Config> {
-    session_id: SessionId,
-    public_key: PublicKey,
-    public: T::Public,
-}
-
-
-
-impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsPayload<T> {
-    fn public(&self) -> T::Public {
-        self.public.clone()
-    }
-}
-
-impl<T: SigningTypes + Config> SignedPayload<T> for UpdateValidatorsPayload<T> {
-    fn public(&self) -> T::Public {
-        self.public.clone()
-    }
-}
-
-impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsCountPayload<T> {
-    fn public(&self) -> T::Public {
-        self.public.clone()
-    }
-}
-
-impl<T: SigningTypes + Config> SignedPayload<T> for SubmitDKGResultPayload<T> {
-    fn public(&self) -> T::Public {
-        self.public.clone()
-    }
-}
-
-impl<T: SigningTypes + Config> SignedPayload<T> for CreateSigningSessionPayload<T> {
-    fn public(&self) -> T::Public {
-        self.public.clone()
-    }
-}
 
 pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
 
