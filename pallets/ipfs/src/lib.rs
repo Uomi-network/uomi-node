@@ -342,8 +342,6 @@ pub mod pallet {
 
                 // Check if wallet already exists for this agent
                 if !T::TssInterface::agent_wallet_exists(nft_id) {
-                    // TODO:
-                    let threshold: u8 = 90;
                     // Create new wallet for the agent
                     if let Err(e) = T::TssInterface::create_agent_wallet(nft_id, threshold) {
                         log::error!("IPFS: Failed to create agent wallet: {:?}", e);
