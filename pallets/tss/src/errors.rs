@@ -1,6 +1,7 @@
 use frame_support::inherent::IsFatalError;
 use frame_support::pallet_prelude::*;
 use scale_info::TypeInfo;
+use sp_std::vec::Vec;
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct EmptyInherent;

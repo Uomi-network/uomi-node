@@ -47,6 +47,10 @@ pub mod pallet {
     use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
 
     use super::*;
+    
+    // Re-export Verifier to make it accessible from pallet module
+    pub use crate::utils::Verifier;
+
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 

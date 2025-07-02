@@ -3,6 +3,7 @@ use frame_support::BoundedVec;
 use frame_system::offchain::{SignedPayload, SigningTypes};
 use scale_info::TypeInfo;
 use sp_runtime::RuntimeDebug;
+use sp_std::vec::Vec;
 
 use crate::types::{MaxMessageSize, PublicKey, SessionId};
 
