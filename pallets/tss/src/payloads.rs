@@ -6,14 +6,6 @@ use sp_runtime::RuntimeDebug;
 
 use crate::types::{MaxMessageSize, PublicKey, SessionId};
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-pub struct EmptyInherent;
-
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-pub struct AggregatedKeyInherent {
-    pub session_id: SessionId,
-    pub public_key: Vec<u8>,
-}
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 #[scale_info(skip_type_params(T))]

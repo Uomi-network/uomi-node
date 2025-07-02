@@ -10,6 +10,8 @@ mod fsa;
 mod multichain;
 mod payloads;
 pub mod crypto;
+mod errors;
+mod utils;
 
 use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
@@ -17,7 +19,6 @@ use sp_std::prelude::*;
 pub mod types;
 use frame_support::BoundedVec;
 
-use frame_support::inherent::IsFatalError;
 use frame_system::offchain::SendUnsignedTransaction;
 use frame_system::offchain::{SignedPayload, Signer};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
@@ -29,22 +30,9 @@ use sp_std::vec;
 use sp_std::vec::Vec;
 use types::SessionId;
 pub use payloads::*;
+pub use errors::*;
+pub use utils::*;
 
-// Inherent error definitions:
-#[derive(Encode)]
-#[cfg_attr(feature = "std", derive(Debug, Decode))]
-pub enum InherentError {
-    // Define your specific errors here
-    InvalidInherentValue,
-}
-
-impl IsFatalError for InherentError {
-    fn is_fatal_error(&self) -> bool {
-        match self {
-            InherentError::InvalidInherentValue => true,
-        }
-    }
-}
 
 
 pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
@@ -54,7 +42,7 @@ pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
 pub mod pallet {
 
     use frame_system::offchain::{AppCrypto, CreateSignedTransaction};
-    use sp_runtime::traits::{IdentifyAccount, Verify};
+    use sp_runtime::traits::IdentifyAccount;
 
     use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
 
@@ -84,31 +72,6 @@ pub mod pallet {
         type MinimumValidatorThreshold: Get<u32>;
     }
 
-    pub trait SignatureVerification<PublicKey> {
-        fn verify(key: &PublicKey, message: &[u8], sig: &Signature) -> bool;
-    }
-
-    pub struct Verifier {}
-    impl SignatureVerification<PublicKey> for Verifier {
-        fn verify(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
-            // Convert PublicKey to [u8; 33] for ECDSA public key
-            let pubkey_bytes: [u8; 33] = match key.as_slice().try_into() {
-                Ok(bytes) => bytes,
-                Err(_) => return false, // Public key must be exactly 33 bytes
-            };
-            let pubkey = sp_core::ecdsa::Public(pubkey_bytes);
-
-            // Convert Signature to [u8; 65] for ECDSA signature
-            let signature_bytes: [u8; 65] = match sig.as_slice().try_into() {
-                Ok(bytes) => bytes,
-                Err(_) => return false, // Signature must be exactly 65 bytes
-            };
-            let signature = sp_core::ecdsa::Signature(signature_bytes);
-
-            // Verify the signature; it hashes the message internally with blake2_256
-            signature.verify(message, &pubkey)
-        }
-    }
 
     #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Debug, PartialEq, Eq, Clone, Copy, PartialOrd)]
     pub enum SessionState {
@@ -752,9 +715,6 @@ pub mod pallet {
 
             Ok(())
         }
-    }
-    fn verify_signature<T: Config>(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
-        T::SignatureVerifier::verify(key, message, sig)
     }
 
     impl<T: Config> Pallet<T> {
