@@ -2821,8 +2821,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
     }
 
     fn on_new_validator_id_assigned(&mut self, account_id: TSSPublic, id: u32) {
-        let mut peer_mapper_handle = self.peer_mapper.lock().unwrap();
-        peer_mapper_handle.set_validator_id(account_id, id);
+        let peer_mapper_handle = self.peer_mapper.lock().unwrap();
+        let _ = peer_mapper_handle.set_validator_id(account_id, id);
     }
 }
 
@@ -3084,7 +3084,7 @@ impl<B:BlockT> TssMessageHandler for GossipHandler<B> {
                 &[&public_key_data[..], &peer_id[..]].concat(),
                 public_key,
             ) {
-                self.peer_mapper
+                let _ = self.peer_mapper
                     .lock()
                     .unwrap()
                     .add_peer(PeerId::from_bytes(&peer_id[..]).unwrap(), public_key_data);
