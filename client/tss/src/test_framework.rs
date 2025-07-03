@@ -159,7 +159,7 @@ impl TestNetwork {
             // verify that each peer_mapper contains the elements it should
             assert_eq!(
                 node_count,
-                node.session_manager.peer_mapper.lock().unwrap().peers.keys().len()
+                node.session_manager.peer_mapper.lock().unwrap().peers().keys().len()
             );
         }
 
