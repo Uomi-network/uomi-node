@@ -454,7 +454,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         
         if let Some((_, _, _, _)) = session_data {
             let peer_mapper = self.peer_mapper.lock().unwrap();
-            let participants = peer_mapper.sessions_participants.lock().unwrap().clone();
+            let participants = peer_mapper.sessions_participants().lock().unwrap().clone();
             drop(peer_mapper);
             let mut peer_mapper = self.peer_mapper.lock().unwrap();
             let active_participants = self.active_participants.lock().unwrap();
@@ -568,7 +568,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
         // Check if the sender_peer_id is present in our peer_mapper
         let peer_mapper = self.peer_mapper.lock().unwrap();
-        if !peer_mapper.peers.contains_key(&sender_peer_id) {
+        if !peer_mapper.peers().contains_key(&sender_peer_id) {
             log::warn!("[TSS] Sender peer ID not found in peer_mapper: {:?}", sender_peer_id);
 
             // Store the message in the unknown peer queue
@@ -1098,8 +1098,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     log::info!("[TSS] Acquired lock on mapper");
                     let mut peer_mapper = self.peer_mapper.lock().unwrap();
                     let recipient = peer_mapper
-                        .get_peer_id_from_id(&session_id, id.parse::<u16>().unwrap())
-                        .cloned();
+                        .get_peer_id_from_id(&session_id, id.parse::<u16>().unwrap());
                     drop(peer_mapper);
                     log::info!("[TSS] Dropped lock on mapper");
 
