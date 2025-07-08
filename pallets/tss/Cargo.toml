@@ -32,6 +32,8 @@ pallet-uomi-engine = { workspace = true }
 pallet-ipfs = { workspace = true }
 pallet-babe = { workspace = true }
 pallet-session = { workspace = true }
+sp-staking = { workspace = true }
+pallet-offences = { workspace = true }
 
 # frame deps
 frame-benchmarking = { workspace = true }

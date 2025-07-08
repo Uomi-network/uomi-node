@@ -56,7 +56,7 @@ use sp_runtime::{
 };
 
 use uomi_runtime::{
-    pallet_tss::{types::SessionId, Event as TssEvent, TssApi},
+    pallet_tss::{types::SessionId, Event as TssEvent, TssApi, TssOffenceType},
     AccountId
 };
 
@@ -1731,10 +1731,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     session_id,
                     e
                 );
-                // Optionally handle failure state here, e.g., update session state to Failed
+                // Update session state to Failed
                 let mut session_state_lock = self.dkg_session_states.lock().unwrap();
                 session_state_lock.insert(session_id, DKGSessionState::Failed);
                 drop(session_state_lock);
+                
+                // Report cryptographic failure for slashing - in this case, we might not know which specific participant failed
+                // so we'll let the existing reporting mechanism handle it through timeouts
             }
             Ok((secret, round2_packages)) => {
                 log::info!("[TSS] Round 1 Verification completed. Continuing now with Round 2");
@@ -1974,7 +1977,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     // Update session state to Failed
                     let mut session_state_lock = self.dkg_session_states.lock().unwrap();
                     session_state_lock.insert(session_id, DKGSessionState::Failed);
-                    drop(session_state_lock); // Release lock
+                    drop(session_state_lock);
+                    
+                    // Report DKG failure - this could be due to invalid cryptographic data
+                    // Let the timeout mechanism handle participant reporting
                 }
             }
         }
@@ -2632,10 +2638,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             if let Err(error) = signature {
                 log::error!("[TSS] Error aggregating Signature {:?}", error);
 
-                 // Update session state to Round1Completed
+                // Update session state to Failed
                 let mut session_state_lock = self.signing_session_states.lock().unwrap();
                 session_state_lock.insert(session_id, SigningSessionState::Failed);
                 drop(session_state_lock);
+                
+                // Report signing failure - this could be due to invalid signature shares
+                // Let the timeout mechanism handle participant reporting
                 return Err(SessionManagerError::SignatureAggregationError);
             }
 
@@ -2894,7 +2903,30 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             let inactive_participants = self.get_inactive_participants(&session_id);
             if inactive_participants.len() > 0 { 
                 let best_hash = self.client.best_hash();
+                
+                // Report participants using the existing mechanism
                 let _ = self.client.report_participants(best_hash, session_id, inactive_participants.clone());
+                
+                // Determine the offence type based on session state
+                let offence_type = {
+                    let dkg_states = self.dkg_session_states.lock().unwrap();
+                    let signing_states = self.signing_session_states.lock().unwrap();
+                    
+                    if dkg_states.contains_key(&session_id) {
+                        TssOffenceType::DkgNonParticipation
+                    } else if signing_states.contains_key(&session_id) {
+                        TssOffenceType::SigningNonParticipation
+                    } else {
+                        TssOffenceType::UnresponsiveBehavior
+                    }
+                };
+                
+                // Report TSS offence for slashing
+                if let Err(e) = self.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
+                    log::error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
+                } else {
+                    log::info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
+                }
             }
 
             // Remove from all session data structures
@@ -3568,6 +3600,13 @@ trait ClientManager<B: BlockT> {
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> Result<(), String>;
+    fn report_tss_offence(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        offence_type: TssOffenceType,
+        offenders: Vec<[u8; 32]>,
+    ) -> Result<(), String>;
 }
 
 impl<B: BlockT, C, TP> ClientManager<B> for ClientWrapper<B, C, TP>
@@ -3613,6 +3652,33 @@ where
             runtime
                 .submit_dkg_result(hash, session_id, aggregated_key)
                 .map_err(|e| format!("Failed to submit DKG result: {:?}", e))
+    }
+
+    fn report_tss_offence(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        offence_type: TssOffenceType,
+        offenders: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
+        let mut runtime = self.client.runtime_api();
+        runtime.register_extension(KeystoreExt(self.keystore.clone()));
+    
+        let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+        runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
+
+        // Encode the offence type as u8 for the runtime API
+        let offence_type_encoded = match offence_type {
+            TssOffenceType::DkgNonParticipation => 0u8,
+            TssOffenceType::SigningNonParticipation => 1u8,
+            TssOffenceType::InvalidCryptographicData => 2u8,
+            TssOffenceType::UnresponsiveBehavior => 3u8,
+        };
+
+        runtime
+            .report_tss_offence(hash, session_id, offence_type_encoded, offenders)
+            .map_err(|e| format!("Failed to report TSS offence: {:?}", e))
+            .and_then(|result| result.map_err(|e| format!("TSS offence reporting failed with code: {}", e)))
     }
 }
 

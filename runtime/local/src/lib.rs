@@ -1316,6 +1316,7 @@ impl pallet_tss::Config for Runtime {
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
     type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
 }
 
 parameter_types! {

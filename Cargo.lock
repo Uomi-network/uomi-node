@@ -9139,6 +9139,7 @@ dependencies = [
  "pallet-babe",
  "pallet-balances",
  "pallet-ipfs",
+ "pallet-offences",
  "pallet-session",
  "pallet-staking",
  "pallet-staking-reward-curve",
