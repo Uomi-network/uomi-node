@@ -71,6 +71,24 @@ mod ecdsa;
 mod peer_mapper;
 mod signlib;
 mod types;
+
+mod dkg_handler;
+mod signing_handler;
+mod ecdsa_handler;
+mod peer_manager;
+// mod session_components;
+mod session_state;
+mod session_validator;
+
+
+use dkg_handler::{DKGHandler};
+use signing_handler::{SigningHandler};
+use ecdsa_handler::{ECDSAHandler};
+use peer_manager::PeerManager;
+use session_validator::SessionValidator;
+use session_state::SessionState;
+
+
 #[cfg(test)]
 mod test_framework;
 #[cfg(test)]
@@ -145,7 +163,11 @@ pub enum SigningSessionState {
     Round3Initiated, // Round 3 initiated (if needed in Frost - check if round 3 is necessary for keygen)
     Round3Completed, // Round 3 completed
     SignatureGenerated, // Final Signature key generated
-    Failed,          // Session failed for some reason
+    Failed,
+    CommitmentPhase,
+    SigningPackagePhase,
+    SignatureSharePhase,
+    Completed,          // Session failed for some reason
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -187,6 +209,8 @@ pub enum SessionManagerError {
     DeserializationError,
     SignatureAggregationError,
     SignatureNotReadyYet,
+    NotAuthorized,
+    InvalidSessionState,
 }
 // ===== TssValidator =====
 
@@ -341,6 +365,8 @@ struct SessionManager<B: BlockT, C: ClientManager<B>>
     active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
     unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
     announcement: Option<TssMessage>,
+    // DKG handler for distributed key generation operations
+    dkg_handler: DKGHandler<B>,
 }
 
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
@@ -361,6 +387,22 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         announcment: Option<TssMessage>,
         client: C,
     ) -> Self {
+        let buffer = Arc::new(Mutex::new(empty_hash_map()));
+        
+        // Create DKG handler
+        let dkg_handler = DKGHandler::new(
+            dkg_session_states.clone(),
+            sessions_participants.clone(),
+            storage.clone(),
+            key_storage.clone(),
+            peer_mapper.clone(),
+            local_peer_id.clone(),
+            validator_key.clone(),
+            session_manager_to_gossip_tx.clone(),
+            buffer.clone(),
+            PhantomData::<B>::default(),
+        );
+
         Self {
             storage,
             key_storage,
@@ -374,7 +416,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             runtime_to_session_manager_rx,
             session_manager_to_gossip_tx,
             _phantom: PhantomData,
-            buffer: Arc::new(Mutex::new(empty_hash_map())),
+            buffer,
             local_peer_id,
             client,
             ecdsa_manager: Arc::new(Mutex::new(ECDSAManager::new())),
@@ -384,6 +426,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             active_participants: Arc::new(Mutex::new(empty_hash_map())),
             unknown_peer_queue: Arc::new(Mutex::new(empty_hash_map())),
             announcement: announcment,
+            dkg_handler,
         }
     }
     
@@ -1405,202 +1448,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         bytes: &Vec<u8>,
         sender: PeerId,
     ) -> Result<(), SessionManagerError> {
-        let session_state_lock = self.dkg_session_states.lock().unwrap();
-        let current_state = session_state_lock
-            .get(&session_id)
-            .copied()
-            .unwrap_or(DKGSessionState::Idle);
-        drop(session_state_lock); // Release lock
-
-        // STEP 1: For sure, we need to store the message for later use.
-        let mut storage = self.storage.lock().unwrap();
-
-        let mut peer_mapper_handle = self.peer_mapper.lock().unwrap();
-
-        let identifier = peer_mapper_handle.get_identifier_from_peer_id(&session_id, &sender);
-
-        log::info!(
-            "[TSS] Apparently peer_id = {:?} is associated with identifier = {:?}",
-            sender,
-            identifier
-        );
-
-        if let None = identifier {
-            log::warn!(
-                "[TSS]: Couldn't find identifier fo Session {} and peer_id {:?}. Ignoring message.",
-                session_id,
-                sender
-            );
-
-            return Err(SessionManagerError::IdentifierNotFound);
-        }
-
-        let identifier = identifier.unwrap();
-        log::info!(
-            "[TSS] Stored received message from identifier {:?}",
-            identifier.clone()
-        );
-        storage.store_round1_packages(session_id, identifier, &bytes[..]);
-        drop(peer_mapper_handle);
-
-        // STEP 2: If we haven't started yet, wait for our time to come
-        // This can happen for example if someone received the event from the pallet before us and has
-        // already started. Should be handled gracefulyl
-        if current_state < DKGSessionState::Round1Initiated {
-            // Only process if we've initiated Round 1
-            log::warn!(
-                "[TSS]: Received DKGRound1 for session {} but local state is {:?}. Ignoring message.",
-                session_id,
-                current_state
-            );
-            return Err(SessionManagerError::SessionNotYetInitiated);
-        }
-
-        drop(storage);
-
-        log::info!("[TSS] calling handle_verification_to_complete_round1()");
-        self.dkg_handle_verification_to_complete_round1(session_id);
-
-        Ok(())
-    }
-
-    fn dkg_handle_verification_to_complete_round1(&self, session_id: SessionId) {
-        let storage = self.storage.lock().unwrap();
-
-        // This should not actually happen since the state is updated when we store the secret package from round 1
-        // but you never know...
-        let data = storage.read_secret_package_round1(session_id);
-
-        if let Err(_e) = data {
-            log::warn!(
-                "[TSS]: Received DKGRound1 for session {} but local round 1 data not ready yet. Ignoring message.",
-                session_id
-            );
-            return; // Ignore if local data not ready (should not happen with state check)
-        }
-
-        let data = data.unwrap();
-        let n = data.max_signers();
-
-        let round1_packages = storage.fetch_round1_packages(session_id).unwrap();
-        drop(storage); // Release lock
-
-        log::info!("[TSS] debug round1_packages = {:?}", round1_packages);
-
-        if round1_packages.keys().len() >= (n - 1).into() {
-            self.dkg_verify_and_start_round2(session_id, data, round1_packages)
-        }
-    }
-
-    fn dkg_verify_and_start_round2(
-        &self,
-        session_id: SessionId,
-        round1_secret_package: SecretPackage, // Pass the secret package directly
-        round1_packages: BTreeMap<Identifier, Package>,
-    ) {
-        match dkground2::round2_verify_round1_participants(
-            session_id,
-            round1_secret_package,
-            &round1_packages,
-        ) {
-            Err(e) => {
-                log::error!(
-                    "[TSS]: Error in round2_verify_round1_participants for session {}: {:?}",
-                    session_id,
-                    e
-                );
-                // Optionally handle failure state here, e.g., update session state to Failed
-                let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                session_state_lock.insert(session_id, DKGSessionState::Failed);
-                drop(session_state_lock);
-            }
-            Ok((secret, round2_packages)) => {
-                log::info!("[TSS] Round 1 Verification completed. Continuing now with Round 2");
-                // Update session state to Round1Completed
-                let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                session_state_lock.insert(session_id, DKGSessionState::Round1Completed);
-                drop(session_state_lock);
-                log::info!("[TSS] 1");
-
-                let empty = empty_hash_map();
-                let handle_participants = self.sessions_participants.lock().unwrap();
-                let participants = handle_participants.get(&session_id).unwrap_or(&empty); // Use HashMap::new() directly
-                log::info!("[TSS] 2");
-
-                for (identifier, package) in round2_packages {
-                    let account_id = participants.get(&identifier);
-
-                    if let None = account_id {
-                        log::error!(
-                            "[TSS]: Account ID not found for identifier {:?} in session {}",
-                            identifier,
-                            session_id
-                        );
-                        continue; // Handle error???
-                    }
-
-                    if *(account_id.unwrap()) == self.validator_key {
-                        // don't send stuff to yourself
-                        log::info!(
-                            "[TSS] Skipping message to myself for session {}",
-                            session_id
-                        );
-                        continue;
-                    }
-                    log::info!("[TSS] 3");
-
-                    let mut peer_mapper = self.peer_mapper.lock().unwrap();
-                    if let Some(peer_id) =
-                        peer_mapper.get_peer_id_from_account_id(account_id.unwrap())
-                    {
-                        log::info!("[TSS] 4");
-                        let _ = self
-                            .session_manager_to_gossip_tx
-                            .unbounded_send((
-                                peer_id.clone(),
-                                TssMessage::DKGRound2(
-                                    session_id,
-                                    package.serialize().unwrap(),
-                                    peer_id.to_bytes(),
-                                ),
-                            ))
-                            .unwrap();
-                    } else {
-                        log::error!("[TSS] PeerID not found, cannot send message")
-                    }
-                    log::info!("[TSS] 5");
-
-                    drop(peer_mapper);
-                }
-                drop(handle_participants);
-                log::info!("[TSS] 6");
-                let mut storage = self.storage.lock().unwrap();
-                storage
-                    .store_data(
-                        session_id,
-                        dkghelpers::StorageType::DKGRound2SecretPackage,
-                        &(secret.serialize().unwrap()),
-                        None,
-                    )
-                    .unwrap();
-                drop(storage);
-                log::info!("[TSS] 7");
-
-                // Update session state to Round2Initiated after sending Round2 messages
-                let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                session_state_lock.insert(session_id, DKGSessionState::Round2Initiated);
-                drop(session_state_lock);
-                log::info!("[TSS] 8");
-
-                // This is not gonna happen but just in case
-                if let Err(e) = self.dkg_verify_and_complete(session_id) {
-                    log::error!(
-                        "[TSS] There was an error verifying Round2 to complete DKG {:?}",
-                        e
-                    )
-                }
-            }
-        };
+        // Delegate to DKGHandler
+        self.dkg_handler.dkg_handle_round1_message(session_id, bytes, sender)
     }
 
     fn dkg_handle_round2_message(
@@ -1610,154 +1459,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         recipient: &TSSPeerId,
         sender: PeerId,
     ) -> Result<(), SessionManagerError> {
-        let session_state_lock = self.dkg_session_states.lock().unwrap();
-        let current_state = session_state_lock
-            .get(&session_id)
-            .copied()
-            .unwrap_or(DKGSessionState::Idle);
-        drop(session_state_lock); // Release lock
-
-        if current_state < DKGSessionState::Round2Initiated {
-            // Only process if we've initiated Round 2
-            log::warn!(
-                "[TSS]: Received DKGRound2 for session {} but local state is {:?}. Ignoring message.",
-                session_id,
-                current_state
-            );
-
-            return Err(SessionManagerError::Round2SecretPackageNotYetAvailable);
-        }
-
-        if self.local_peer_id != *recipient {
-            log::warn!(
-                "[TSS]: Received DKGRound2 for session {} for peer {:?} but it's not for us ({:?}). Ignoring message.",
-                session_id, PeerId::from_bytes(&recipient), self.local_peer_id
-            );
-            return Ok(());
-        }
-
-        let mut storage = self.storage.lock().unwrap();
-
-        let mut peer_mapper_handle = self.peer_mapper.lock().unwrap();
-
-        let identifier = peer_mapper_handle.get_identifier_from_peer_id(&session_id, &sender);
-
-        if let None = identifier {
-            // this can never happen, but we handle it anyway.
-            log::warn!(
-                "[TSS]: Couldn't find identifier fo Session {} and peer_id {:?}. Ignoring message.",
-                session_id,
-                sender
-            );
-
-            return Err(SessionManagerError::IdentifierNotFound);
-        }
-
-        let identifier = identifier.unwrap();
-
-        if let Err(e) = round2::Package::deserialize(&bytes[..]) {
-            log::error!(
-                "[TSS] Error {:?} Invalid data received as DKGRound2 = {:?}",
-                e,
-                bytes
-            );
-            return Err(SessionManagerError::DeserializationError);
-        }
-        storage.store_round2_packages(session_id, identifier, &bytes[..]);
-
-        drop(peer_mapper_handle);
-        drop(storage);
-
-        if let Err(e) = self.dkg_verify_and_complete(session_id) {
-            log::error!(
-                "[TSS] There was an error verifying Round2 to complete DKG {:?}",
-                e
-            )
-        }
-
-        return Ok(());
-    }
-
-    fn dkg_verify_and_complete(&self, session_id: SessionId) -> Result<(), SessionManagerError> {
-        // Process the buffered messages before checking anything else
-        self.dkg_process_buffer_for_round2(session_id);
-
-        let storage = self.storage.lock().unwrap();
-
-        let round2_secret_package = storage.read_secret_package_round2(session_id);
-        if let Err(_e) = round2_secret_package {
-            log::warn!(
-                "[TSS]: Received DKGRound2 for session {} but local round 2 secret package not ready yet.",
-                session_id
-            );
-            return Err(SessionManagerError::Round2SecretPackageNotYetAvailable);
-        }
-        let round2_secret_package = round2_secret_package.unwrap();
-
-        let n = round2_secret_package.max_signers();
-
-        let round1_packages = storage.fetch_round1_packages(session_id).unwrap();
-        let round2_packages = storage.fetch_round2_packages(session_id).unwrap();
-        drop(storage); // Release lock
-
-        if round2_packages.keys().len() >= (n - 1).into() {
-            match dkg::part3(&round2_secret_package, &round1_packages, &round2_packages) {
-                Ok((private_key, public_key)) => {
-
-
-                    let mut peer_mapper_handle = self.peer_mapper.lock().unwrap();
-                    let whoami_identifier = peer_mapper_handle.get_identifier_from_account_id(&session_id, &self.validator_key);
-
-                    if let None = whoami_identifier {
-                        log::error!("[TSS] We are not allowed to participate in the signing phase");
-                        return Err(SessionManagerError::IdentifierNotFound);
-                    }
-
-                    drop(peer_mapper_handle);
-
-
-
-                    let mut storage = self.key_storage.lock().unwrap();
-                    let _ = storage.store_data(
-                        session_id,
-                        dkghelpers::StorageType::PubKey,
-                        &public_key.serialize().unwrap()[..],
-                        Some(&whoami_identifier.unwrap().serialize()),
-                    );
-                    if let Err(error) = storage.store_data(
-                        session_id,
-                        dkghelpers::StorageType::Key,
-                        &private_key.serialize().unwrap()[..],
-                        Some(&whoami_identifier.unwrap().serialize()),
-                    ) {
-                        log::error!("[TSS] There was an error storing key {:?}", error);
-                    }
-                    drop(storage);
-                    log::info!(
-                        "[TSS]: DKG Part 3 successful for session {}. Public Key: {:?}",
-                        session_id,
-                        public_key
-                    );
-                    // Update session state to KeyGenerated
-                    let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                    session_state_lock.insert(session_id, DKGSessionState::KeyGenerated);
-                    drop(session_state_lock); // Release lock
-                }
-                Err(e) => {
-                    log::error!(
-                        "[TSS]: DKG Part 3 failed for session {}: {:?}",
-                        session_id,
-                        e
-                    );
-                    // Update session state to Failed
-                    let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                    session_state_lock.insert(session_id, DKGSessionState::Failed);
-                    drop(session_state_lock); // Release lock
-                }
-            }
-        }
-
-        Ok(())
+        // Delegate to DKGHandler
+        self.dkg_handler.dkg_handle_round2_message(session_id, bytes, recipient, sender)
     }
 
     /// Process a new DKG session creation
@@ -1771,130 +1474,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
     where
         B: BlockT,
     {
-        
-        // Validate threshold and participant count
-        if t == 0 || n == 0 || t > n {
-            log::error!("[TSS] Invalid threshold parameters for DKG session {}: t={}, n={}", session_id, t, n);
-            return Err(SessionError::GenericError(format!("Invalid threshold parameters: t={}, n={}", t, n)));
-        }
-        
-        if participants.len() != n as usize {
-            log::error!(
-                "[TSS] Mismatch between participant count and n parameter for DKG session {}: {} vs {}",
-                session_id, participants.len(), n
-            );
-            return Err(SessionError::GenericError(format!(
-                "Participant count ({}) doesn't match n parameter ({})",
-                participants.len(), n
-            )));
-        }
-        
-        let mut index = None;
-        log::debug!("[TSS] participants={:?}", participants);
-
-        // Check if we're part of the participants
-        for (i, el) in participants.iter().enumerate() {
-            if *el == self.validator_key[..] {
-                index = Some(i);
-                break;
-            }
-        }
-
-        if index.is_none() {
-            log::error!("[TSS] Not authorized to participate in DKG session {}", session_id);
-            return Err(SessionError::NotAuthorized);
-        }
-        
-        let index: Result<u16, TryFromIntError> = index.unwrap().try_into();
-        if let Err(e) = index {
-            log::error!("[TSS] Error converting index to u16: {:?}", e);
-            return Err(SessionError::GenericError("Error converting index to u16".into()));
-        }
-        
-        let index = index.unwrap();
-        info!("[TSS] Our index in DKG session {}: {}", session_id, index);
-
-        let participant_identifier: Identifier = (index + 1).try_into().unwrap();
-
-        log::info!("[TSS] Event received from DKG, starting round 1 for session {}", session_id);
-
-        // Generate round 1 package
-        let (r1, secret) = match dkground1::generate_round1_secret_package(
-            t.try_into().unwrap_or(u16::MAX),
-            n.try_into().unwrap(),
-            participant_identifier,
-            session_id,
-        ) {
-            Ok(result) => result,
-            Err(e) => {
-                log::error!("[TSS] Failed to generate round 1 package for session {}: {:?}", session_id, e);
-                return Err(SessionError::GenericError(format!("Failed to generate round 1 package: {:?}", e)));
-            }
-        };
-
-        // Store secret package
-        let mut storage = self.storage.lock().unwrap();
-        if let Err(e) = storage.store_data(
-            session_id,
-            dkghelpers::StorageType::DKGRound1SecretPackage,
-            &secret.serialize().unwrap()[..],
-            None,
-        ) {
-            log::error!("[TSS] Failed to store secret package for session {}: {:?}", session_id, e);
-            return Err(SessionError::GenericError(format!("Failed to store secret package: {:?}", e)));
-        }
-
-        // Update session state
-        let mut handle_state = self.dkg_session_states.lock().unwrap();
-        handle_state.insert(session_id, DKGSessionState::Round1Initiated);
-        drop(handle_state);
-        drop(storage);
-
-        // Send round 1 message
-        match self.session_manager_to_gossip_tx.unbounded_send((
-            PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
-            TssMessage::DKGRound1(session_id, r1.serialize().unwrap()),
-        )) {
-            Ok(_) => log::info!("[TSS] Round 1 message broadcasted for session {}", session_id),
-            Err(e) => {
-                log::error!("[TSS] Failed to send round 1 message for session {}: {:?}", session_id, e);
-                return Err(SessionError::GenericError(format!("Failed to send round 1 message: {:?}", e)));
-            }
-        }
-
-        // Process any buffered messages for this session
-        let mut handle = self.buffer.lock().unwrap();
-        let entries = handle.entry(session_id).or_default().clone();
-        drop(handle);
-
-        for (peer_id, message) in entries {
-            match message {
-                TssMessage::DKGRound1(_, bytes) => {
-                    log::info!(
-                        "[TSS] Processing buffered DKGRound1 message for session {} from peer_id {:?}",
-                        session_id,
-                        PeerId::from_bytes(&peer_id[..]).unwrap().to_base58()
-                    );
-                    if let Err(e) = self.dkg_handle_round1_message(
-                        session_id,
-                        &bytes,
-                        PeerId::from_bytes(&peer_id[..]).unwrap(),
-                    ) {
-                        log::error!(
-                            "[TSS] Error processing buffered DKGRound1 message for session {}: {:?}",
-                            session_id,
-                            e
-                        );
-                    }
-                }
-                _ => (), // ignore other message types for now
-            }
-        }
-
-        // Try to complete round 1 if we have enough messages already
-        self.dkg_handle_verification_to_complete_round1(session_id);
-        
-        Ok(())
+        // Delegate to DKGHandler
+        self.dkg_handler.dkg_handle_session_created(session_id, n, t, participants)
     }
 
     fn signing_handle_session_created(
@@ -1994,37 +1575,6 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             }
         }
         drop(peer_handle);
-    }
-
-    pub fn dkg_process_buffer_for_round2(&self, session_id: SessionId) {
-        let messages = {
-            let mut buffer = self.buffer.lock().unwrap();
-            buffer.entry(session_id).or_default().clone()
-        };
-
-        for (peer_id, message) in messages {
-            // Process the (peer_id, message) pair without holding the lock
-            match message {
-                TssMessage::DKGRound2(_, bytes, recipient) => {
-                    log::info!(
-                        "[TSS] Handling buffered message from peer_id {:?}",
-                        PeerId::from_bytes(&peer_id[..]).unwrap().to_base58()
-                    );
-                    if let Err(e) = self.dkg_handle_round2_message(
-                        session_id,
-                        &bytes,
-                        &recipient,
-                        PeerId::from_bytes(&peer_id[..]).unwrap(),
-                    ) {
-                        log::error!(
-                            "[TSS] There was an error while handling buffered message {:?}",
-                            e
-                        );
-                    }
-                }
-                _ => (), // ignore the rest
-            }
-        }
     }
 
     fn signing_handle_commitment(
