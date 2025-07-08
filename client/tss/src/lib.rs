@@ -2921,12 +2921,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     }
                 };
                 
-                // Report TSS offence for slashing
-                if let Err(e) = self.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
-                    log::error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
-                } else {
-                    log::info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
-                }
+                // // Report TSS offence for slashing
+                // if let Err(e) = self.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
+                //     log::error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
+                // } else {
+                //     log::info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
+                // }
             }
 
             // Remove from all session data structures
@@ -3600,13 +3600,13 @@ trait ClientManager<B: BlockT> {
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> Result<(), String>;
-    fn report_tss_offence(
-        &self,
-        hash: <<B as BlockT>::Header as HeaderT>::Hash,
-        session_id: SessionId,
-        offence_type: TssOffenceType,
-        offenders: Vec<[u8; 32]>,
-    ) -> Result<(), String>;
+    // fn report_tss_offence(
+    //     &self,
+    //     hash: <<B as BlockT>::Header as HeaderT>::Hash,
+    //     session_id: SessionId,
+    //     offence_type: TssOffenceType,
+    //     offenders: Vec<[u8; 32]>,
+    // ) -> Result<(), String>;
 }
 
 impl<B: BlockT, C, TP> ClientManager<B> for ClientWrapper<B, C, TP>
@@ -3654,32 +3654,32 @@ where
                 .map_err(|e| format!("Failed to submit DKG result: {:?}", e))
     }
 
-    fn report_tss_offence(
-        &self,
-        hash: <<B as BlockT>::Header as HeaderT>::Hash,
-        session_id: SessionId,
-        offence_type: TssOffenceType,
-        offenders: Vec<[u8; 32]>,
-    ) -> Result<(), String> {
-        let mut runtime = self.client.runtime_api();
-        runtime.register_extension(KeystoreExt(self.keystore.clone()));
+    // fn report_tss_offence(
+    //     &self,
+    //     hash: <<B as BlockT>::Header as HeaderT>::Hash,
+    //     session_id: SessionId,
+    //     offence_type: TssOffenceType,
+    //     offenders: Vec<[u8; 32]>,
+    // ) -> Result<(), String> {
+    //     let mut runtime = self.client.runtime_api();
+    //     runtime.register_extension(KeystoreExt(self.keystore.clone()));
     
-        let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
-        runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
+    //     let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+    //     runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
 
-        // Encode the offence type as u8 for the runtime API
-        let offence_type_encoded = match offence_type {
-            TssOffenceType::DkgNonParticipation => 0u8,
-            TssOffenceType::SigningNonParticipation => 1u8,
-            TssOffenceType::InvalidCryptographicData => 2u8,
-            TssOffenceType::UnresponsiveBehavior => 3u8,
-        };
+    //     // Encode the offence type as u8 for the runtime API
+    //     let offence_type_encoded = match offence_type {
+    //         TssOffenceType::DkgNonParticipation => 0u8,
+    //         TssOffenceType::SigningNonParticipation => 1u8,
+    //         TssOffenceType::InvalidCryptographicData => 2u8,
+    //         TssOffenceType::UnresponsiveBehavior => 3u8,
+    //     };
 
-        runtime
-            .report_tss_offence(hash, session_id, offence_type_encoded, offenders)
-            .map_err(|e| format!("Failed to report TSS offence: {:?}", e))
-            .and_then(|result| result.map_err(|e| format!("TSS offence reporting failed with code: {}", e)))
-    }
+    //     runtime
+    //         .report_tss_offence(hash, session_id, offence_type_encoded, offenders)
+    //         .map_err(|e| format!("Failed to report TSS offence: {:?}", e))
+    //         .and_then(|result| result.map_err(|e| format!("TSS offence reporting failed with code: {}", e)))
+    // }
 }
 
 
