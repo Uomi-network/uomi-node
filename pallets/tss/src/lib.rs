@@ -17,6 +17,11 @@ use frame_system::offchain::{SignedPayload, Signer, SigningTypes};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
 use scale_info::TypeInfo;
+use sp_staking::{
+    offence::{Offence, OffenceError, ReportOffence},
+    SessionIndex,
+};
+use sp_runtime::Perbill;
 
 pub use pallet::*;
 use sp_std::vec;
@@ -121,6 +126,64 @@ impl<T: SigningTypes + Config> SignedPayload<T> for SubmitDKGResultPayload<T> {
 
 pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
 
+/// TSS offence types
+#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
+pub enum TssOffenceType {
+    /// Validator failed to participate in DKG session
+    DkgNonParticipation,
+    /// Validator failed to participate in signing session
+    SigningNonParticipation,
+    /// Validator sent invalid cryptographic data
+    InvalidCryptographicData,
+    /// Validator was consistently unresponsive
+    UnresponsiveBehavior,
+}
+
+/// TSS offence for slashing validators
+#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
+pub struct TssOffence<T: Config> {
+    /// Type of offence
+    pub offence_type: TssOffenceType,
+    /// Session where the offence occurred
+    pub session_id: SessionId,
+    /// Session index for staking
+    pub session_index: SessionIndex,
+    /// Number of validators in the session
+    pub validator_set_count: u32,
+    /// The offending validator and their full identification
+    pub offenders: Vec<(T::AccountId, T::FullIdentification)>,
+}
+
+impl<T: Config> Offence<T::AccountId> for TssOffence<T> {
+    const ID: &'static str = "tss:offence";
+    type TimeSlot = SessionIndex;
+
+    fn offenders(&self) -> Vec<T::AccountId> {
+        self.offenders.iter().map(|(id, _)| id.clone()).collect()
+    }
+
+    fn session_index(&self) -> SessionIndex {
+        self.session_index
+    }
+
+    fn validator_set_count(&self) -> u32 {
+        self.validator_set_count
+    }
+
+    fn time_slot(&self) -> Self::TimeSlot {
+        self.session_index
+    }
+
+    fn slash_fraction(&self, _offenders_count: u32) -> Perbill {
+        match self.offence_type {
+            TssOffenceType::DkgNonParticipation => Perbill::from_percent(1),
+            TssOffenceType::SigningNonParticipation => Perbill::from_percent(1),
+            TssOffenceType::InvalidCryptographicData => Perbill::from_percent(2),
+            TssOffenceType::UnresponsiveBehavior => Perbill::from_percent(1),
+        }
+    }
+}
+
 //////////////////////////////////////////////////////////////////////////////////
 // CRYPTO MODULE /////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
@@ -183,6 +246,19 @@ pub mod pallet {
 
         #[pallet::constant]
         type MinimumValidatorThreshold: Get<u32>;
+
+        /// A trait for reporting offences.
+        type OffenceReporter: ReportOffence<
+            Self::AccountId,
+            Self::FullIdentification,
+            TssOffence<Self>,
+        >;
+
+        /// Full identification of validators (for slashing).
+        type FullIdentification: sp_std::fmt::Debug + Clone + Eq + Encode + Decode + TypeInfo;
+
+        /// A trait to retrieve the full identification of a validator.
+        type FullIdentificationOf: sp_runtime::traits::Convert<Self::AccountId, Option<Self::FullIdentification>>;
     }
 
     pub trait SignatureVerification<PublicKey> {
@@ -334,6 +410,10 @@ pub mod pallet {
         SignatureSubmitted(SessionId),               // When signature is stored
         ValidatorIdAssigned(T::AccountId, u32),      // Validator account, ID
         DKGFailed(SessionId),                        // DKG session failed
+        /// Validator has been slashed for TSS offence
+        ValidatorSlashed(T::AccountId, TssOffenceType, SessionId),
+        /// Offence has been reported to the staking system
+        OffenceReported(TssOffenceType, SessionId, u32), // offence type, session id, validator count
     }
 
     #[pallet::error]
@@ -352,6 +432,12 @@ pub mod pallet {
         InvalidSessionState,
         SigningSessionNotFound,
         DecodingError,
+        /// Failed to retrieve validator's full identification
+        FullIdentificationNotFound,
+        /// Failed to report offence to staking system
+        OffenceReportingFailed,
+        /// Invalid offence type
+        InvalidOffenceType,
     }
 
     #[pallet::call]
@@ -663,6 +749,65 @@ pub mod pallet {
             }
             Ok(())
         }
+
+        /// Report TSS offence and slash validator
+        #[pallet::weight(10_000)]
+        #[pallet::call_index(7)]
+        pub fn report_tss_offence(
+            origin: OriginFor<T>,
+            offence_type: TssOffenceType,
+            session_id: SessionId,
+            offenders: Vec<T::AccountId>,
+        ) -> DispatchResult {
+            let _who = ensure_signed(origin)?;
+
+            // Verify the session exists
+            let session = DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
+            // Get current session index
+            let session_index = <pallet_session::Pallet<T>>::current_index();
+            let validator_set_count = session.participants.len() as u32;
+
+            // Build offenders with full identification
+            let mut offenders_with_full_id = Vec::new();
+            for offender in offenders {
+                if let Some(full_id) = T::FullIdentificationOf::convert(offender.clone()) {
+                    offenders_with_full_id.push((offender.clone(), full_id));
+                    
+                    // Emit event for each slashed validator
+                    Self::deposit_event(Event::<T>::ValidatorSlashed(
+                        offender,
+                        offence_type.clone(),
+                        session_id
+                    ));
+                } else {
+                    return Err(Error::<T>::FullIdentificationNotFound.into());
+                }
+            }
+
+            // Create the offence
+            let offence = TssOffence {
+                offence_type: offence_type.clone(),
+                session_id,
+                session_index,
+                validator_set_count,
+                offenders: offenders_with_full_id,
+            };
+
+            // Report the offence to the staking system
+            let reporters = vec![].into(); // No specific reporters for TSS offences
+            T::OffenceReporter::report_offence(reporters, offence)
+                .map_err(|_| Error::<T>::OffenceReportingFailed)?;
+
+            // Emit event
+            Self::deposit_event(Event::<T>::OffenceReported(
+                offence_type,
+                session_id,
+                validator_set_count
+            ));
+
+            Ok(())
+        }
     }
     fn verify_signature<T: Config>(key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
         T::SignatureVerifier::verify(key, message, sig)
@@ -839,6 +984,7 @@ pub mod pallet {
 
             // Get the total number of participants in the session
             let total_participants = session.participants.len();
+            let mut offenders_to_slash = Vec::new();
 
             // Iterate over all reported participants for this session
             for (_reporter, reported_list) in ReportedParticipants::<T>::iter_prefix(session_id) {
@@ -865,9 +1011,22 @@ pub mod pallet {
                             reported_participant,
                             current_count + 1,
                         );
+
+                        // Add to offenders list for slashing
+                        offenders_to_slash.push(reported_participant.clone());
                     }
                 }
             }
+
+            // Report offenders to staking system for slashing
+            if !offenders_to_slash.is_empty() {
+                Self::report_offenders_for_slashing(
+                    session_id,
+                    TssOffenceType::DkgNonParticipation,
+                    offenders_to_slash,
+                )?;
+            }
+
             Ok(())
         }
 
@@ -1001,6 +1160,34 @@ pub mod pallet {
             log::info!("[TSS] Reported participants");
         }
 
+        /// Report TSS offence from client side
+        pub fn report_tss_offence_from_client(
+            session_id: SessionId,
+            offence_type: TssOffenceType,
+            offenders: Vec<[u8; 32]>,
+        ) -> DispatchResult {
+            log::info!(
+                "[TSS] Reporting TSS offence: {:?} for session {} with {} offenders",
+                offence_type,
+                session_id,
+                offenders.len()
+            );
+
+            // Convert offenders to AccountId
+            let offenders_account_ids: Vec<T::AccountId> = offenders
+                .into_iter()
+                .filter_map(|x| T::AccountId::decode(&mut &x[..]).ok())
+                .collect();
+
+            if offenders_account_ids.is_empty() {
+                log::warn!("[TSS] No valid offenders found for session {}", session_id);
+                return Ok(());
+            }
+
+            // Report directly to the slashing system
+            Self::report_offenders_for_slashing(session_id, offence_type, offenders_account_ids)
+        }
+
         // cast_vote_on_dkg_result is called by each validator and created. This function will sign the payload
         // and call submit_dkg_result with the signature
         pub fn cast_vote_on_dkg_result(
@@ -1079,6 +1266,68 @@ pub mod pallet {
             // Access the current era from the Staking pallet
             pallet_staking::CurrentEra::<T>::get()
         }
+
+        /// Helper function to report offenders for slashing
+        pub fn report_offenders_for_slashing(
+            session_id: SessionId,
+            offence_type: TssOffenceType,
+            offenders: Vec<T::AccountId>,
+        ) -> DispatchResult {
+            // Get current session index
+            let session_index = <pallet_session::Pallet<T>>::current_index();
+            
+            // Get validator set count
+            let validator_set_count = pallet_session::Validators::<T>::get().len() as u32;
+
+            // Build offenders with full identification
+            let mut offenders_with_full_id = Vec::new();
+            for offender in offenders {
+                if let Some(full_id) = T::FullIdentificationOf::convert(offender.clone()) {
+                    offenders_with_full_id.push((offender.clone(), full_id));
+                    
+                    // Emit event for each slashed validator
+                    Self::deposit_event(Event::<T>::ValidatorSlashed(
+                        offender,
+                        offence_type.clone(),
+                        session_id
+                    ));
+                } else {
+                    log::warn!("Failed to get full identification for validator: {:?}", offender);
+                    continue;
+                }
+            }
+
+            // Only report if we have valid offenders
+            if !offenders_with_full_id.is_empty() {
+                // Create the offence
+                let offence = TssOffence {
+                    offence_type: offence_type.clone(),
+                    session_id,
+                    session_index,
+                    validator_set_count,
+                    offenders: offenders_with_full_id,
+                };
+
+                // Report the offence to the staking system
+                let reporters = vec![].into(); // No specific reporters for TSS offences
+                T::OffenceReporter::report_offence(reporters, offence)
+                    .map_err(|e| {
+                        log::error!("Failed to report TSS offence: {:?}", e);
+                        Error::<T>::OffenceReportingFailed
+                    })?;
+
+                // Emit event
+                Self::deposit_event(Event::<T>::OffenceReported(
+                    offence_type,
+                    session_id,
+                    validator_set_count
+                ));
+
+                log::info!("Successfully reported TSS offence for session {} with {} offenders", session_id, offenders_with_full_id.len());
+            }
+
+            Ok(())
+        }
     }
 }
 
@@ -1100,5 +1349,12 @@ sp_api::decl_runtime_apis! {
             session_id: SessionId,
             aggregated_key: Vec<u8>,
         );
+
+        /// Report TSS offence from runtime API
+        fn report_tss_offence(
+            session_id: SessionId,
+            offence_type: u8, // Encoded TssOffenceType
+            offenders: Vec<[u8; 32]>,
+        ) -> Result<(), u8>;
     }
 }
