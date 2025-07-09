@@ -3668,12 +3668,7 @@ where
         runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
 
         // Encode the offence type as u8 for the runtime API
-        let offence_type_encoded = match offence_type {
-            TssOffenceType::DkgNonParticipation => 0u8,
-            TssOffenceType::SigningNonParticipation => 1u8,
-            TssOffenceType::InvalidCryptographicData => 2u8,
-            TssOffenceType::UnresponsiveBehavior => 3u8,
-        };
+        let offence_type_encoded = offence_type.encode();
 
         let _ = runtime
             .report_tss_offence(hash, session_id, offence_type_encoded, offenders);

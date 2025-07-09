@@ -156,6 +156,17 @@ impl From<u8> for TssOffenceType {
         }
     }
 }
+// Helper to encode TssOffenceType into u8
+impl TssOffenceType {
+    pub fn encode(&self) -> u8 {
+        match self {
+            TssOffenceType::DkgNonParticipation => 0,
+            TssOffenceType::SigningNonParticipation => 1,
+            TssOffenceType::InvalidCryptographicData => 2,
+            TssOffenceType::UnresponsiveBehavior => 3,
+        }
+    }
+}
 
 /// TSS offence for slashing validators
 #[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
