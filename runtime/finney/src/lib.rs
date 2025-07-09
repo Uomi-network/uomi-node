@@ -2678,5 +2678,12 @@ impl_runtime_apis! {
         ) {
             let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
         }
+        fn report_tss_offence(
+            session_id: u64,
+            offence_type: u8,
+            offenders: Vec<[u8; 32]>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
+        }
     }
 }

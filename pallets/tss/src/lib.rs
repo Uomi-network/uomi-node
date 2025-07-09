@@ -144,6 +144,19 @@ pub enum TssOffenceType {
     UnresponsiveBehavior,
 }
 
+// Helper to decode u8 into TssOffenceType
+impl From<u8> for TssOffenceType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => TssOffenceType::DkgNonParticipation,
+            1 => TssOffenceType::SigningNonParticipation,
+            2 => TssOffenceType::InvalidCryptographicData,
+            3 => TssOffenceType::UnresponsiveBehavior,
+            _ => panic!("Invalid TSS offence type"),
+        }
+    }
+}
+
 /// TSS offence for slashing validators
 #[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
 pub struct TssOffence<T: Config> {
@@ -1383,11 +1396,11 @@ sp_api::decl_runtime_apis! {
             aggregated_key: Vec<u8>,
         );
 
-        // /// Report TSS offence from runtime API
-        // fn report_tss_offence(
-        //     session_id: SessionId,
-        //     offence_type: u8, // Encoded TssOffenceType
-        //     offenders: Vec<[u8; 32]>,
-        // ) -> Result<(), u8>;
+        /// Report TSS offence from runtime API
+        fn report_tss_offence(
+            session_id: SessionId,
+            offence_type: u8, // Encoded TssOffenceType
+            offenders: Vec<[u8; 32]>,
+        );
     }
 }
