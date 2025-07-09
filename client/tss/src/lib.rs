@@ -311,7 +311,7 @@ impl PeerMapper {
         }
     }
     
-    pub fn _get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
+    pub fn get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
         self.peers.get(peer_id)
     }
 
@@ -1886,6 +1886,26 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 e,
                 bytes
             );
+            
+            // Report InvalidCryptographicData offence for the sender
+            let best_hash = self.client.best_hash();
+            // Convert peer id to account_id using the peer_mapper 
+            let account_id = peer_mapper_handle
+                .get_account_id_from_peer_id(&sender);
+
+            if let None = account_id {
+                log::error!("[TSS] Account ID not found for sender {:?}", sender);
+                return Err(SessionManagerError::IdentifierNotFound);
+            }
+
+            let offenders: Vec<[u8; 32]> = vec![account_id.unwrap().as_slice().try_into().unwrap()];
+
+            if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+            } else {
+                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender {:?}", session_id, sender);
+            }
+            
             return Err(SessionManagerError::DeserializationError);
         }
         storage.store_round2_packages(session_id, identifier, &bytes[..]);
@@ -2434,6 +2454,29 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 "[TSS] There was an error deserializing the Signing Package {:?}",
                 error
             );
+            
+            // Report InvalidCryptographicData offence for the sender
+            let best_hash = self.client.best_hash();
+
+            // Convert peer id to account_id using the peer_mapper
+            let mut peer_mapper_guard = self.peer_mapper.lock().unwrap();
+            let _sender = peer_mapper_guard
+                .get_account_id_from_peer_id(&_sender)
+                .cloned();
+            drop(peer_mapper_guard);
+
+            if let None = _sender {
+                log::error!("[TSS] Account ID not found for sender {:?}", _sender);
+                return Err(SessionManagerError::IdentifierNotFound);
+            } 
+
+            let offenders: Vec<[u8; 32]> = vec![_sender.unwrap().as_slice().try_into().unwrap()];
+            if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+            } else {
+                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} ", session_id);
+            }
+            
             return Err(SessionManagerError::DeserializationError);
         }
 
@@ -2544,6 +2587,26 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 "[TSS] There was an error deserializing the Signature Share {:?}",
                 error
             );
+            
+            // Report InvalidCryptographicData offence for the sender
+            let best_hash = self.client.best_hash();
+
+            // Convert peer id to account_id using the peer_mapper
+            let sender = self.peer_mapper.lock().unwrap()
+                .get_account_id_from_peer_id(&sender).cloned();
+
+            if let None = sender {
+                log::error!("[TSS] Account ID not found for sender {:?}", sender);
+                return Err(SessionManagerError::IdentifierNotFound);
+            }   
+
+            let offenders: Vec<[u8; 32]> = vec![sender.unwrap().as_slice().try_into().unwrap()];
+            if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+            } else {
+                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {}", session_id);
+            }
+            
             return Err(SessionManagerError::DeserializationError);
         }
         let mut storage = self.storage.lock().unwrap();
