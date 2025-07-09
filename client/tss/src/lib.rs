@@ -2921,12 +2921,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     }
                 };
                 
-                // // Report TSS offence for slashing
-                // if let Err(e) = self.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
-                //     log::error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
-                // } else {
-                //     log::info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
-                // }
+                // Report TSS offence for slashing
+                if let Err(e) = self.client.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
+                    log::error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
+                } else {
+                    log::info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
+                }
             }
 
             // Remove from all session data structures
