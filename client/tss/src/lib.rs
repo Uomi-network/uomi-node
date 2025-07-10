@@ -1831,8 +1831,28 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 session_state_lock.insert(session_id, DKGSessionState::Failed);
                 drop(session_state_lock);
                 
-                // Report cryptographic failure for slashing - in this case, we might not know which specific participant failed
-                // so we'll let the existing reporting mechanism handle it through timeouts
+                // Report cryptographic failure for slashing - report all participants that submitted round1 packages
+                // since we can't determine which specific participant caused the verification failure
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                let mut offenders = Vec::new();
+                
+                for identifier in round1_packages.keys() {
+                    if let Some(account_id) = peer_mapper.get_account_id_from_identifier(&session_id, identifier) {
+                        if let Ok(account_bytes) = account_id.as_slice().try_into() {
+                            offenders.push(account_bytes);
+                        }
+                    }
+                }
+                drop(peer_mapper);
+                
+                if !offenders.is_empty() {
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for round1 verification failure", session_id);
+                    }
+                }
             }
             Ok((secret, round2_packages)) => {
                 log::info!("[TSS] Round 1 Verification completed. Continuing now with Round 2");
@@ -2094,8 +2114,28 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     session_state_lock.insert(session_id, DKGSessionState::Failed);
                     drop(session_state_lock);
                     
-                    // Report DKG failure - this could be due to invalid cryptographic data
-                    // Let the timeout mechanism handle participant reporting
+                    // Report DKG failure - report all participants that submitted round2 packages
+                    // since we can't determine which specific participant caused the verification failure
+                    let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                    let mut offenders = Vec::new();
+                    
+                    for identifier in round2_packages.keys() {
+                        if let Some(account_id) = peer_mapper.get_account_id_from_identifier(&session_id, identifier) {
+                            if let Ok(account_bytes) = account_id.as_slice().try_into() {
+                                offenders.push(account_bytes);
+                            }
+                        }
+                    }
+                    drop(peer_mapper);
+                    
+                    if !offenders.is_empty() {
+                        let best_hash = self.client.best_hash();
+                        if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                            log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                        } else {
+                            log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for DKG part3 failure", session_id);
+                        }
+                    }
                 }
             }
         }
