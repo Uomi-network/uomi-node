@@ -3865,11 +3865,13 @@ where
         let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
         runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
 
-        // Encode the offence type as u8 for the runtime API
+        // With the new pallet implementation, report_tss_offence_from_client will handle this
+        // by creating a signed payload for an unsigned transaction
         let offence_type_encoded = offence_type.encode();
-
+        
         let _ = runtime
-            .report_tss_offence(hash, session_id, offence_type_encoded, offenders);
+            .report_tss_offence(hash, session_id, offence_type_encoded, offenders)
+            .map_err(|e| format!("Failed to report TSS offence: {:?}", e));
 
         Ok(())
     }

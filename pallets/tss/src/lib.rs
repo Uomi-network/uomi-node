@@ -103,6 +103,16 @@ pub struct SubmitDKGResultPayload<T: Config> {
     public: T::Public,
 }
 
+/// A struct for the payload of the ReportTssOffence call
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+pub struct ReportTssOffencePayload<T: Config> {
+    pub offence_type: TssOffenceType,
+    pub session_id: SessionId,
+    pub validator_set_count: u32,
+    pub offenders: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
+    pub public: T::Public,
+}
+
 
 
 impl<T: SigningTypes + Config> SignedPayload<T> for ReportParticipantsPayload<T> {
@@ -129,10 +139,16 @@ impl<T: SigningTypes + Config> SignedPayload<T> for SubmitDKGResultPayload<T> {
     }
 }
 
+impl<T: SigningTypes + Config> SignedPayload<T> for ReportTssOffencePayload<T> {
+    fn public(&self) -> T::Public {
+        self.public.clone()
+    }
+}
+
 pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
 
 /// TSS offence types
-#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen)]
 pub enum TssOffenceType {
     /// Validator failed to participate in DKG session
     DkgNonParticipation,
@@ -460,6 +476,17 @@ pub mod pallet {
     #[pallet::getter(fn participant_report_count)]
     pub type ParticipantReportCount<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
+
+    // Storage to track pending TSS offences to be processed during on_initialize
+    #[pallet::storage]
+    #[pallet::getter(fn pending_tss_offences)]
+    pub type PendingTssOffences<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        SessionId,
+        (TssOffenceType, BoundedVec<T::AccountId, T::MaxNumberOfShares>),
+        OptionQuery,
+    >;
 
     // A storage to store temporarily proposed public keys generated from the DKG process associated with the session ID and validator ID
     #[pallet::storage]
@@ -826,52 +853,36 @@ pub mod pallet {
         #[pallet::call_index(7)]
         pub fn report_tss_offence(
             origin: OriginFor<T>,
-            offence_type: TssOffenceType,
-            session_id: SessionId,
-            offenders: Vec<T::AccountId>,
+            payload: ReportTssOffencePayload<T>,
+            _signature: T::Signature,
         ) -> DispatchResult {
-            let _who = ensure_signed(origin)?;
+            ensure_none(origin)?;
 
+            let who = payload.public().into_account();
+            
             // Verify the session exists
-            let session = DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
-
-            // Get current session index
-            let session_index = <pallet_session::Pallet<T>>::current_index();
-            let validator_set_count = session.participants.len() as u32;
-
-            // Build offenders with full identification and report individually
-            for offender in offenders {
-                if let Some(full_id) = <T as pallet_session::historical::Config>::FullIdentificationOf::convert(offender.clone()) {
-                    // Create the offence using MaliciousBehaviourOffence
-                    let offence = MaliciousBehaviourOffence {
-                        session_index,
-                        validator_set_count,
-                        offender: (offender.clone(), full_id),
-                    };
-
-                    // Report the offence to the staking system
-                    let reporters = vec![].into(); // No specific reporters for TSS offences
-                    T::OffenceReporter::report_offence(reporters, offence)
-                        .map_err(|_| Error::<T>::OffenceReportingFailed)?;
-                    
-                    // Emit event for each slashed validator
-                    Self::deposit_event(Event::<T>::ValidatorSlashed(
-                        offender,
-                        offence_type.clone(),
-                        session_id
-                    ));
-                } else {
-                    return Err(Error::<T>::FullIdentificationNotFound.into());
-                }
-            }
-
-            // Emit event
-            Self::deposit_event(Event::<T>::OffenceReported(
-                offence_type,
-                session_id,
-                validator_set_count
-            ));
-
+            let session = DkgSessions::<T>::get(payload.session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+            
+            // Ensure the reporter is a participant in the session
+            ensure!(
+                session.participants.contains(&who),
+                Error::<T>::UnauthorizedParticipation
+            );
+            
+            // Store the offence to be processed during on_initialize
+            // PendingTssOffences::<T>::insert(
+            //     payload.session_id, 
+            //     (payload.offence_type.clone(), payload.offenders.clone())
+            // );
+            
+            // Log the pending offence
+            // log::info!(
+            //     "[TSS] Pending offence recorded: {:?} for session {} with {} offenders", 
+            //     payload.offence_type,
+            //     payload.session_id,
+            //     payload.offenders.len()
+            // );
+            
             Ok(())
         }
     }
@@ -922,6 +933,14 @@ pub mod pallet {
                         .build();
                 }
                 Call::report_participant { .. } => {
+                    return ValidTransaction::with_tag_prefix("TssPallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(call.encode())
+                        .longevity(64)
+                        .propagate(true)
+                        .build();
+                }
+                Call::report_tss_offence { .. } => {
                     return ValidTransaction::with_tag_prefix("TssPallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(call.encode())
@@ -995,6 +1014,9 @@ pub mod pallet {
             // Check expired sessions 
             Pallet::<T>::check_expired_sessions(n).ok();
 
+            // Process any pending TSS offences
+            Pallet::<T>::process_pending_tss_offences().ok();
+
             // Report count reset
             let previous_era = Pallet::<T>::previous_era();
             let current_era = Pallet::<T>::get_current_era().unwrap_or(0);
@@ -1008,8 +1030,20 @@ pub mod pallet {
                 PreviousEra::<T>::put(current_era);
             }
             
-            // Return weight for this operation (minimal)
-            T::DbWeight::get().reads(1) + T::DbWeight::get().writes(1)
+            // Return weight for this operation
+            // We add additional weight for processing pending offences
+            let pending_offences_count = PendingTssOffences::<T>::iter().count() as u64;
+            let base_weight = T::DbWeight::get().reads(3) + T::DbWeight::get().writes(2);
+            
+            // Add additional weight per pending offence (1 read + 1 write per offence)
+            if pending_offences_count > 0 {
+                base_weight.saturating_add(
+                    T::DbWeight::get().reads(pending_offences_count) 
+                    .saturating_add(T::DbWeight::get().writes(pending_offences_count))
+                )
+            } else {
+                base_weight
+            }
         }
     }
 
@@ -1230,28 +1264,52 @@ pub mod pallet {
         pub fn report_tss_offence_from_client(
             session_id: SessionId,
             offence_type: TssOffenceType,
-            offenders: Vec<[u8; 32]>,
+            offenders_account_ids: Vec<[u8; 32]>,
         ) -> DispatchResult {
-            log::info!(
-                "[TSS] Reporting TSS offence: {:?} for session {} with {} offenders",
-                offence_type,
-                session_id,
-                offenders.len()
-            );
-
-            // Convert offenders to AccountId
-            let offenders_account_ids: Vec<T::AccountId> = offenders
-                .into_iter()
-                .filter_map(|x| T::AccountId::decode(&mut &x[..]).ok())
-                .collect();
-
+            // Verify the session exists
+            let session = DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+            
             if offenders_account_ids.is_empty() {
                 log::warn!("[TSS] No valid offenders found for session {}", session_id);
                 return Ok(());
             }
 
-            // Report directly to the slashing system
-            Self::report_offenders_for_slashing(session_id, offence_type, offenders_account_ids)
+            // Create a transaction to submit
+            let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+
+            if !signer.can_sign() {
+                log::error!("TSS: No accounts available to sign report_tss_offence");
+                return Ok(());
+            }
+
+            // Get current validator set information for the offence
+            let session_index = <pallet_session::Pallet<T>>::current_index();
+            let validator_set_count = pallet_session::Validators::<T>::get().len() as u32;
+
+            // // Convert to bounded vector
+            let offenders_bounded: BoundedVec<T::AccountId, T::MaxNumberOfShares> = BoundedVec::try_from(
+                offenders_account_ids
+                    .iter()
+                    .map(|x| T::AccountId::decode(&mut &x[..]).unwrap())
+                    .collect::<Vec<T::AccountId>>(),
+
+            )
+                .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
+
+            // Send unsigned transaction with signed payload
+            let _ = signer.send_unsigned_transaction(
+                |acct| ReportTssOffencePayload::<T> {
+                    session_id,
+                    offence_type: offence_type.clone(),
+                    offenders: offenders_bounded.clone(),
+                    validator_set_count,
+                    public: acct.public.clone(),
+                },
+                |payload, signature| Call::report_tss_offence { payload: payload, signature },
+            );
+
+            log::info!("[TSS] TSS offence report sent for session {}", session_id);
+            Ok(())
         }
 
         // cast_vote_on_dkg_result is called by each validator and created. This function will sign the payload
@@ -1383,6 +1441,32 @@ pub mod pallet {
             ));
 
             log::info!("Successfully reported TSS offence for session {}", session_id);
+            Ok(())
+        }
+
+        /// Process any pending TSS offences stored in the PendingTssOffences storage
+        pub fn process_pending_tss_offences() -> DispatchResult {
+            let offences: Vec<(SessionId, (TssOffenceType, BoundedVec<T::AccountId, T::MaxNumberOfShares>))> = 
+                PendingTssOffences::<T>::iter().collect();
+            
+            if offences.is_empty() {
+                return Ok(());
+            }
+            
+            log::info!("[TSS] Processing {} pending offences", offences.len());
+            
+            for (session_id, (offence_type, offenders)) in offences {
+                // Report offenders for slashing
+                if let Err(e) = Self::report_offenders_for_slashing(session_id, offence_type, offenders.to_vec()) {
+                    log::error!("[TSS] Failed to process offence for session {}: {:?}", session_id, e);
+                    // Continue processing other offences even if one fails
+                    continue;
+                }
+                
+                // Remove the processed offence
+                PendingTssOffences::<T>::remove(session_id);
+            }
+            
             Ok(())
         }
     }
