@@ -14,6 +14,7 @@ pub enum SupportedChain {
     Arbitrum,
     Optimism,
     Fantom,
+    Uomi,
     // Add more chains as needed
 }
 
@@ -28,6 +29,7 @@ impl SupportedChain {
             SupportedChain::Arbitrum => "https://rpc.ankr.com/arbitrum",
             SupportedChain::Optimism => "https://rpc.ankr.com/optimism",
             SupportedChain::Fantom => "https://rpc.ankr.com/fantom",
+            SupportedChain::Uomi => "http://localhost:9944", // Local Uomi node RPC
         }
     }
 
@@ -41,6 +43,7 @@ impl SupportedChain {
             SupportedChain::Arbitrum => 42161,
             SupportedChain::Optimism => 10,
             SupportedChain::Fantom => 250,
+            SupportedChain::Uomi => 4386,
         }
     }
 
@@ -114,6 +117,7 @@ impl MultiChainRpcClient {
             42161 => SupportedChain::Arbitrum,
             10 => SupportedChain::Optimism,
             250 => SupportedChain::Fantom,
+            4386 => SupportedChain::Uomi,
             _ => return Err("Unsupported chain ID"),
         };
 
