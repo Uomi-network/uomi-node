@@ -35,13 +35,13 @@ use sp_runtime::transaction_validity::{
     TransactionValidity, ValidTransaction, InvalidTransaction, TransactionSource,
     TransactionPriority,
 };
-use sp_runtime::traits::Convert;
+use sp_runtime::traits::{Convert, Saturating, SaturatedConversion};
 use frame_system::offchain::SigningTypes;
 
 pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
-use types::SessionId;
+use types::{SessionId, NftId};
 pub use payloads::*;
 pub use errors::*;
 pub use utils::*;
@@ -387,6 +387,21 @@ pub mod pallet {
     pub type ChainConfigs<T: Config> =
     StorageMap<_, Blake2_128Concat, u32, (BoundedVec<u8, crate::types::MaxChainNameSize>, BoundedVec<u8, crate::types::MaxRpcUrlSize>, bool), OptionQuery>;
 
+
+    /// Storage for tracking submitted transactions pending confirmation
+    /// Maps (chain_id, tx_hash) -> (submission_block, max_wait_blocks)
+    #[pallet::storage]
+    #[pallet::getter(fn pending_transactions)]
+    pub type PendingTransactions<T: Config> =
+    StorageDoubleMap<_, Blake2_128Concat, u32, Blake2_128Concat, BoundedVec<u8, crate::types::MaxTxHashSize>, (BlockNumberFor<T>, u32), OptionQuery>;
+
+    /// Storage for mapping NFT IDs to pending FSA transaction data
+    /// Maps nft_id -> (chain_id, transaction_data)
+    #[pallet::storage]
+    #[pallet::getter(fn fsa_transaction_requests)]
+    pub type FsaTransactionRequests<T: Config> =
+    StorageMap<_, Blake2_128Concat, NftId, (u32, BoundedVec<u8, crate::types::MaxMessageSize>), OptionQuery>;
+
     /// Storage for tracking transaction nonces per chain per agent
     /// Maps (agent_nft_id, chain_id) -> nonce
     #[pallet::storage]
@@ -697,7 +712,10 @@ pub mod pallet {
 
         session.aggregated_sig = Some(signature.clone());
         session.state = SessionState::SigningComplete;
-        SigningSessions::<T>::insert(session_id, session);
+        SigningSessions::<T>::insert(session_id, session.clone());
+
+        // Signature is already stored in session.aggregated_sig for FSA processing
+        log::info!("Completed signature for session {} ready for transaction submission", session_id);
 
         Self::deposit_event(Event::SigningCompleted(session_id, signature));
         Ok(())
@@ -1064,6 +1082,30 @@ pub mod pallet {
                             return; 
                         }
 
+                        // Store FSA transaction request data for later use
+                        // Convert U256 request_id to NftId for storage
+                        let nft_id_bytes: Vec<u8> = request_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+                        if let Ok(nft_id) = BoundedVec::try_from(nft_id_bytes) {
+                            // Parse the request data to extract actual chain_id and transaction data
+                            // Try to use the FSA processing function to parse and extract chain_id and data
+                            match Self::process_single_request(request_id.saturated_into()) {
+                                Ok(Some((chain_id, tx_data))) => {
+                                    // Successfully parsed FSA request with proper chain_id and transaction data
+                                    if let Ok(bounded_data) = BoundedVec::try_from(tx_data) {
+                                        FsaTransactionRequests::<T>::insert(&nft_id, (chain_id, bounded_data));
+                                        log::info!("TSS: Stored parsed FSA transaction request for chain {} and NFT ID: {:?}", chain_id, nft_id);
+                                    }
+                                },
+                                _ => {
+                                    // Fallback: if parsing fails, treat the entire request.1 as transaction data with chain_id from request.0
+                                    if let Ok(bounded_data) = BoundedVec::try_from(request.1.clone()) {
+                                        FsaTransactionRequests::<T>::insert(&nft_id, (request.0, bounded_data));
+                                        log::info!("TSS: Stored raw FSA transaction request for chain {} and NFT ID: {:?}", request.0, nft_id);
+                                    }
+                                }
+                            }
+                        }
+
                         // Convert Vec<u8> to BoundedVec<u8, MaxMessageSize>
                         let message = match BoundedVec::try_from(request.1) {
                             Ok(msg) => msg,
@@ -1113,6 +1155,12 @@ pub mod pallet {
         // Process any pending TSS offences
         Pallet::<T>::process_pending_tss_offences().ok();
 
+        // FSA: Process completed signatures and submit transactions
+        Pallet::<T>::process_completed_signatures().ok();
+
+        // FSA: Check pending transactions for confirmation
+        Pallet::<T>::check_pending_transactions().ok();
+
         // Report count reset
         let previous_era = Pallet::<T>::previous_era();
         let current_era = Pallet::<T>::get_current_era().unwrap_or(0);
@@ -1131,15 +1179,21 @@ pub mod pallet {
         }
         
         // Return weight for this operation
-        // We add additional weight for processing pending offences
+        // We add additional weight for processing pending offences and FSA operations
         let pending_offences_count = PendingTssOffences::<T>::iter().count() as u64;
-        let base_weight = T::DbWeight::get().reads(3) + T::DbWeight::get().writes(2);
+        let completed_signatures_count = SigningSessions::<T>::iter()
+            .filter(|(_, session)| session.aggregated_sig.is_some())
+            .count() as u64;
+        let pending_transactions_count = PendingTransactions::<T>::iter().count() as u64;
         
-        // Add additional weight per pending offence (1 read + 1 write per offence)
-        if pending_offences_count > 0 {
+        let base_weight = T::DbWeight::get().reads(5) + T::DbWeight::get().writes(3);
+        
+        // Add additional weight for each operation
+        let total_operations = pending_offences_count + completed_signatures_count + pending_transactions_count;
+        if total_operations > 0 {
             base_weight.saturating_add(
-                T::DbWeight::get().reads(pending_offences_count) 
-                .saturating_add(T::DbWeight::get().writes(pending_offences_count))
+                T::DbWeight::get().reads(total_operations * 2) 
+                .saturating_add(T::DbWeight::get().writes(total_operations))
             )
         } else {
             base_weight
@@ -1298,6 +1352,187 @@ impl<T: Config> Pallet<T> {
         }
         
         Ok(())
+    }
+
+    /// Helper function to get pending transaction data for an NFT ID
+    pub fn get_pending_transaction_data(nft_id: &NftId) -> Option<(u32, Vec<u8>)> {
+        FsaTransactionRequests::<T>::get(nft_id).map(|(chain_id, bounded_data)| {
+            (chain_id, bounded_data.into_inner())
+        })
+    }
+
+    /// Process completed signatures and submit transactions
+    pub fn process_completed_signatures() -> DispatchResult {
+        // Get all signing sessions with completed signatures
+        let completed_sessions: Vec<(SessionId, SigningSession)> = SigningSessions::<T>::iter()
+            .filter(|(_, session)| session.aggregated_sig.is_some())
+            .collect();
+
+        if completed_sessions.is_empty() {
+            return Ok(());
+        }
+
+        log::info!("[FSA] Processing {} completed signatures for transaction submission", completed_sessions.len());
+
+        for (session_id, session) in completed_sessions {
+            let signature = match session.aggregated_sig {
+                Some(sig) => sig,
+                None => continue, // Should not happen due to filter, but safety check
+            };
+            
+            // Get FSA transaction request data from the session's NFT ID
+            if let Some((chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.nft_id) {
+                let tx_data = tx_data_bounded.into_inner();
+                if let Some(tx_hash) = Self::submit_signed_transaction(session_id, chain_id, &tx_data, &signature) {
+                
+                // Add to pending transactions for status tracking
+                let current_block = frame_system::Pallet::<T>::block_number();
+                let max_wait_blocks = 100u32; // Wait up to 100 blocks for confirmation
+                
+                // tx_hash is already BoundedVec<u8, MaxTxHashSize>
+                PendingTransactions::<T>::insert(chain_id, tx_hash.clone(), (current_block, max_wait_blocks));
+                
+                // Update multi-chain transaction status
+                MultiChainTransactions::<T>::insert(chain_id, tx_hash.clone(), crate::types::TransactionStatus::Submitted);
+                
+                Self::deposit_event(Event::MultiChainTransactionSubmitted(chain_id, tx_hash.to_vec()));
+                log::info!("[FSA] Transaction submitted for session {} on chain {}", session_id, chain_id);
+                } else {
+                    log::error!("[FSA] Failed to submit transaction for session {}", session_id);
+                    // Keep the signature for retry on next block
+                }
+                
+                // Clear processed FSA transaction requests for this session
+                FsaTransactionRequests::<T>::remove(&session.nft_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check pending transactions for confirmation status
+    pub fn check_pending_transactions() -> DispatchResult {
+        let current_block = frame_system::Pallet::<T>::block_number();
+        let pending_txs: Vec<(u32, BoundedVec<u8, crate::types::MaxTxHashSize>, (BlockNumberFor<T>, u32))> = 
+            PendingTransactions::<T>::iter().collect();
+
+        if pending_txs.is_empty() {
+            return Ok(());
+        }
+
+        log::info!("[FSA] Checking {} pending transactions for confirmation", pending_txs.len());
+
+        for (chain_id, tx_hash_bounded, (submission_block, max_wait_blocks)) in pending_txs {
+            let blocks_waited = current_block.saturating_sub(submission_block);
+            // Convert tx_hash_bounded to &str for logging
+            let tx_hash_bytes = tx_hash_bounded.as_slice();
+
+            if blocks_waited.saturated_into::<u32>() > max_wait_blocks {
+                // Transaction timed out
+                log::warn!("[FSA] Transaction on chain {} timed out after {} blocks", chain_id, blocks_waited.saturated_into::<u32>());
+                
+                PendingTransactions::<T>::remove(chain_id, &tx_hash_bounded);
+                MultiChainTransactions::<T>::insert(chain_id, tx_hash_bounded.clone(), crate::types::TransactionStatus::Failed);
+                Self::deposit_event(Event::MultiChainTransactionFailed(chain_id, tx_hash_bounded.to_vec()));
+                continue;
+            }
+
+            // Check transaction status on chain - convert to hex string
+            let mut tx_hash_hex = sp_std::vec![0u8; tx_hash_bytes.len() * 2 + 2];
+            tx_hash_hex[0] = b'0';
+            tx_hash_hex[1] = b'x';
+            for (i, byte) in tx_hash_bytes.iter().enumerate() {
+                let hex_chars = [b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f'];
+                tx_hash_hex[2 + i * 2] = hex_chars[(byte >> 4) as usize];
+                tx_hash_hex[2 + i * 2 + 1] = hex_chars[(byte & 0xf) as usize];
+            }
+            let tx_hash_str = core::str::from_utf8(&tx_hash_hex).unwrap_or("invalid_hash");
+            match Self::check_transaction_status_on_chain(chain_id, tx_hash_str) {
+                Some(status) => {
+                    match status {
+                        crate::types::TransactionStatus::Confirmed => {
+                            log::info!("[FSA] Transaction on chain {} confirmed", chain_id);
+                            
+                            PendingTransactions::<T>::remove(chain_id, &tx_hash_bounded);
+                            MultiChainTransactions::<T>::insert(chain_id, tx_hash_bounded.clone(), crate::types::TransactionStatus::Confirmed);
+                            Self::deposit_event(Event::MultiChainTransactionConfirmed(chain_id, tx_hash_bounded.to_vec()));
+                        }
+                        crate::types::TransactionStatus::Failed => {
+                            log::error!("[FSA] Transaction on chain {} failed", chain_id);
+                            
+                            PendingTransactions::<T>::remove(chain_id, &tx_hash_bounded);
+                            MultiChainTransactions::<T>::insert(chain_id, tx_hash_bounded.clone(), crate::types::TransactionStatus::Failed);
+                            Self::deposit_event(Event::MultiChainTransactionFailed(chain_id, tx_hash_bounded.to_vec()));
+                        }
+                        _ => {
+                            // Still pending, keep checking
+                            log::debug!("[FSA] Transaction on chain {} still pending", chain_id);
+                        }
+                    }
+                }
+                None => {
+                    log::error!("[FSA] Failed to check status for transaction on chain {}", chain_id);
+                    // Keep in pending for retry
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Submit a signed transaction to the specified chain
+    /// Returns the transaction hash on success
+    fn submit_signed_transaction(
+        session_id: SessionId,
+        chain_id: u32,
+        tx_data: &[u8],
+        signature: &crate::types::Signature,
+    ) -> Option<BoundedVec<u8, crate::types::MaxTxHashSize>> {
+        // Combine transaction data with signature to create final signed transaction
+        let mut signed_transaction = tx_data.to_vec();
+        signed_transaction.extend_from_slice(signature);
+
+        // Submit via FSA module
+        match crate::fsa::submit_transaction_to_chain(chain_id, &signed_transaction) {
+            Ok(response) => {
+                match response.tx_hash {
+                    Some(hash) => {
+                        log::info!("[FSA] Transaction submitted successfully for session {}", session_id);
+                        // Convert string tx_hash to BoundedVec<u8>
+                        let tx_hash_bytes = hash.as_bytes();
+                        match BoundedVec::try_from(tx_hash_bytes.to_vec()) {
+                            Ok(bounded_hash) => Some(bounded_hash),
+                            Err(_) => {
+                                log::error!("[FSA] Transaction hash too long for BoundedVec");
+                                None
+                            }
+                        }
+                    },
+                    None => {
+                        log::error!("[FSA] Transaction submitted but no hash returned for session {}", session_id);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[FSA] Transaction submission failed for session {}: {:?}", session_id, e);
+                None
+            }
+        }
+    }
+
+    /// Check transaction status on a specific chain
+    fn check_transaction_status_on_chain(
+        chain_id: u32,
+        tx_hash: &str,
+    ) -> Option<crate::types::TransactionStatus> {
+        match crate::fsa::check_transaction_status(chain_id, tx_hash) {
+            Ok(response) => Some(response.status),
+            Err(e) => {
+                log::error!("[FSA] Failed to check transaction status: {:?}", e);
+                None
+            }
+        }
     }
 }
 

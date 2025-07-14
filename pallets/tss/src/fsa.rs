@@ -38,21 +38,21 @@ impl ProcessingError {
 // Define the struct for the deserialized output
 #[derive(Deserialize, Debug)]
 pub struct Action {
-    action_type: String,
-    _trigger_policy: String,
-    data: Vec<u8>,
-    chain_id: u32,
+    pub action_type: String,
+    pub _trigger_policy: String,
+    pub data: Vec<u8>,
+    pub chain_id: u32,
     // Additional fields for enhanced transaction support
-    to: Option<String>,
-    value: Option<String>,
-    gas_limit: Option<String>,
-    gas_price: Option<String>,
+    pub to: Option<String>,
+    pub value: Option<String>,
+    pub gas_limit: Option<String>,
+    pub gas_price: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct Output {
-    actions: Vec<Action>,
-    _response: String,
+    pub actions: Vec<Action>,
+    pub _response: String,
 }   
 
 
@@ -104,7 +104,7 @@ impl<T: Config> crate::pallet::Pallet<T> {
     }
 
     /// Process a single OPOC request
-    fn process_single_request(request_id: u32) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
+    pub fn process_single_request(request_id: u32) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
         // Fetch the output for this request ID
         let (output, _, _) = pallet_uomi_engine::Outputs::<T>::get(sp_core::U256::from(request_id));
         
