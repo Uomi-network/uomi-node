@@ -9130,6 +9130,7 @@ name = "pallet-tss"
 version = "0.2.0"
 dependencies = [
  "env_logger 0.10.2",
+ "ethereum-types",
  "frame-benchmarking",
  "frame-election-provider-support",
  "frame-support",
@@ -9147,6 +9148,7 @@ dependencies = [
  "pallet-timestamp",
  "pallet-uomi-engine",
  "parity-scale-codec",
+ "rlp",
  "scale-info",
  "sp-api",
  "sp-application-crypto",

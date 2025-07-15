@@ -1323,9 +1323,9 @@ impl<T: Config> Pallet<T> {
         // For now, we support Ethereum-compatible chains
         match chain_id {
             1 | 56 | 137 | 43114 | 42161 | 10 | 250 => {
-                Ok(TransactionBuilder::build_ethereum_transaction(
+                TransactionBuilder::build_ethereum_transaction(
                     to, value, data, gas_limit, gas_price, nonce, chain_id
-                ))
+                ).map_err(|_| "Failed to build transaction")
             }
             _ => Err("Chain not supported for transaction building"),
         }
