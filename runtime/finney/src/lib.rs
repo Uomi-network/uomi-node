@@ -454,6 +454,8 @@ impl pallet_tss::Config for Runtime {
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
     type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
+
 }
 
 
@@ -1390,6 +1392,8 @@ impl pallet_ipfs::Config for Runtime {
     type BlockNumber = BlockNumber;
     // Nuovo campo per il costo del pinning temporaneo
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    // TSS interface implementation
+    type TssInterface = Tss;
 }
 
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
@@ -2675,6 +2679,13 @@ impl_runtime_apis! {
             aggregated_key: Vec<u8>,
         ) {
             let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
+        }
+        fn report_tss_offence(
+            session_id: u64,
+            offence_type: u8,
+            offenders: Vec<[u8; 32]>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
         }
     }
 }

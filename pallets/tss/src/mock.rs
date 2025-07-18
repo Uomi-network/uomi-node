@@ -177,7 +177,6 @@ impl SendTransactionTypes<crate::pallet::Call<Test>> for Test {
 impl pallet_uomi_engine::Config for Test {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Test>; // for finney update. remove on turing
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
@@ -227,6 +226,7 @@ impl pallet_ipfs::Config for Test {
     type Currency = pallet_balances::Pallet<Test>;
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    type TssInterface = crate::Pallet<Test>;
 }
 
 impl pallet_babe::Config for Test {

@@ -21,6 +21,10 @@ pub enum ECDSAError {
     KeygenNotFound,
     SignNotFound,
     SignOnlineNotFound,
+    KeygenMsgHandlerError(String, ECDSAIndexWrapper),
+    SignMsgHandlerError(String, ECDSAIndexWrapper),
+    SignOnlineMsgHandlerError(String, ECDSAIndexWrapper),
+    ReshareMsgHandlerError(String, ECDSAIndexWrapper),
     ECDSAError(String),
 }
 pub struct ECDSAManager {
@@ -177,7 +181,7 @@ impl ECDSAManager {
             log::info!("[tss] 1");
             let to_ret = keygen
                 .msg_handler(index.get_index(), message)
-                .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
+                .or_else(|e| Err(ECDSAError::KeygenMsgHandlerError(format!("{:?}", e), index.clone())));
             log::info!("[tss] 2");
 
             drop(keygen);
@@ -204,7 +208,7 @@ impl ECDSAManager {
             log::info!("[TSS] handling Sign offline message");
             return sign
                 .msg_handler(index.get_index(), message)
-                .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
+                .or_else(|e| Err(ECDSAError::SignMsgHandlerError(format!("{:?}", e), index.clone())));
         }
 
         // buffer the messages and throw an error
@@ -226,7 +230,7 @@ impl ECDSAManager {
             log::info!("[TSS] handling Sign online message");
             return sign
                 .msg_handler(index.get_index(), message)
-                .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
+                .or_else(|e| Err(ECDSAError::SignOnlineMsgHandlerError(format!("{:?}", e), index.clone())));
         }
         log::info!("[TSS] buffering message to sign online");
         self.buffer_sign_online
@@ -347,7 +351,7 @@ impl ECDSAManager {
             log::info!("[TSS] handling reshare message");
             return reshare
                 .msg_handler(index.get_index(), message)
-                .or_else(|e| Err(ECDSAError::ECDSAError(format!("{:?}", e))));
+                .or_else(|e| Err(ECDSAError::ReshareMsgHandlerError(format!("{:?}", e), index.clone())));
         }
         Err(ECDSAError::KeygenNotFound)
     }
@@ -355,7 +359,7 @@ impl ECDSAManager {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ECDSAIndexWrapper(pub String);
 
 impl ECDSAIndexWrapper {

@@ -41,6 +41,7 @@ use frame_support::{
 };
 use sp_runtime::traits::Convert;
 use uomi_primitives::Balance;
+use uomi_primitives::TssInterface;
 use sp_runtime::traits::AtLeast32BitUnsigned;
 use frame_system::{
     ensure_none,
@@ -172,6 +173,9 @@ pub mod pallet {
 
         #[pallet::constant]
         type TemporaryPinningCost: Get<Balance>;
+        
+        /// TSS interface for wallet creation
+        type TssInterface: uomi_primitives::TssInterface<Self>;
     }
 
     #[pallet::event]
@@ -301,7 +305,7 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn pin_agent(origin: OriginFor<T>, cid: Cid, nft_id: NftId) -> DispatchResult {
+        pub fn pin_agent(origin: OriginFor<T>, cid: Cid, nft_id: NftId, threshold: u8) -> DispatchResult {
             let _who = ensure_signed(origin)?;
 
             if AgentsPins::<T>::contains_key(nft_id) {
@@ -332,6 +336,21 @@ pub mod pallet {
                     "IPFS: Existing CID status after update: {:?}",
                     CidsStatus::<T>::get(&existing_cid)
                 );
+            } else {
+                // Call the TSS Pallet to initiate the wallet creation.
+                log::info!("IPFS: Agent not pinned, creating new wallet through TSS Pallet");
+
+                // Check if wallet already exists for this agent
+                if !T::TssInterface::agent_wallet_exists(nft_id) {
+                    // Create new wallet for the agent
+                    if let Err(e) = T::TssInterface::create_agent_wallet(nft_id, threshold) {
+                        log::error!("IPFS: Failed to create agent wallet: {:?}", e);
+                        return Err(Error::<T>::SomethingWentWrong.into());
+                    }
+                    log::info!("IPFS: Successfully created wallet for agent {}", nft_id);
+                } else {
+                    log::info!("IPFS: Wallet already exists for agent {}", nft_id);
+                }
             }
 
             AgentsPins::<T>::insert(nft_id, &cid);

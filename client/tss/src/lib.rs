@@ -56,7 +56,7 @@ use sp_runtime::{
 };
 
 use uomi_runtime::{
-    pallet_tss::{types::SessionId, Event as TssEvent, TssApi},
+    pallet_tss::{types::SessionId, Event as TssEvent, TssApi, TssOffenceType},
     AccountId
 };
 
@@ -311,7 +311,7 @@ impl PeerMapper {
         }
     }
     
-    pub fn _get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
+    pub fn get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
         self.peers.get(peer_id)
     }
 
@@ -450,6 +450,24 @@ impl PeerMapper {
         return None;
     }
 
+    pub fn get_account_id_from_identifier(
+        &mut self,
+        session_id: &SessionId,
+        identifier: &Identifier,
+    ) -> Option<TSSPublic> {
+        let sessions_participants = self.sessions_participants.lock().unwrap();
+        let session = sessions_participants.get(session_id);
+
+        if let Some(session) = session {
+            let account_id = session.get(identifier).cloned();
+
+            drop(sessions_participants);
+            return account_id;
+        }
+
+        None
+    }
+
     // Modified to use validator IDs
     pub fn create_session(&mut self, session_id: SessionId, participants: Vec<TSSParticipant>) {
         let mut sessions_participants = self.sessions_participants.lock().unwrap();
@@ -494,7 +512,7 @@ impl PeerMapper {
         id
     }
 
-    pub fn _get_validator_account_from_id(&mut self, id: u32) -> Option<TSSPublic> {
+    pub fn get_validator_account_from_id(&mut self, id: u32) -> Option<TSSPublic> {
         let validator_ids = self.validator_ids.lock().unwrap();
         let account = validator_ids.iter().find_map(|(key, val)| {
             if *val == id {
@@ -1108,6 +1126,25 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_sign_online_buffer(*session_id) {
+            Err(ECDSAError::SignOnlineMsgHandlerError(error, index)) => {
+                // Report the offender
+                // First we translate the index into an account_id
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                
+                let account_id = peer_mapper.get_validator_account_from_id(index.0.parse::<u32>().unwrap());
+                drop(peer_mapper);
+
+                if let Some(account_id) = account_id {
+                    // Report the offender
+                    let offenders: Vec<[u8; 32]> = vec![account_id.clone()[..].try_into().unwrap()];
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                    }
+                }
+            },
             Err(error) => log::error!(
                 "[TSS] There was an error consuming the sign online buffer {:?}",
                 error
@@ -1137,6 +1174,25 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_sign_buffer(*session_id) {
+            Err(ECDSAError::SignMsgHandlerError(error, index)) => {
+                // Report the offender
+                // First we translate the index into an account_id
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                
+                let account_id = peer_mapper.get_validator_account_from_id(index.0.parse::<u32>().unwrap());
+                drop(peer_mapper);
+
+                if let Some(account_id) = account_id {
+                    // Report the offender
+                    let offenders: Vec<[u8; 32]> = vec![account_id.clone()[..].try_into().unwrap()];
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                    }
+                }
+            },
             Err(error) => log::error!(
                 "[TSS] There was an error consuming the sign buffer {:?}",
                 error
@@ -1168,6 +1224,26 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_keygen_buffer(*session_id) {
+            Err(ECDSAError::KeygenMsgHandlerError(error, index)) => {
+                // Report the offender
+                // First we translate the index into an account_id
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                
+                let account_id = peer_mapper.get_validator_account_from_id(index.0.parse::<u32>().unwrap());
+                drop(peer_mapper);
+
+
+                if let Some(account_id) = account_id {
+                    // Report the offender
+                    let offenders: Vec<[u8; 32]> = vec![account_id.clone()[..].try_into().unwrap()];
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                    }
+                }
+            },
             Err(error) => log::error!(
                 "[TSS] There was an error consuming the keygen buffer {:?}",
                 error
@@ -1197,6 +1273,25 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         index: ECDSAIndexWrapper,
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_reshare_buffer(*session_id) {
+            Err(ECDSAError::ReshareMsgHandlerError(error, index)) => {
+                // Report the offender
+                // First we translate the index into an account_id
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                
+                let account_id = peer_mapper.get_validator_account_from_id(index.0.parse::<u32>().unwrap());
+                drop(peer_mapper);
+
+                if let Some(account_id) = account_id {
+                    // Report the offender
+                    let offenders: Vec<[u8; 32]> = vec![account_id.clone()[..].try_into().unwrap()];
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                    }
+                }
+            },
             Err(error) => log::error!(
                 "[TSS] There was an error consuming the reshare buffer {:?}",
                 error
@@ -1731,10 +1826,33 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     session_id,
                     e
                 );
-                // Optionally handle failure state here, e.g., update session state to Failed
+                // Update session state to Failed
                 let mut session_state_lock = self.dkg_session_states.lock().unwrap();
                 session_state_lock.insert(session_id, DKGSessionState::Failed);
                 drop(session_state_lock);
+                
+                // Report cryptographic failure for slashing - report all participants that submitted round1 packages
+                // since we can't determine which specific participant caused the verification failure
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                let mut offenders = Vec::new();
+                
+                for identifier in round1_packages.keys() {
+                    if let Some(account_id) = peer_mapper.get_account_id_from_identifier(&session_id, identifier) {
+                        if let Ok(account_bytes) = account_id.as_slice().try_into() {
+                            offenders.push(account_bytes);
+                        }
+                    }
+                }
+                drop(peer_mapper);
+                
+                if !offenders.is_empty() {
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for round1 verification failure", session_id);
+                    }
+                }
             }
             Ok((secret, round2_packages)) => {
                 log::info!("[TSS] Round 1 Verification completed. Continuing now with Round 2");
@@ -1883,6 +2001,26 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 e,
                 bytes
             );
+            
+            // Report InvalidCryptographicData offence for the sender
+            let best_hash = self.client.best_hash();
+            // Convert peer id to account_id using the peer_mapper 
+            let account_id = peer_mapper_handle
+                .get_account_id_from_peer_id(&sender);
+
+            if let None = account_id {
+                log::error!("[TSS] Account ID not found for sender {:?}", sender);
+                return Err(SessionManagerError::IdentifierNotFound);
+            }
+
+            let offenders: Vec<[u8; 32]> = vec![account_id.unwrap().as_slice().try_into().unwrap()];
+
+            if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+            } else {
+                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender {:?}", session_id, sender);
+            }
+            
             return Err(SessionManagerError::DeserializationError);
         }
         storage.store_round2_packages(session_id, identifier, &bytes[..]);
@@ -1974,7 +2112,30 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     // Update session state to Failed
                     let mut session_state_lock = self.dkg_session_states.lock().unwrap();
                     session_state_lock.insert(session_id, DKGSessionState::Failed);
-                    drop(session_state_lock); // Release lock
+                    drop(session_state_lock);
+                    
+                    // Report DKG failure - report all participants that submitted round2 packages
+                    // since we can't determine which specific participant caused the verification failure
+                    let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                    let mut offenders = Vec::new();
+                    
+                    for identifier in round2_packages.keys() {
+                        if let Some(account_id) = peer_mapper.get_account_id_from_identifier(&session_id, identifier) {
+                            if let Ok(account_bytes) = account_id.as_slice().try_into() {
+                                offenders.push(account_bytes);
+                            }
+                        }
+                    }
+                    drop(peer_mapper);
+                    
+                    if !offenders.is_empty() {
+                        let best_hash = self.client.best_hash();
+                        if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                            log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                        } else {
+                            log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for DKG part3 failure", session_id);
+                        }
+                    }
                 }
             }
         }
@@ -2428,6 +2589,29 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 "[TSS] There was an error deserializing the Signing Package {:?}",
                 error
             );
+            
+            // Report InvalidCryptographicData offence for the sender
+            let best_hash = self.client.best_hash();
+
+            // Convert peer id to account_id using the peer_mapper
+            let mut peer_mapper_guard = self.peer_mapper.lock().unwrap();
+            let _sender = peer_mapper_guard
+                .get_account_id_from_peer_id(&_sender)
+                .cloned();
+            drop(peer_mapper_guard);
+
+            if let None = _sender {
+                log::error!("[TSS] Account ID not found for sender {:?}", _sender);
+                return Err(SessionManagerError::IdentifierNotFound);
+            } 
+
+            let offenders: Vec<[u8; 32]> = vec![_sender.unwrap().as_slice().try_into().unwrap()];
+            if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+            } else {
+                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} ", session_id);
+            }
+            
             return Err(SessionManagerError::DeserializationError);
         }
 
@@ -2538,6 +2722,26 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 "[TSS] There was an error deserializing the Signature Share {:?}",
                 error
             );
+            
+            // Report InvalidCryptographicData offence for the sender
+            let best_hash = self.client.best_hash();
+
+            // Convert peer id to account_id using the peer_mapper
+            let sender = self.peer_mapper.lock().unwrap()
+                .get_account_id_from_peer_id(&sender).cloned();
+
+            if let None = sender {
+                log::error!("[TSS] Account ID not found for sender {:?}", sender);
+                return Err(SessionManagerError::IdentifierNotFound);
+            }   
+
+            let offenders: Vec<[u8; 32]> = vec![sender.unwrap().as_slice().try_into().unwrap()];
+            if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
+                log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+            } else {
+                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {}", session_id);
+            }
+            
             return Err(SessionManagerError::DeserializationError);
         }
         let mut storage = self.storage.lock().unwrap();
@@ -2632,10 +2836,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             if let Err(error) = signature {
                 log::error!("[TSS] Error aggregating Signature {:?}", error);
 
-                 // Update session state to Round1Completed
+                // Update session state to Failed
                 let mut session_state_lock = self.signing_session_states.lock().unwrap();
                 session_state_lock.insert(session_id, SigningSessionState::Failed);
                 drop(session_state_lock);
+                
+                // Report signing failure - this could be due to invalid signature shares
+                // Let the timeout mechanism handle participant reporting
                 return Err(SessionManagerError::SignatureAggregationError);
             }
 
@@ -2894,7 +3101,30 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             let inactive_participants = self.get_inactive_participants(&session_id);
             if inactive_participants.len() > 0 { 
                 let best_hash = self.client.best_hash();
+                
+                // Report participants using the existing mechanism
                 let _ = self.client.report_participants(best_hash, session_id, inactive_participants.clone());
+                
+                // Determine the offence type based on session state
+                let offence_type = {
+                    let dkg_states = self.dkg_session_states.lock().unwrap();
+                    let signing_states = self.signing_session_states.lock().unwrap();
+                    
+                    if dkg_states.contains_key(&session_id) {
+                        TssOffenceType::DkgNonParticipation
+                    } else if signing_states.contains_key(&session_id) {
+                        TssOffenceType::SigningNonParticipation
+                    } else {
+                        TssOffenceType::UnresponsiveBehavior
+                    }
+                };
+                
+                // Report TSS offence for slashing
+                if let Err(e) = self.client.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
+                    log::error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
+                } else {
+                    log::info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
+                }
             }
 
             // Remove from all session data structures
@@ -3568,6 +3798,13 @@ trait ClientManager<B: BlockT> {
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> Result<(), String>;
+    fn report_tss_offence(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        offence_type: TssOffenceType,
+        offenders: Vec<[u8; 32]>,
+    ) -> Result<(), String>;
 }
 
 impl<B: BlockT, C, TP> ClientManager<B> for ClientWrapper<B, C, TP>
@@ -3613,6 +3850,30 @@ where
             runtime
                 .submit_dkg_result(hash, session_id, aggregated_key)
                 .map_err(|e| format!("Failed to submit DKG result: {:?}", e))
+    }
+
+    fn report_tss_offence(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        offence_type: TssOffenceType,
+        offenders: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
+        let mut runtime = self.client.runtime_api();
+        runtime.register_extension(KeystoreExt(self.keystore.clone()));
+    
+        let otpf = OffchainTransactionPoolFactory::new(self.transaction_pool.clone());
+        runtime.register_extension(otpf.offchain_transaction_pool(self.client.info().best_hash));
+
+        // With the new pallet implementation, report_tss_offence_from_client will handle this
+        // by creating a signed payload for an unsigned transaction
+        let offence_type_encoded = offence_type.encode();
+        
+        let _ = runtime
+            .report_tss_offence(hash, session_id, offence_type_encoded, offenders)
+            .map_err(|e| format!("Failed to report TSS offence: {:?}", e));
+
+        Ok(())
     }
 }
 
