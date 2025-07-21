@@ -2734,7 +2734,6 @@ impl EraPayout<Balance> for UOMIEraPayout {
         let halving_period = 3; // Years before halving
         
         let year_zero: Balance = 4919219238u128.into();
-        let year_zero: Balance = 0u128.into(); // DEBUG
         let base_issuance_per_three_year: Balance = (2682750000u128 * halving_period).into();
         let factor = 2;
 
