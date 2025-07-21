@@ -113,7 +113,7 @@ pub enum TssMessage {
     ECDSAMessageSignOnline(SessionId, String, Vec<u8>),
 
     /// Retry Mechanism
-    ECDSARetryRequest(SessionId, ECDSAPhase, u8, Vec<String>), // session_id, phase, round, list of missing participant indices
+    ECDSARetryRequest(SessionId, ECDSAPhase, u8, Vec<String>),      // session_id, phase, round, list of missing participant indices
     ECDSARetryResponse(SessionId, ECDSAPhase, u8, String, Vec<u8>), // session_id, phase, round, sender_index, resent_data
 }
 
@@ -144,10 +144,10 @@ pub enum SigningSessionState {
     Round1Completed,    // Received enough Round 1 packages to proceed to Round 2
     Round2Initiated,    // Round 2 verification and package generation initiated
     Round2Completed,    // Received enough Round 2 packages to proceed to Round 3 (or finalize DKG)
-    Round3Initiated, // Round 3 initiated (if needed in Frost - check if round 3 is necessary for keygen)
-    Round3Completed, // Round 3 completed
+    Round3Initiated,    // Round 3 initiated (if needed in Frost - check if round 3 is necessary for keygen)
+    Round3Completed,    // Round 3 completed
     SignatureGenerated, // Final Signature key generated
-    Failed,          // Session failed for some reason
+    Failed,             // Session failed for some reason
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -4387,8 +4387,7 @@ where
             local_peer_id.to_bytes(),
             announcement.clone(),
             ClientWrapper::new(Arc::clone(&client), keystore_container.keystore().clone(), transaction_pool.clone()),
-            true, // Enable retry mechanism by default
-
+            false, // Enable retry mechanism by default
         );
         
         // Configure session timeout (default is 1 hour, make it 2 hours for production)
