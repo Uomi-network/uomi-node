@@ -111,9 +111,13 @@ pub enum TssMessage {
     ECDSAMessageSign(SessionId, String, Vec<u8>),
     /// Utils Sign Online
     ECDSAMessageSignOnline(SessionId, String, Vec<u8>),
+
+    /// Retry Mechanism
+    ECDSARetryRequest(SessionId, ECDSAPhase, u8, Vec<String>), // session_id, phase, round, list of missing participant indices
+    ECDSARetryResponse(SessionId, ECDSAPhase, u8, String, Vec<u8>), // session_id, phase, round, sender_index, resent_data
 }
 
-#[derive(Encode, Decode, Debug, Clone)]
+#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ECDSAPhase {
     Key,
     Reshare,
@@ -580,6 +584,22 @@ struct SessionManager<B: BlockT, C: ClientManager<B>>
     active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
     unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
     announcement: Option<TssMessage>,
+    
+    // Retry mechanism fields
+    retry_timeout: u64, // Time to wait before requesting retry (in seconds)
+    max_retry_attempts: u8, // Maximum retry attempts per participant
+    // Track received messages per session/phase/round/participant
+    received_messages: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8, String), std::time::Instant>>>,
+    // Track retry attempts per session/phase/round/participant
+    retry_attempts: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8, String), u8>>>,
+    // Track when retry requests were sent per session/phase/round
+    retry_request_timestamps: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8), std::time::Instant>>>,
+    // Track round start timestamps for timeout enforcement
+    round_timestamps: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8), std::time::Instant>>>,
+    // Store sent messages for retry responses per session/phase/round/participant
+    sent_messages: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8, String), Vec<u8>>>>,
+    // Enable/disable retry mechanism
+    retry_enabled: bool,
 }
 
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
@@ -599,6 +619,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         local_peer_id: TSSPeerId,
         announcment: Option<TssMessage>,
         client: C,
+        retry_enabled: bool,
     ) -> Self {
         Self {
             storage,
@@ -623,6 +644,16 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             active_participants: Arc::new(Mutex::new(empty_hash_map())),
             unknown_peer_queue: Arc::new(Mutex::new(empty_hash_map())),
             announcement: announcment,
+            
+            // Initialize retry mechanism fields
+            retry_timeout: 300, // 5 minutes before requesting retry
+            max_retry_attempts: 3, // Maximum 3 retry attempts per participant
+            received_messages: Arc::new(Mutex::new(HashMap::new())),
+            retry_attempts: Arc::new(Mutex::new(HashMap::new())),
+            retry_request_timestamps: Arc::new(Mutex::new(HashMap::new())),
+            round_timestamps: Arc::new(Mutex::new(HashMap::new())),
+            sent_messages: Arc::new(Mutex::new(HashMap::new())),
+            retry_enabled,
         }
     }
     
@@ -719,6 +750,229 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         }
         inactive_participants
 
+    }
+
+    /// Track that we sent a message for a specific session/phase/round/participant
+    fn track_sent_message(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, participant_index: String, message_data: Vec<u8>) {
+        let key = (session_id, phase, round, participant_index);
+        let mut sent_messages = self.sent_messages.lock().unwrap();
+        sent_messages.insert(key, message_data);
+    }
+
+    /// Track that we received a message from a specific session/phase/round/participant
+    fn track_received_message(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, participant_index: String) {
+        let key = (session_id, phase, round, participant_index);
+        let mut received_messages = self.received_messages.lock().unwrap();
+        received_messages.insert(key, std::time::Instant::now());
+    }
+
+    /// Track when a round starts for timeout enforcement
+    fn track_round_start(&self, session_id: SessionId, phase: ECDSAPhase, round: u8) {
+        let key = (session_id, phase, round);
+        let mut round_timestamps = self.round_timestamps.lock().unwrap();
+        round_timestamps.entry(key).or_insert_with(std::time::Instant::now);
+    }
+
+    /// Get expected participants from session data (all participants should participate in DKG)
+    fn get_expected_participants(&self, session_id: SessionId) -> Vec<String> {
+        let mut peer_mapper = self.peer_mapper.lock().unwrap();
+        let session_participants = peer_mapper.sessions_participants_u16.lock().unwrap();
+        
+        if let Some(participants) = session_participants.get(&session_id) {
+            participants.keys().map(|id| id.to_string()).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Check for missing messages and trigger retry requests if needed
+    fn check_and_request_retries(&self, session_id: SessionId, phase: ECDSAPhase, round: u8) {
+        // Check if retry mechanism is enabled
+        if !self.retry_enabled {
+            return;
+        }
+
+        // Get all expected participants from session data
+        let expected_participants = self.get_expected_participants(session_id);
+        
+        if expected_participants.is_empty() {
+            return; // No participants found for this session
+        }
+
+        // Check which participants haven't sent messages yet
+        let mut missing_participants = Vec::new();
+        let received_messages = self.received_messages.lock().unwrap();
+        
+        for participant in expected_participants.iter() {
+            let message_key = (session_id, phase.clone(), round, participant.clone());
+            if !received_messages.contains_key(&message_key) {
+                missing_participants.push(participant.clone());
+            }
+        }
+        drop(received_messages);
+
+        if missing_participants.is_empty() {
+            return; // All participants have sent their messages
+        }
+
+        // Check if enough time has passed since round start to trigger retry
+        let should_retry = {
+            let round_timestamps = self.round_timestamps.lock().unwrap();
+            let round_key = (session_id, phase.clone(), round);
+            if let Some(round_start) = round_timestamps.get(&round_key) {
+                round_start.elapsed().as_secs() >= self.retry_timeout
+            } else {
+                false // Round hasn't started or timestamp not tracked
+            }
+        };
+
+        if !should_retry {
+            return;
+        }
+
+        // Check if we already sent a retry request recently for this session/phase/round
+        let should_send_retry = {
+            let retry_timestamps = self.retry_request_timestamps.lock().unwrap();
+            let key = (session_id, phase.clone(), round);
+            if let Some(last_retry) = retry_timestamps.get(&key) {
+                // Don't spam retry requests - wait at least half the retry timeout between requests
+                last_retry.elapsed().as_secs() >= (self.retry_timeout / 2)
+            } else {
+                true // Never sent a retry request for this session/phase/round
+            }
+        };
+
+        if should_send_retry {
+            log::info!("[TSS] Requesting retries for session {} phase {:?} round {} from {} participants: {:?}", 
+                session_id, phase, round, missing_participants.len(), missing_participants);
+            
+            // Send retry request
+            let retry_message = TssMessage::ECDSARetryRequest(session_id, phase.clone(), round, missing_participants);
+            
+            // Broadcast retry request to all participants
+            if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((
+                PeerId::from_bytes(&self.local_peer_id[..]).unwrap(), 
+                retry_message
+            )) {
+                log::error!("[TSS] Failed to send retry request: {:?}", e);
+            } else {
+                // Track that we sent this retry request
+                let mut retry_timestamps = self.retry_request_timestamps.lock().unwrap();
+                retry_timestamps.insert((session_id, phase, round), std::time::Instant::now());
+            }
+        }
+    }
+
+    /// Handle incoming retry request by resending our data if available
+    fn handle_retry_request(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, missing_participants: Vec<String>) {
+        // Check if we are one of the participants being asked to retry
+        let our_index = {
+            let mut peer_mapper = self.peer_mapper.lock().unwrap();
+            peer_mapper.get_id_from_peer_id(&session_id, &PeerId::from_bytes(&self.local_peer_id[..]).unwrap())
+                .map(|id| id.to_string())
+        };
+
+        let Some(our_index) = our_index else {
+            return; // We're not a participant in this session
+        };
+
+        if !missing_participants.contains(&our_index) {
+            return; // We're not being asked to retry
+        }
+
+        // Check retry limits
+        let retry_key = (session_id, phase.clone(), round, our_index.clone());
+        let retry_count = {
+            let mut retry_attempts = self.retry_attempts.lock().unwrap();
+            let count = retry_attempts.get(&retry_key).copied().unwrap_or(0);
+            if count >= self.max_retry_attempts {
+                log::warn!("[TSS] Maximum retry attempts ({}) reached for session {} phase {:?} round {}", 
+                    self.max_retry_attempts, session_id, phase, round);
+                return;
+            }
+            retry_attempts.insert(retry_key.clone(), count + 1);
+            count + 1
+        };
+
+        log::info!("[TSS] Handling retry request for session {} phase {:?} round {} (attempt {})", 
+            session_id, phase, round, retry_count);
+
+        // Look up our stored message for this session/phase/round
+        let message_key = (session_id, phase.clone(), round, our_index.clone());
+        let stored_message = {
+            let sent_messages = self.sent_messages.lock().unwrap();
+            sent_messages.get(&message_key).cloned()
+        };
+
+        if let Some(message_data) = stored_message {
+            // Resend our message
+            let retry_response = TssMessage::ECDSARetryResponse(session_id, phase.clone(), round, our_index, message_data);
+            
+            if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((
+                PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
+                retry_response
+            )) {
+                log::error!("[TSS] Failed to send retry response: {:?}", e);
+            } else {
+                log::info!("[TSS] Sent retry response for session {} phase {:?} round {}", session_id, phase, round);
+            }
+        } else {
+            log::warn!("[TSS] No stored message found for retry request - session {} phase {:?} round {}", 
+                session_id, phase, round);
+        }
+    }
+
+    /// Handle incoming retry response by processing the resent data
+    fn handle_retry_response(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, sender_index: String, message_data: Vec<u8>) {
+        log::info!("[TSS] Received retry response for session {} phase {:?} round {} from participant {}", 
+            session_id, phase, round, sender_index);
+
+        // Mark that we received a message from this participant
+        self.track_received_message(session_id, phase.clone(), round, sender_index.clone());
+
+        // Process the message data based on the phase
+        match phase {
+            ECDSAPhase::Key => {
+                // Re-inject the keygen message into the system
+                let message = TssMessage::ECDSAMessageKeygen(session_id, sender_index, message_data);
+                if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((
+                    PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
+                    message
+                )) {
+                    log::error!("[TSS] Failed to re-inject keygen message: {:?}", e);
+                }
+            }
+            ECDSAPhase::Reshare => {
+                // Re-inject the reshare message into the system  
+                let message = TssMessage::ECDSAMessageReshare(session_id, sender_index, message_data);
+                if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((
+                    PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
+                    message
+                )) {
+                    log::error!("[TSS] Failed to re-inject reshare message: {:?}", e);
+                }
+            }
+            ECDSAPhase::Sign => {
+                // Re-inject the sign message into the system
+                let message = TssMessage::ECDSAMessageSign(session_id, sender_index, message_data);
+                if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((
+                    PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
+                    message
+                )) {
+                    log::error!("[TSS] Failed to re-inject sign message: {:?}", e);
+                }
+            }
+            ECDSAPhase::SignOnline => {
+                // Re-inject the sign online message into the system
+                let message = TssMessage::ECDSAMessageSignOnline(session_id, sender_index, message_data);
+                if let Err(e) = self.session_manager_to_gossip_tx.unbounded_send((
+                    PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
+                    message
+                )) {
+                    log::error!("[TSS] Failed to re-inject sign online message: {:?}", e);
+                }
+            }
+        }
     }
 
     /// Add session data with validation
@@ -1034,6 +1288,17 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 //  We use this as utils enum values only in for inner communication. They are handled in the GossipHandler
             }
 
+            TssMessage::ECDSARetryRequest(session_id, phase, round, missing_participants) => {
+                log::info!("[TSS] Received retry request for session {} phase {:?} round {}", session_id, phase, round);
+                self.handle_retry_request(*session_id, phase.clone(), *round, missing_participants.clone());
+            }
+
+            TssMessage::ECDSARetryResponse(session_id, phase, round, sender_index, message_data) => {
+                log::info!("[TSS] Received retry response for session {} phase {:?} round {} from {}", 
+                    session_id, phase, round, sender_index);
+                self.handle_retry_response(*session_id, phase.clone(), *round, sender_index.clone(), message_data.clone());
+            }
+
             TssMessage::ECDSAMessageKeygen(session_id, _index, msg)
             | TssMessage::ECDSAMessageReshare(session_id, _index, msg)
             | TssMessage::ECDSAMessageSign(session_id, _index, msg)
@@ -1053,6 +1318,23 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 if !self.is_authorized_for_session(session_id) {
                     log::warn!("[TSS] Node not authorized for session {}", session_id);
                     return;
+                }
+
+                // Track round start and received message for retry mechanism (if enabled)
+                if self.retry_enabled {
+                    let (phase, participant_index) = match &message {
+                        TssMessage::ECDSAMessageKeygen(_, index, _) => (ECDSAPhase::Key, index.clone()),
+                        TssMessage::ECDSAMessageReshare(_, index, _) => (ECDSAPhase::Reshare, index.clone()),
+                        TssMessage::ECDSAMessageSign(_, index, _) => (ECDSAPhase::Sign, index.clone()),
+                        TssMessage::ECDSAMessageSignOnline(_, index, _) => (ECDSAPhase::SignOnline, index.clone()),
+                        _ => unreachable!(), // We're in the ECDSA message block
+                    };
+                    
+                    // For now, assume round 0 - this should be extracted from message content in a real implementation
+                    let round = 0u8; // TODO: Extract actual round from message content when available
+                    
+                    self.track_round_start(*session_id, phase.clone(), round);
+                    self.track_received_message(*session_id, phase, round, participant_index);
                 }
 
                 // This means we received a message through gossip. This can be handled in multiple ways depending on multiple possibilities
@@ -1105,6 +1387,19 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     return;
                 } else{
                     self.add_active_participant(session_id, &sender_peer_id);
+                    
+                    // Track that we received a message from this participant
+                    let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                    if let Some(sender_index) = peer_mapper.get_id_from_peer_id(session_id, &sender_peer_id) {
+                        // For simplicity, assume round 0 for now - in practice you'd need to determine the actual round
+                        // from the message content or maintain round state
+                        let round = 0;
+                        self.track_received_message(*session_id, phase.clone(), round, sender_index.to_string());
+                        
+                        // Trigger retry check for this session/phase/round
+                        self.check_and_request_retries(*session_id, phase.clone(), round);
+                    }
+                    drop(peer_mapper);
                 }
                 log::debug!("[TSS] calling handle_ecdsa_sending_messages()");
 
@@ -2881,13 +3176,15 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
         log::info!("[TSS] My Id = {:?}", my_id.unwrap() + 1);
 
+        let participant_indices: Vec<String> = (1..participants.len() + 1)
+            .into_iter()
+            .map(|el| el.to_string())
+            .collect();
+
         let keygen = handler.add_keygen(
             id,
             (my_id.unwrap() + 1).to_string(),
-            (1..participants.len() + 1)
-                .into_iter()
-                .map(|el| el.to_string())
-                .collect::<Vec<String>>(),
+            participant_indices,
             t.into(),
             n.into(),
         );
@@ -3078,6 +3375,34 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         drop(handler);
     }
 
+    /// Configure retry mechanism parameters
+    fn configure_retry_mechanism(&mut self, retry_timeout_secs: u64, max_retry_attempts: u8) {
+        self.retry_timeout = retry_timeout_secs;
+        self.max_retry_attempts = max_retry_attempts;
+        log::info!("[TSS] Retry mechanism configured: timeout={}s, max_attempts={}", 
+            retry_timeout_secs, max_retry_attempts);
+    }
+
+    /// Check all active sessions for missing messages and trigger retry requests
+    fn check_all_sessions_for_retries(&self) {
+        // Get all active sessions from session data
+        let active_sessions: Vec<SessionId> = {
+            let sessions_data = self.sessions_data.lock().unwrap();
+            sessions_data.keys().cloned().collect()
+        };
+        
+        for session_id in active_sessions {
+            // Only check sessions that haven't timed out yet
+            if !self.is_session_timed_out(&session_id) {
+                // Check all ECDSA phases and assume round 0 for simplicity
+                // In practice, you'd track the current round for each phase
+                for phase in [ECDSAPhase::Key, ECDSAPhase::Reshare, ECDSAPhase::Sign, ECDSAPhase::SignOnline] {
+                    self.check_and_request_retries(session_id, phase, 0);
+                }
+            }
+        }
+    }
+
     /// Cleanup expired sessions
     fn cleanup_expired_sessions(&mut self) {
         let now = std::time::Instant::now();
@@ -3166,11 +3491,19 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         // Set up a timer for periodic session cleanup
         let mut cleanup_interval = interval(Duration::from_secs(60));
         
+        // Set up a timer for periodic retry checks
+        let mut retry_check_interval = interval(Duration::from_secs(30));
+        
         loop {
             select! {
                 // Run periodic cleanup of expired sessions
                 _ = cleanup_interval.next().fuse() => {
                     self.cleanup_expired_sessions();
+                },
+                
+                // Run periodic retry checks for all active sessions
+                _ = retry_check_interval.next().fuse() => {
+                    self.check_all_sessions_for_retries();
                 },
                 
                 // Process messages from the gossip network
@@ -3719,6 +4052,16 @@ fn process_session_manager_message<T: TssMessageHandler + ECDSAMessageRouter>(
             handler.broadcast_message(message.clone())
         }
         
+        TssMessage::ECDSARetryRequest(_, _, _, _) => {
+            // Broadcast retry requests to all participants
+            handler.broadcast_message(message)
+        }
+        
+        TssMessage::ECDSARetryResponse(_, _, _, _, _) => {
+            // Broadcast retry responses to all participants 
+            handler.broadcast_message(message)
+        }
+        
         _ => Ok(())
     }
 }
@@ -4044,6 +4387,7 @@ where
             local_peer_id.to_bytes(),
             announcement.clone(),
             ClientWrapper::new(Arc::clone(&client), keystore_container.keystore().clone(), transaction_pool.clone()),
+            true, // Enable retry mechanism by default
 
         );
         
