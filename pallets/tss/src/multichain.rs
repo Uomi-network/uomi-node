@@ -481,6 +481,45 @@ impl MultiChainRpcClient {
         
         Ok(gas_estimate)
     }
+
+    /// Get account balance for a given address on the specified chain
+    pub fn get_account_balance(
+        chain_config: &ChainConfig,
+        address: &str,
+    ) -> Result<u64, &'static str> {
+        let request = JsonRpcRequest::new(
+            "eth_getBalance", 
+            vec![String::from(address), String::from("latest")]
+        );
+        let request_body = miniserde::json::to_string(&request);
+        
+        log::info!(
+            "Getting balance for address {} on chain {}", 
+            address,
+            String::from_utf8_lossy(&chain_config.name)
+        );
+        
+        // Make actual RPC call
+        let response = Self::make_rpc_call(&request_body, chain_config)?;
+        
+        // Parse the JSON-RPC response
+        let json_response: JsonRpcResponse = miniserde::json::from_str(&response)
+            .map_err(|_| "Failed to parse JSON-RPC response")?;
+        
+        if let Some(error) = json_response.error {
+            log::error!("RPC error: {} (code: {})", error.message, error.code);
+            return Err("RPC call failed");
+        }
+        
+        let result = json_response.result.ok_or("No result in response")?;
+        
+        // Parse hex balance
+        let balance_str = result.strip_prefix("0x").unwrap_or(&result);
+        let balance = u64::from_str_radix(balance_str, 16)
+            .map_err(|_| "Failed to parse balance")?;
+        
+        Ok(balance)
+    }
 }
 
 /// Transaction builder for different chains
@@ -605,3 +644,4 @@ impl TransactionBuilder {
         Ok(H160::from(address_bytes))
     }
 }
+

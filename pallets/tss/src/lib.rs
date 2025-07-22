@@ -402,6 +402,12 @@ pub mod pallet {
     pub type FsaTransactionRequests<T: Config> =
     StorageMap<_, Blake2_128Concat, NftId, (u32, BoundedVec<u8, crate::types::MaxMessageSize>), OptionQuery>;
 
+
+    /// Counter for generating unique request IDs
+    #[pallet::storage]
+    #[pallet::getter(fn next_request_id)]
+    pub type NextRequestId<T: Config> = StorageValue<_, u32, ValueQuery>;
+
     /// Storage for tracking transaction nonces per chain per agent
     /// Maps (agent_nft_id, chain_id) -> nonce
     #[pallet::storage]
@@ -433,6 +439,8 @@ pub mod pallet {
     MultiChainTransactionConfirmed(u32, Vec<u8>), // Chain ID, Transaction hash
     MultiChainTransactionFailed(u32, Vec<u8>),    // Chain ID, Transaction hash
     ChainConfigurationUpdated(u32),               // Chain ID updated
+    /// Transaction request submitted to FSA
+    TransactionRequestSubmitted(NftId, u32),      // NFT ID, Chain ID
     }
 
     #[pallet::error]
