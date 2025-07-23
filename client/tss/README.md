@@ -5,33 +5,85 @@ This document provides a comprehensive overview of the UOMI blockchain's Thresho
 ## Table of Contents
 
 1.  [Introduction](#introduction)
-2.  [Design Goals and Challenges](#design-goals-and-challenges)
-3.  [Architecture Overview](#architecture-overview)
-4.  [Key Components](#key-components)
+2.  [Prerequisites](#prerequisites)
+3.  [Quick Start](#quick-start)
+4.  [Design Goals and Challenges](#design-goals-and-challenges)
+5.  [Architecture Overview](#architecture-overview)
+6.  [Key Components](#key-components)
     *   [4.1 Gossip Network Integration](#41-gossip-network-integration)
-    *   [4.2 TSS Message Handling](#42-tss-message-handling)
-    *   [4.3 Session Management](#43-session-management)
-    *   [4.4 Runtime Event Handling](#44-runtime-event-handling)
-    *   [4.5 Peer Mapping](#45-peer-mapping)
-    *   [4.6 Data Storage](#46-data-storage)
-    *   [4.7 FROST DKG Round 1](#47-frost-dkg-round-1)
-    *   [4.8 FROST DKG Round 2](#48-frost-dkg-round-2)
-    *   [4.9 FROST DKG Finalization (Round 3)](#49-frost-dkg-finalization-round-3)
-    *   [4.10 FROST Signing Commitment Generation](#410-frost-signing-commitment-generation)
-    *   [4.11 FROST Signing Package Creation](#411-frost-signing-package-creation)
-    *   [4.12 FROST Signature Share Generation](#412-frost-signature-share-generation)
-    *   [4.13 FROST Signature Aggregation](#413-frost-signature-aggregation)
-    *   [4.14 ECDSA Key Generation and Signing](#414-ecdsa-key-generation-and-signing)
-    *   [4.15 Message Buffering](#415-message-buffering)
-5.  [Concurrency Model](#concurrency-model)
-6.  [Error Handling](#error-handling)
-7.  [Future Improvements](#future-improvements)
+    *   [6.2 TSS Message Handling](#62-tss-message-handling)
+    *   [6.3 Session Management](#63-session-management)
+    *   [6.4 Runtime Event Handling](#64-runtime-event-handling)
+    *   [6.5 Peer Mapping](#65-peer-mapping)
+    *   [6.6 Data Storage](#66-data-storage)
+    *   [6.7 FROST DKG Round 1](#67-frost-dkg-round-1)
+    *   [6.8 FROST DKG Round 2](#68-frost-dkg-round-2)
+    *   [6.9 FROST DKG Finalization (Round 3)](#69-frost-dkg-finalization-round-3)
+    *   [6.10 FROST Signing Commitment Generation](#610-frost-signing-commitment-generation)
+    *   [6.11 FROST Signing Package Creation](#611-frost-signing-package-creation)
+    *   [6.12 FROST Signature Share Generation](#612-frost-signature-share-generation)
+    *   [6.13 FROST Signature Aggregation](#613-frost-signature-aggregation)
+    *   [6.14 ECDSA Key Generation and Signing](#614-ecdsa-key-generation-and-signing)
+    *   [6.15 Message Buffering](#615-message-buffering)
+7.  [Security Considerations](#security-considerations)
+8.  [Protocol Specifications](#protocol-specifications)
+9.  [Concurrency Model](#concurrency-model)
+10. [Error Handling](#error-handling)
+11. [Testing](#testing)
+12. [API Reference](#api-reference)
+13. [Troubleshooting](#troubleshooting)
+14. [Future Improvements](#future-improvements)
 
 ## 1. Introduction <a name="introduction"></a>
 
 This library provides the off-chain components necessary for performing threshold cryptography on the UOMI blockchain.  It enables a group of validators to collaboratively generate keys and sign messages without any single validator having complete control over the private key. This enhances security and resilience. The library is designed to be integrated with a Substrate-based blockchain, interacting with an on-chain TSS pallet.
 
-## 2. Design Goals and Challenges <a name="design-goals-and-challenges"></a>
+## 2. Prerequisites <a name="prerequisites"></a>
+
+Before using this TSS implementation, ensure you have:
+
+*   **Rust Environment**: Rust 1.70+ with Cargo
+*   **Substrate Framework**: A Substrate-based blockchain with the `pallet-tss` integrated
+*   **Network Configuration**: Proper network setup for peer-to-peer communication
+*   **Dependencies**: All required crates as specified in `Cargo.toml`
+
+### Required Crates
+
+*   `frost-ed25519`: For FROST protocol implementation
+*   `multi-party-ecdsa`: For ECDSA threshold signatures
+*   `sc-network-gossip`: For peer-to-peer messaging
+*   `parity-scale-codec`: For data serialization
+*   `substrate-primitives`: For Substrate integration
+
+## 3. Quick Start <a name="quick-start"></a>
+
+### Basic Setup
+
+1. **Initialize the TSS components**:
+   ```rust
+   // Set up gossip network
+   let (gossip_engine, gossip_handler) = setup_gossip(network_service)?;
+   
+   // Create session manager
+   let session_manager = SessionManager::new(storage, peer_mapper)?;
+   
+   // Start runtime event handler
+   let runtime_handler = RuntimeEventHandler::new(blockchain_events)?;
+   ```
+
+2. **Start a DKG session**:
+   ```rust
+   // This is typically triggered by on-chain events
+   session_manager.dkg_handle_session_created(session_id, participants)?;
+   ```
+
+3. **Perform threshold signing**:
+   ```rust
+   // Create signing session
+   session_manager.signing_handle_session_created(session_id, message, signers)?;
+   ```
+
+## 4. Design Goals and Challenges <a name="design-goals-and-challenges"></a>
 
 **Design Goals:**
 
@@ -52,7 +104,7 @@ This library provides the off-chain components necessary for performing threshol
 | **Integration with Substrate Runtime Events** | `RuntimeEventHandler` listens for on-chain events (using `BlockchainEvents`) and translates them into internal messages for the `SessionManager`. This ensures the off-chain worker stays synchronized with the on-chain state.                                                                 |
 | **Serialization and Deserialization**          |  Uses `parity-scale-codec` for consistent and efficient serialization/deserialization of messages and data structures. This is crucial for network communication and data storage.                                                                                                                 |
 
-## 3. Architecture Overview <a name="architecture-overview"></a>
+## 5. Architecture Overview <a name="architecture-overview"></a>
 
 The architecture consists of several key components that interact to provide the TSS functionality:
 
@@ -93,9 +145,9 @@ The architecture consists of several key components that interact to provide the
 *   **ECDSAManager:** Handles the multi-party ECDSA key generation and signing processes.
 *   **Substrate Node:** The blockchain node, including the `pallet_tss`, which manages TSS sessions on-chain.
 
-## 4. Key Components <a name="key-components"></a>
+## 6. Key Components <a name="key-components"></a>
 
-### 4.1 Gossip Network Integration <a name="41-gossip-network-integration"></a>
+### 6.1 Gossip Network Integration <a name="61-gossip-network-integration"></a>
 
 *   **Purpose:** Provides the underlying peer-to-peer communication layer.
 *   **Key Crates:** `sc-network`, `sc-network-gossip`.
@@ -112,14 +164,14 @@ The architecture consists of several key components that interact to provide the
     *   `GossipEngine::send_message()`: Sends a direct message.
     *   `TssValidator::new_peer()`: Handles new peer connections (sends an announcement).
     *   `TssValidator::validate()`:  Validates incoming messages.
-* **Workflow:**
+*   **Workflow:**
     1.  `setup_gossip()` is called during node startup to create the `GossipEngine` and `GossipHandler`.
     2.  The `GossipHandler` listens for incoming messages using a `Receiver<TopicNotification>`.
     3.  When a message arrives, the `TssValidator` checks its validity.
     4.  Valid messages are passed to the `SessionManager` for processing.
     5.  The `GossipHandler` also handles sending messages (broadcast and direct) initiated by the `SessionManager`.
 
-### 4.2 TSS Message Handling <a name="42-tss-message-handling"></a>
+### 6.2 TSS Message Handling <a name="62-tss-message-handling"></a>
 
 *   **Purpose:** Defines the structure and types of messages exchanged between TSS nodes.
 *   **Key Enums:**
@@ -134,7 +186,7 @@ The architecture consists of several key components that interact to provide the
     3.  The `GossipHandler` receives messages and deserializes them using `Decode`.
     4.  The `SessionManager::handle_gossip_message()` function uses pattern matching (`match`) to handle different `TssMessage` variants.
 
-### 4.3 Session Management <a name="43-session-management"></a>
+### 6.3 Session Management <a name="63-session-management"></a>
 
 *   **Purpose:** Coordinates TSS operations, tracks session states, manages participants, and handles timeouts.
 *   **Key Structs:**
@@ -160,7 +212,7 @@ The architecture consists of several key components that interact to provide the
     6.  It uses the `PeerMapper` to resolve peer IDs and account IDs.
     7.  It interacts with the `ECDSAManager` to handle ECDSA operations.
 
-### 4.4 Runtime Event Handling <a name="44-runtime-event-handling"></a>
+### 6.4 Runtime Event Handling <a name="64-runtime-event-handling"></a>
 
 *   **Purpose:** Listens for events from the Substrate runtime and notifies the `SessionManager`.
 *   **Key Struct:** `RuntimeEventHandler`.
@@ -173,7 +225,7 @@ The architecture consists of several key components that interact to provide the
     2.  It filters these notifications to identify `TssEvent`s from the `pallet_tss`.
     3.  When a relevant event (e.g., `DKGSessionCreated`, `SigningSessionCreated`) is detected, it constructs a `TSSRuntimeEvent` and sends it to the `SessionManager`.
 
-### 4.5 Peer Mapping <a name="45-peer-mapping"></a>
+### 6.5 Peer Mapping <a name="65-peer-mapping"></a>
 
 *   **Purpose:** Maintains mappings between `PeerId`, `TSSPublic`, and `Identifier`.
 *   **Key Struct:** `PeerMapper`.
@@ -191,7 +243,7 @@ The architecture consists of several key components that interact to provide the
     3.  When a new session is created, `PeerMapper::create_session()` is called to store the mappings between participant identifiers and their public keys.
     4.  The `SessionManager` uses the `PeerMapper`'s lookup functions to route messages to the correct participants.
 
-### 4.6 Data Storage <a name="46-data-storage"></a>
+### 6.6 Data Storage <a name="66-data-storage"></a>
 
 *   **Purpose:** Provides an abstraction for storing and retrieving data related to TSS operations.
 *   **Key Trait:** `Storage`.
@@ -207,7 +259,7 @@ The architecture consists of several key components that interact to provide the
     1.  The `SessionManager` uses the `Storage` trait to interact with the chosen storage implementation (either `MemoryStorage` or `FileStorage`).
     2.  Data is stored and retrieved using the `store_data()` and `read_data()` methods, along with the `StorageType` enum to specify the data type.
 
-### 4.7 FROST DKG Round 1 <a name="47-frost-dkg-round-1"></a>
+### 6.7 FROST DKG Round 1 <a name="67-frost-dkg-round-1"></a>
 
 *   **Purpose:** Implements the first round of the FROST DKG protocol.
 *   **Key File:** `dkground1.rs`.
@@ -218,7 +270,7 @@ The architecture consists of several key components that interact to provide the
     3.  The public commitment is broadcast to all other participants.
     4.  The `SessionManager::dkg_handle_round1_message()` function handles incoming round 1 packages from other participants.
 
-### 4.8 FROST DKG Round 2 <a name="48-frost-dkg-round-2"></a>
+### 6.8 FROST DKG Round 2 <a name="68-frost-dkg-round-2"></a>
 
 *   **Purpose:** Implements the second round of the FROST DKG protocol.
 *   **Key File:** `dkground2.rs`.
@@ -228,7 +280,7 @@ The architecture consists of several key components that interact to provide the
     2.  `round2_verify_round1_participants()` receives the public commitments from all other participants, verifies them, and generates a round 2 package to send to each participant.
     3.  `SessionManager::dkg_handle_round2_message()` handles incoming round 2 packages.
 
-### 4.9 FROST DKG Finalization (Round 3) <a name="49-frost-dkg-finalization-round-3"></a>
+### 6.9 FROST DKG Finalization (Round 3) <a name="69-frost-dkg-finalization-round-3"></a>
 
 *   **Purpose:** Completes the DKG process.
 *   **Key Function:** `dkg::part3` (from `frost-ed25519`).
@@ -236,7 +288,7 @@ The architecture consists of several key components that interact to provide the
     1.  `SessionManager::dkg_verify_and_complete()` calls `dkg::part3` to finalize the DKG.
     2.  `dkg::part3` combines the round 2 packages to compute the shared secret key and the public key package.
 
-### 4.10 FROST Signing Commitment Generation <a name="410-frost-signing-commitment-generation"></a>
+### 6.10 FROST Signing Commitment Generation <a name="610-frost-signing-commitment-generation"></a>
 
 *   **Purpose:** Generates signing nonces and commitments.
 *   **Key File:** `signlib.rs`.
@@ -246,7 +298,7 @@ The architecture consists of several key components that interact to provide the
     2.  `generate_signing_commitments_and_nonces()` uses the `frost-ed25519` crate to generate a signing nonce and a corresponding commitment.
     3.  The commitments are shared with the coordinator (or all participants).
 
-### 4.11 FROST Signing Package Creation <a name="411-frost-signing-package-creation"></a>
+### 6.11 FROST Signing Package Creation <a name="611-frost-signing-package-creation"></a>
 
 *   **Purpose:** Creates the signing package.
 *   **Key File:** `signlib.rs`.
@@ -255,7 +307,7 @@ The architecture consists of several key components that interact to provide the
     1.  `SessionManager::signing_handle_verification_to_complete_round1()` calls `get_signing_package()`.
     2.  `get_signing_package()` creates a `SigningPackage` containing the message to be signed and the collected commitments.
 
-### 4.12 FROST Signature Share Generation <a name="412-frost-signature-share-generation"></a>
+### 6.12 FROST Signature Share Generation <a name="612-frost-signature-share-generation"></a>
 
 *   **Purpose:** Generates individual signature shares.
 *   **Key Function:** `frost_round2_sign` (from `frost-ed25519`).
@@ -263,7 +315,7 @@ The architecture consists of several key components that interact to provide the
     1.  `SessionManager::signing_handle_signing_package()` calls `frost_round2_sign`.
     2.  `frost_round2_sign` computes a signature share using the signing package, the participant's secret nonce, and their secret key share.
 
-### 4.13 FROST Signature Aggregation <a name="413-frost-signature-aggregation"></a>
+### 6.13 FROST Signature Aggregation <a name="613-frost-signature-aggregation"></a>
 
 *   **Purpose:** Aggregates signature shares to produce the final signature.
 *   **Key Function:** `aggregate` (from `frost-ed25519`).
@@ -271,7 +323,7 @@ The architecture consists of several key components that interact to provide the
     1.  `SessionManager::signing_handle_signature_share()` calls `aggregate`.
     2.  `aggregate` combines the signature shares to produce the final, valid FROST signature.
 
-### 4.14 ECDSA Key Generation and Signing <a name="414-ecdsa-key-generation-and-signing"></a>
+### 6.14 ECDSA Key Generation and Signing <a name="614-ecdsa-key-generation-and-signing"></a>
 
 *   **Purpose:** Implements ECDSA key generation and signing using the `multi-party-ecdsa` crate.
 *   **Key Struct:** `ECDSAManager`.
@@ -288,7 +340,7 @@ The architecture consists of several key components that interact to provide the
     3.  The `ECDSAManager` uses the `multi-party-ecdsa` crate to perform the cryptographic operations.
     4.  The `ECDSAManager` also handles buffering messages if they arrive out of order.
 
-### 4.15 Message Buffering <a name="415-message-buffering"></a>
+### 6.15 Message Buffering <a name="615-message-buffering"></a>
 
 *   **Purpose:** Handles messages that arrive out of order.
 *   **Key Data Structure:** `buffer` (within `SessionManager`): A `HashMap` that stores buffered messages.
@@ -299,7 +351,47 @@ The architecture consists of several key components that interact to provide the
     1.  If a message arrives for a session that doesn't exist or is not in the correct state, it's added to the `buffer`.
     2.  When the session is created or reaches the appropriate state, the buffered messages are processed.
 
-## 5. Concurrency Model <a name="concurrency-model"></a>
+## 7. Security Considerations <a name="security-considerations"></a>
+
+### 7.1 Cryptographic Security
+
+*   **Key Security**: Private key shares are never reconstructed in a single location
+*   **Forward Secrecy**: Session nonces are generated fresh for each signing operation
+*   **Replay Protection**: Messages include session identifiers and round numbers to prevent replay attacks
+
+### 7.2 Network Security
+
+*   **Message Validation**: All incoming messages are validated before processing
+*   **Peer Authentication**: Peers are authenticated using their public keys
+*   **DoS Protection**: Session timeouts prevent resource exhaustion attacks
+
+### 7.3 Implementation Security
+
+*   **Memory Safety**: Use of Rust's memory safety guarantees
+*   **Constant-Time Operations**: Cryptographic operations are performed in constant time where possible
+*   **Secure Randomness**: All random values are generated using cryptographically secure random number generators
+
+## 8. Protocol Specifications <a name="protocol-specifications"></a>
+
+### 8.1 FROST Protocol
+
+The implementation follows the FROST (Flexible Round-Optimized Schnorr Threshold) specification:
+
+*   **DKG Phase**: 3-round distributed key generation
+*   **Signing Phase**: 2-round threshold signing
+*   **Curve**: Ed25519 elliptic curve
+*   **Hash Function**: SHA-512 for transcript generation
+
+### 8.2 ECDSA Protocol
+
+The ECDSA implementation is based on the GG20/DMZ21 protocols:
+
+*   **Key Generation**: Multi-round key generation with proofs
+*   **Signing**: Two-phase signing (offline/online)
+*   **Curve**: secp256k1 (configurable)
+*   **Security**: Malicious adversary model
+
+## 9. Concurrency Model <a name="concurrency-model"></a>
 
 The library uses a combination of asynchronous programming (with `async`/`await` and `futures`) and multi-threading to handle concurrent operations.
 
@@ -309,14 +401,102 @@ The library uses a combination of asynchronous programming (with `async`/`await`
 *   **`RwLock`:** Used within the `ECDSAManager` to allow for concurrent read access to the ECDSA operation state, while still providing exclusive write access when needed.
 *   **`TracingUnboundedSender` and `TracingUnboundedReceiver`:**  Used for asynchronous message passing between different components (e.g., `GossipHandler`, `SessionManager`, `RuntimeEventHandler`).
 
-## 6. Error Handling <a name="error-handling"></a>
+## 10. Error Handling <a name="error-handling"></a>
 
 *   **`Result` type:**  Most functions return a `Result` to indicate success or failure.  This allows for proper error handling and propagation.
 *   **Custom Error Types:**  The code defines custom error types (e.g., `SessionManagerError`, `ECDSAError`) to provide more specific error information.
 *   **Logging:**  The `log` crate is used extensively to provide detailed logging of events, warnings, and errors. This is crucial for debugging and monitoring.
-* **Session Timeouts**: The `SessionManager` implements timeouts to handle cases where participants become unresponsive.
+*   **Session Timeouts**: The `SessionManager` implements timeouts to handle cases where participants become unresponsive.
 
-## 7. Future Improvements <a name="future-improvements"></a>
+### 10.1 Common Error Types
+
+*   **Network Errors**: Connection failures, message delivery failures
+*   **Cryptographic Errors**: Invalid signatures, proof verification failures
+*   **Protocol Errors**: Out-of-order messages, invalid state transitions
+*   **Timeout Errors**: Session timeouts, participant unresponsiveness
+
+## 11. Testing <a name="testing"></a>
+
+### 11.1 Test Framework
+
+The implementation includes comprehensive testing:
+
+*   **Unit Tests**: Individual component testing
+*   **Integration Tests**: Multi-component interaction testing
+*   **Multi-Node Tests**: Distributed protocol testing with multiple participants
+
+### 11.2 Test Files
+
+*   `test_framework.rs`: Single-node test utilities
+*   `test_framework_multi_node.rs`: Multi-node test scenarios
+
+### 11.3 Running Tests
+
+```bash
+# Run all tests
+cargo test
+
+# Run specific test module
+cargo test test_framework
+
+# Run with logging
+RUST_LOG=debug cargo test
+```
+
+## 12. API Reference <a name="api-reference"></a>
+
+### 12.1 Core Types
+
+```rust
+// Session identifier
+pub type SessionId = u32;
+
+// TSS public key type
+pub type TSSPublic = sp_core::ed25519::Public;
+
+// Participant identifier
+pub type Identifier = u16;
+```
+
+### 12.2 Main Structs
+
+*   **`SessionManager`**: Central coordinator for TSS operations
+*   **`GossipHandler`**: Network communication manager
+*   **`PeerMapper`**: Peer identity mapping
+*   **`Storage`**: Data persistence abstraction
+
+### 12.3 Key Traits
+
+*   **`Storage`**: Defines storage interface
+*   **`TssValidator`**: Message validation interface
+
+## 13. Troubleshooting <a name="troubleshooting"></a>
+
+### 13.1 Common Issues
+
+**Session Timeouts**
+*   **Symptom**: Sessions fail to complete
+*   **Cause**: Network connectivity issues or slow participants
+*   **Solution**: Check network configuration and increase timeout values
+
+**Message Ordering Issues**
+*   **Symptom**: Protocol failures due to out-of-order messages
+*   **Cause**: Network delays or clock synchronization
+*   **Solution**: Ensure proper time synchronization and reliable network
+
+**Key Generation Failures**
+*   **Symptom**: DKG sessions fail to complete
+*   **Cause**: Participant dropouts or malicious behavior
+*   **Solution**: Verify participant list and network connectivity
+
+### 13.2 Debugging Tips
+
+*   Enable debug logging with `RUST_LOG=debug`
+*   Check session states in storage
+*   Monitor network connectivity between participants
+*   Verify on-chain TSS pallet state
+
+## 14. Future Improvements <a name="future-improvements"></a>
 
 *   **Database Integration:**  Replace `FileStorage` with a database-backed storage implementation for improved scalability and reliability.
 *   **More Sophisticated Buffering:** Implement a more sophisticated buffering mechanism that can handle different message types and priorities.
@@ -324,5 +504,8 @@ The library uses a combination of asynchronous programming (with `async`/`await`
 *   **Performance Optimization:**  Profile the code to identify performance bottlenecks and optimize critical sections.
 *   **Dynamic Threshold and Participants:**  Allow for dynamic changes to the threshold (`t`) and the set of participants.
 *   **Integration with other cryptographic schemes:** Add support for other threshold signature schemes, such as BLS.
-* **Improved error messages**: Improve the error messages to be more descriptive.
+*   **Improved error messages**: Improve the error messages to be more descriptive.
+*   **Metrics and Monitoring**: Add comprehensive metrics collection for monitoring system health and performance.
+*   **Protocol Upgrades**: Support for protocol version negotiation and upgrades.
+*   **Advanced Security Features**: Implementation of additional security features like participant verification and audit logging.
 

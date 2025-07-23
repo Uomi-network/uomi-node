@@ -21,11 +21,12 @@ impl<R> IpfsPrecompile<R>
         R: pallet_evm::Config + pallet_ipfs::Config,
         R::AccountId: IsType<sp_core::crypto::AccountId32>
 {
-    #[precompile::public("pin_agent(bytes,uint256)")]
+    #[precompile::public("pin_agent(bytes,uint256,uint8)")]
     fn pin_agent(
         handle: &mut impl PrecompileHandle,
         cid: UnboundedBytes,
-        nft_id: U256
+        nft_id: U256,
+        threshold: u8
     ) -> EvmResult<bool> {
        ;
         // Get the caller's EVM address
@@ -55,7 +56,8 @@ impl<R> IpfsPrecompile<R>
         let dispatch_result: DispatchResult = pallet_ipfs::Pallet::<R>::pin_agent(
             frame_system::RawOrigin::Signed(caller_account_id).into(),
             bounded_cid,
-            nft_id
+            nft_id,
+            threshold
         );
 
         match dispatch_result {

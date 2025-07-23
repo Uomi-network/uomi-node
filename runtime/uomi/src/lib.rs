@@ -24,13 +24,13 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
-use pallet_staking::EraPayout;
+use pallet_staking::{EraPayout, log};
 use parity_scale_codec::alloc::string::ToString;
 use sp_runtime::SaturatedConversion;
 use sp_runtime::{DispatchError, DispatchResult};
+use sp_std::collections::btree_set::BTreeSet;
 use pallet_ipfs::types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber};
 use frame_support::{
-    BoundedVec,
     construct_runtime,
     dispatch::DispatchClass,
     genesis_builder_helper::{build_config, create_default_config},
@@ -1298,6 +1298,7 @@ impl pallet_tss::Config for Runtime {
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
     type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
 }
 pub struct IpfsWrapper;
 
@@ -1337,6 +1338,8 @@ impl pallet_ipfs::Config for Runtime {
     type BlockNumber = BlockNumber;
     // Nuovo campo per il costo del pinning temporaneo
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    // TSS interface implementation
+    type TssInterface = Tss;
 }
 
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
@@ -1473,6 +1476,8 @@ impl pallet_democracy::Config for Runtime {
 parameter_types! {
     pub const ProposalBond: Permill = Permill::from_percent(5);
     pub MainTreasuryAccount: AccountId = Treasury::account_id();
+    pub AgentPayoutTreasuryAccount: AccountId = Treasury::account_id();
+    pub const MaxAgents: u32 = 1024;
 }
 
 impl pallet_treasury::Config<MainTreasuryInst> for Runtime {
@@ -2623,11 +2628,98 @@ impl_runtime_apis! {
         ) {
             let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
         }
+        fn report_tss_offence(
+            session_id: u64,
+            offence_type: u8,
+            offenders: Vec<[u8; 32]>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
+        }
     }
 }
 
 
 pub struct UOMIEraPayout {}
+
+impl UOMIEraPayout {
+    fn count_unique_agents() -> u32 {
+        let mut unique_nft_ids = BTreeSet::new();
+        
+        for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
+            if let Some(session) = pallet_tss::DkgSessions::<Runtime>::get(session_id) {
+                if session.state == pallet_tss::SessionState::DKGComplete {
+                    unique_nft_ids.insert(session.nft_id);
+                }
+            }
+        }
+        
+        let agent_count = unique_nft_ids.len() as u32;
+        print("[UOMIEraPayout] Active agents with TSS wallets: ");
+        print(agent_count.to_string().as_str());
+        agent_count
+    }
+    
+    fn distribute_agent_payouts(agent_payout_total: Balance) {
+        let agent_count = Self::count_unique_agents();
+        let max_agents = MaxAgents::get();
+        
+        if agent_count == 0 {
+            print("[UOMIEraPayout] No agents found, sending all agent payout to treasury");
+            let treasury_account = AgentPayoutTreasuryAccount::get();
+            let _ = <Balances as Currency<AccountId>>::deposit_creating(&treasury_account, agent_payout_total);
+            return;
+        }
+        
+        let individual_share = agent_payout_total / max_agents as u128;
+        let distributed_amount = individual_share * agent_count as u128;
+        let treasury_remainder = agent_payout_total - distributed_amount;
+        
+        print("[UOMIEraPayout] Individual agent share: ");
+        print(individual_share.to_string().as_str());
+        print("[UOMIEraPayout] Treasury remainder: ");
+        print(treasury_remainder.to_string().as_str());
+        
+        let mut unique_nft_ids = BTreeSet::new();
+        for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
+            if let Some(session) = pallet_tss::DkgSessions::<Runtime>::get(session_id) {
+                if session.state == pallet_tss::SessionState::DKGComplete {
+                    unique_nft_ids.insert(session.nft_id.clone());
+                }
+            }
+        }
+        
+        let mut session_to_nft_map = sp_std::collections::btree_map::BTreeMap::new();
+        for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
+            if let Some(session) = pallet_tss::DkgSessions::<Runtime>::get(session_id) {
+                if session.state == pallet_tss::SessionState::DKGComplete {
+                    session_to_nft_map.insert(session_id, session.nft_id);
+                }
+            }
+        }
+        
+        for (session_id, nft_id) in session_to_nft_map {
+            if let Some(public_key) = pallet_tss::AggregatedPublicKeys::<Runtime>::get(session_id) {
+                if public_key.len() >= 20 {
+                    let mut account_bytes = [0u8; 32];
+                    account_bytes[..20].copy_from_slice(&public_key[..20]);
+                    let agent_account = sp_runtime::AccountId32::from(account_bytes);
+                    let _ = <Balances as Currency<AccountId>>::deposit_creating(&agent_account, individual_share);
+                    print("[UOMIEraPayout] Paid agent with NFT ID: ");
+                    print(sp_core::hexdisplay::HexDisplay::from(&nft_id.as_slice()).to_string().as_str());
+                } else {
+                    print("[UOMIEraPayout] Invalid public key length for agent");
+                }
+            }
+        }
+        
+        if treasury_remainder > 0 {
+            let treasury_account = AgentPayoutTreasuryAccount::get();
+            let _ = <Balances as Currency<AccountId>>::deposit_creating(&treasury_account, treasury_remainder);
+            print("[UOMIEraPayout] Sent remainder to treasury: ");
+            print(treasury_remainder.to_string().as_str());
+        }
+    }
+}
 
 impl EraPayout<Balance> for UOMIEraPayout {
     fn era_payout(
@@ -2638,8 +2730,7 @@ impl EraPayout<Balance> for UOMIEraPayout {
         print("[UOMIEraPayout]");
         print(total_issuance.to_string().as_str());
         print(era_duration_millis.to_string().as_str());
-        // learn where are we, to detect payout
-
+        
         let halving_period = 3; // Years before halving
         
         let year_zero: Balance = 4919219238u128.into();
@@ -2653,12 +2744,9 @@ impl EraPayout<Balance> for UOMIEraPayout {
         let millis_in_a_year:u64 = days_in_one_year * seconds_in_one_day * millis;
         let eras_in_a_year:u128 = (millis_in_a_year/era_duration_millis).into();
         
-
         let mut current_year = None;
         let mut curr_issuance = base_issuance_per_three_year;
-
         let mut _curr = year_zero;
-
 
         for i in 1..=10 {
             if _curr + curr_issuance > total_issuance {
@@ -2668,16 +2756,28 @@ impl EraPayout<Balance> for UOMIEraPayout {
                 _curr += curr_issuance;
                 curr_issuance /= factor;
             }
-            
         }
 
         if current_year.is_none() {
             print("[UOMIEraPayout] Returning (0, 0)");
             (0u128.into(), 0u128.into())
         } else {
-            print("[UOMIEraPayout] Returning ");
-            print(current_year.unwrap().to_string().as_str());
-            ((curr_issuance/halving_period/eras_in_a_year * UOMI).into(), (curr_issuance/halving_period/eras_in_a_year * UOMI).into())
+            let total_era_payout: Balance = (curr_issuance/halving_period/eras_in_a_year * UOMI).into();
+            
+            let validator_payout = (total_era_payout * 95) / 100;
+            let agent_payout_total = (total_era_payout * 5) / 100;
+            
+            print("[UOMIEraPayout] Total era payout: ");
+            print(total_era_payout.to_string().as_str());
+            print("[UOMIEraPayout] Validator payout (95%): ");
+            print(validator_payout.to_string().as_str());
+            print("[UOMIEraPayout] Agent payout total (5%): ");
+            print(agent_payout_total.to_string().as_str());
+            
+            Self::distribute_agent_payouts(agent_payout_total);
+            
+            print("[UOMIEraPayout] Returning validator payout");
+            (validator_payout, 0u128.into())
         }
     }
 }

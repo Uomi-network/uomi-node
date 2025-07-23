@@ -311,6 +311,16 @@ impl TestNode {
             client: TestClientManager::new(),
             announcement:Some(TssMessage::Announce(Default::default(), Vec::new(), Vec::new(), Vec::new())),
             unknown_peer_queue: Arc::new(Mutex::new(HashMap::new())),
+            
+            // Retry mechanism fields
+            retry_timeout: 300,
+            max_retry_attempts: 3,
+            received_messages: Arc::new(Mutex::new(HashMap::new())),
+            retry_attempts: Arc::new(Mutex::new(HashMap::new())),
+            retry_request_timestamps: Arc::new(Mutex::new(HashMap::new())),
+            round_timestamps: Arc::new(Mutex::new(HashMap::new())),
+            sent_messages: Arc::new(Mutex::new(HashMap::new())),
+            retry_enabled: false, // Disable retry mechanism in tests by default
         };
 
         TestNode {
