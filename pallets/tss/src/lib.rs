@@ -25,6 +25,7 @@ use frame_system::offchain::SendUnsignedTransaction;
 use frame_system::offchain::{SignedPayload, Signer};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
+use scale_info::prelude::format;
 use scale_info::TypeInfo;
 use sp_staking::{
     offence::{Offence, ReportOffence},
@@ -883,6 +884,16 @@ pub mod pallet {
                         response.status.clone(),
                     );
 
+                    // Add to pending transactions for status tracking
+                    let current_block = frame_system::Pallet::<T>::block_number();
+                    let max_wait_blocks = 100u32; // Wait up to 100 blocks for confirmation
+                    
+                    PendingTransactions::<T>::insert(
+                        chain_id, 
+                        bounded_tx_hash.clone(), 
+                        (current_block, max_wait_blocks)
+                    );
+
                     // Emit event
                     Self::deposit_event(Event::MultiChainTransactionSubmitted(
                         chain_id,
@@ -970,6 +981,38 @@ pub mod pallet {
 
         Ok(())
     }
+
+    /// Get the status of a multi-chain transaction
+    #[pallet::weight(10_000)]
+    #[pallet::call_index(13)]
+    pub fn get_transaction_status(
+        origin: OriginFor<T>,
+        chain_id: u32,
+        tx_hash: Vec<u8>,
+    ) -> DispatchResult {
+        let _who = ensure_signed(origin)?;
+
+        // Validate chain is supported
+        ensure!(
+            Self::is_chain_supported(chain_id),
+            Error::<T>::UnsupportedChain
+        );
+
+        let bounded_tx_hash: BoundedVec<u8, crate::types::MaxTxHashSize> = 
+            tx_hash.try_into().map_err(|_| Error::<T>::InvalidTransactionData)?;
+
+        // Check stored transaction status
+        if let Some(status) = MultiChainTransactions::<T>::get(chain_id, &bounded_tx_hash) {
+            log::info!("Transaction status: {:?}", status);
+            // In a real implementation, you might want to emit an event or return the status
+        } else {
+            log::warn!("Transaction not found in storage");
+            return Err(Error::<T>::InvalidTransactionData.into());
+        }
+
+        Ok(())
+    }
+
     }
 
 
@@ -1042,6 +1085,9 @@ pub mod pallet {
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     fn offchain_worker(n: BlockNumberFor<T>) {
+        // Check pending transactions every block for real-time monitoring
+        Self::check_pending_transactions_offchain().ok();
+
         // Check for new validators every 10 blocks
         if n % 10u32.into() != 0u32.into() {
             return;
@@ -1166,8 +1212,6 @@ pub mod pallet {
         // FSA: Process completed signatures and submit transactions
         Pallet::<T>::process_completed_signatures().ok();
 
-        // FSA: Check pending transactions for confirmation
-        Pallet::<T>::check_pending_transactions().ok();
 
         // Report count reset
         let previous_era = Pallet::<T>::previous_era();
@@ -1418,7 +1462,67 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    /// Check pending transactions for confirmation status
+    /// Check pending transactions for confirmation status (OFFCHAIN WORKER VERSION)
+    pub fn check_pending_transactions_offchain() -> Result<(), &'static str> {
+        let current_block = frame_system::Pallet::<T>::block_number();
+        let pending_txs: Vec<(u32, BoundedVec<u8, crate::types::MaxTxHashSize>, (BlockNumberFor<T>, u32))> = 
+            PendingTransactions::<T>::iter().collect();
+
+        if pending_txs.is_empty() {
+            return Ok(());
+        }
+
+        log::info!("[OFFCHAIN] Checking {} pending transactions for confirmation", pending_txs.len());
+
+        for (chain_id, tx_hash_bounded, (submission_block, max_wait_blocks)) in pending_txs {
+            let blocks_waited = current_block.saturating_sub(submission_block);
+            let tx_hash_bytes = tx_hash_bounded.as_slice();
+
+            if blocks_waited.saturated_into::<u32>() > max_wait_blocks {
+                // Transaction timed out
+                log::warn!("[OFFCHAIN] Transaction on chain {} timed out after {} blocks", chain_id, blocks_waited.saturated_into::<u32>());
+                
+                // Remove from pending and update status (this will be done via unsigned transaction)
+                // For now, just log the timeout
+                continue;
+            }
+
+            // Check transaction status on chain - convert to hex string
+            let mut tx_hash_hex = sp_std::vec![0u8; tx_hash_bytes.len() * 2 + 2];
+            tx_hash_hex[0] = b'0';
+            tx_hash_hex[1] = b'x';
+            for (i, byte) in tx_hash_bytes.iter().enumerate() {
+                let hex_chars = [b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f'];
+                tx_hash_hex[2 + i * 2] = hex_chars[(byte >> 4) as usize];
+                tx_hash_hex[2 + i * 2 + 1] = hex_chars[(byte & 0xf) as usize];
+            }
+            let tx_hash_str = core::str::from_utf8(&tx_hash_hex).unwrap_or("invalid_hash");
+            
+            // This is where we can actually make HTTP calls to check status
+            match Self::check_transaction_status_on_chain_offchain(chain_id, tx_hash_str) {
+                Some(status) => {
+                    match status {
+                        crate::types::TransactionStatus::Confirmed => {
+                            log::info!("[OFFCHAIN] ✅ Transaction on chain {} confirmed: {}", chain_id, tx_hash_str);
+                        }
+                        crate::types::TransactionStatus::Failed => {
+                            log::error!("[OFFCHAIN] ❌ Transaction on chain {} failed: {}", chain_id, tx_hash_str);
+                        }
+                        _ => {
+                            log::debug!("[OFFCHAIN] ⏳ Transaction on chain {} still pending: {}", chain_id, tx_hash_str);
+                        }
+                    }
+                }
+                None => {
+                    log::error!("[OFFCHAIN] ❌ Failed to check status for transaction on chain {}: {}", chain_id, tx_hash_str);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check pending transactions for confirmation status (ON-CHAIN VERSION - DEPRECATED)
     pub fn check_pending_transactions() -> DispatchResult {
         let current_block = frame_system::Pallet::<T>::block_number();
         let pending_txs: Vec<(u32, BoundedVec<u8, crate::types::MaxTxHashSize>, (BlockNumberFor<T>, u32))> = 
@@ -1529,7 +1633,34 @@ impl<T: Config> Pallet<T> {
         }
     }
 
-    /// Check transaction status on a specific chain
+    /// Check transaction status on a specific chain (OFFCHAIN WORKER VERSION)  
+    fn check_transaction_status_on_chain_offchain(
+        chain_id: u32,
+        tx_hash: &str,
+    ) -> Option<crate::types::TransactionStatus> {
+        // Get chain configuration
+        let chain_config = match crate::multichain::MultiChainRpcClient::get_chain_config(chain_id) {
+            Ok(config) => config,
+            Err(e) => {
+                log::error!("[OFFCHAIN] Failed to get chain config for chain {}: {}", chain_id, e);
+                return None;
+            }
+        };
+
+        // Make the actual HTTP call to check transaction status
+        match crate::multichain::MultiChainRpcClient::get_transaction_receipt(&chain_config, tx_hash) {
+            Ok(response) => {
+                log::info!("[OFFCHAIN] Transaction status response: {:?}", response.status);
+                Some(response.status)
+            }
+            Err(e) => {
+                log::error!("[OFFCHAIN] Failed to check transaction status: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Check transaction status on a specific chain (ON-CHAIN VERSION - DEPRECATED)
     fn check_transaction_status_on_chain(
         chain_id: u32,
         tx_hash: &str,
