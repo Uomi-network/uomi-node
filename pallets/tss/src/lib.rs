@@ -1439,8 +1439,8 @@ impl<T: Config> Pallet<T> {
                 
                 // Add to pending transactions for status tracking
                 let current_block = frame_system::Pallet::<T>::block_number();
-                let max_wait_blocks = 100u32; // Wait up to 100 blocks for confirmation
-                
+                let max_wait_blocks = 300u32; // Wait up to 15 minutes, assuming 3 seconds per block, 20 blocks per minute
+
                 // tx_hash is already BoundedVec<u8, MaxTxHashSize>
                 PendingTransactions::<T>::insert(chain_id, tx_hash.clone(), (current_block, max_wait_blocks));
                 
