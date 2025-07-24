@@ -407,10 +407,12 @@ impl TssMessageHandler for MockTssMessageHandler {
 
     fn forward_to_session_manager(
         &self,
-        sender: PeerId,
-        message: TssMessage,
-    ) -> Result<(), TrySendError<(PeerId, TssMessage)>> {
-        self.forwarded_messages.borrow_mut().push((sender, message));
+        signed_message: SignedTssMessage,
+    ) -> Result<(), TrySendError<SignedTssMessage>> {
+        // For testing, we'll extract the message and create a dummy peer ID from the sender's public key
+        let dummy_peer_id = PeerId::from_bytes(&signed_message.sender_public_key[..])
+            .unwrap_or_else(|_| PeerId::random());
+        self.forwarded_messages.borrow_mut().push((dummy_peer_id, signed_message.message));
         Ok(())
     }
 }
