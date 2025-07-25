@@ -56,607 +56,47 @@ use sp_runtime::{
 };
 
 use uomi_runtime::{
-    pallet_tss::{types::SessionId, Event as TssEvent, TssApi, TssOffenceType},
+    pallet_tss::{Event as TssEvent, TssApi, TssOffenceType},
     AccountId
 };
 
 use uomi_runtime::RuntimeEvent;
 
+// Import types from the new types module
+use types::{
+    TssMessage, SignedTssMessage, DKGSessionState, SigningSessionState,
+    SessionManagerMessage, TSSRuntimeEvent, SessionManagerError, TSSParticipant,
+    TSSPeerId, TSSPublic, TSSSignature, SessionData, SessionId, SessionError
+};
+use ecdsa::ECDSAPhase;
+use network::PeerMapper;
+use validation::TssValidator;
+use retry::mechanism::RetryMechanism;
+use crate::security::verification;
+
+mod dkg_session;
 mod dkghelpers;
 mod dkground1;
 mod dkground2;
 mod dkground3;
 mod ecdsa;
-mod signlib;
+mod network;
+mod retry;
+mod session;
+mod signing;
 mod types;
+mod validation;
+pub mod security;
 #[cfg(test)]
 mod test_framework;
 #[cfg(test)]
 mod test_framework_multi_node;
 
-
 const TSS_PROTOCOL: &str = "/tss/1";
 
-type TSSPublic = Vec<u8>;
-type TSSParticipant = [u8; 32];
-type TSSSignature = Vec<u8>;
-pub type TSSPeerId = Vec<u8>;
-pub type SessionData = (u16, u16, Vec<u8>, Vec<u8>); // t, n, coordinator, message
-
-#[derive(Encode, Decode, Debug, Clone)]
-pub enum TssMessage {
-    /// Utilities
-    Announce(u16, TSSPeerId, TSSPublic, TSSSignature),
-    GetInfo(TSSPublic),
-    Ping,
-
-    /// FROST
-    DKGRound1(SessionId, Vec<u8>),
-    DKGRound2(SessionId, Vec<u8>, TSSPeerId),
-    SigningCommitment(SessionId, Vec<u8>),
-    SigningPackage(SessionId, Vec<u8>),
-    SigningShare(SessionId, Vec<u8>),
-
-    /// ECDSA OPEN TSS
-    /// Utils
-    ECDSAMessageBroadcast(SessionId, String, Vec<u8>, ECDSAPhase),
-    ECDSAMessageSubset(SessionId, String, Vec<u8>, ECDSAPhase),
-    ECDSAMessageP2p(SessionId, String, TSSPeerId, Vec<u8>, ECDSAPhase),
-
-    /// Utils Keygen
-    ECDSAMessageKeygen(SessionId, String, Vec<u8>),
-    /// Utils Reshare
-    ECDSAMessageReshare(SessionId, String, Vec<u8>),
-    /// Utils Sign Offline
-    ECDSAMessageSign(SessionId, String, Vec<u8>),
-    /// Utils Sign Online
-    ECDSAMessageSignOnline(SessionId, String, Vec<u8>),
-
-    /// Retry Mechanism
-    ECDSARetryRequest(SessionId, ECDSAPhase, u8, Vec<String>),      // session_id, phase, round, list of missing participant indices
-    ECDSARetryResponse(SessionId, ECDSAPhase, u8, String, Vec<u8>), // session_id, phase, round, sender_index, resent_data
-}
-
-/// A signed TSS message that provides cryptographic authenticity
-#[derive(Encode, Decode, Debug, Clone)]
-pub struct SignedTssMessage {
-    /// The actual message content
-    pub message: TssMessage,
-    /// The sender's public key (32 bytes for sr25519)
-    pub sender_public_key: [u8; 32],
-    /// Message signature using sender's private key
-    pub signature: [u8; 64],
-    /// Timestamp to prevent replay attacks
-    pub timestamp: u64,
-}
-
-impl SignedTssMessage {
-    /// Create a new signed message
-    pub fn new(
-        message: TssMessage,
-        sender_keypair: &sr25519::Pair,
-        timestamp: u64,
-    ) -> Result<Self, &'static str> {
-        let sender_public_key: [u8; 32] = sender_keypair.public().0;
-        
-        // Create the payload to sign (message + public key + timestamp)
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&message.encode());
-        payload.extend_from_slice(&sender_public_key);
-        payload.extend_from_slice(&timestamp.to_le_bytes());
-        
-        // Sign the payload
-        let signature_vec = sender_keypair.sign(&payload);
-        let signature: [u8; 64] = signature_vec.0;
-        
-        Ok(SignedTssMessage {
-            message,
-            sender_public_key,
-            signature,
-            timestamp,
-        })
-    }
-    
-    /// Verify the signature of this message
-    pub fn verify_signature(&self) -> bool {
-        // Reconstruct the payload that was signed
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&self.message.encode());
-        payload.extend_from_slice(&self.sender_public_key);
-        payload.extend_from_slice(&self.timestamp.to_le_bytes());
-        
-        // Verify the signature
-        let public_key = sr25519::Public::from_raw(self.sender_public_key);
-        let signature = sr25519::Signature::from_raw(self.signature);
-        
-        sr25519_verify(&signature, &payload, &public_key)
-    }
-    
-    /// Check if the message timestamp is within acceptable bounds (prevents replay attacks)
-    pub fn is_timestamp_valid(&self, current_time: u64, max_age_seconds: u64) -> bool {
-        let message_age = if current_time >= self.timestamp {
-            current_time - self.timestamp
-        } else {
-            // Message is from the future, reject it
-            return false;
-        };
-        
-        message_age <= max_age_seconds
-    }
-}
-
-#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ECDSAPhase {
-    Key,
-    Reshare,
-    Sign,
-    SignOnline,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
-pub enum DKGSessionState {
-    Idle,            // Session created, but not started locally
-    Round1Initiated, // Round 1 secret package generated and potentially broadcasted
-    Round1Completed, // Received enough Round 1 packages to proceed to Round 2
-    Round2Initiated, // Round 2 verification and package generation initiated
-    Round2Completed, // Received enough Round 2 packages to proceed to Round 3 (or finalize DKG)
-    Round3Initiated, // Round 3 initiated (if needed in Frost - check if round 3 is necessary for keygen)
-    Round3Completed, // Round 3 completed
-    KeyGenerated,    // Final TSS key generated
-    Failed,          // Session failed for some reason
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
-pub enum SigningSessionState {
-    Idle,               // Session created, but not started locally
-    Round1Initiated,    // Round 1 secret package generated and potentially broadcasted
-    Round1Completed,    // Received enough Round 1 packages to proceed to Round 2
-    Round2Initiated,    // Round 2 verification and package generation initiated
-    Round2Completed,    // Received enough Round 2 packages to proceed to Round 3 (or finalize DKG)
-    Round3Initiated,    // Round 3 initiated (if needed in Frost - check if round 3 is necessary for keygen)
-    Round3Completed,    // Round 3 completed
-    SignatureGenerated, // Final Signature key generated
-    Failed,             // Session failed for some reason
-}
-
-#[derive(Encode, Decode, Debug)]
-pub enum SessionManagerMessage {
-    NewDKGMessage(SessionId, TssMessage, TSSPeerId), // Message received from gossip before session info
-    SessionInfoReady(SessionId),                     // Session info from runtime is now available
-    RuntimeEvent(RuntimeEvent),                      // Events from the runtime
-}
-#[derive(Encode, Decode, Debug)]
-pub enum TSSRuntimeEvent {
-    DKGSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>), // Session info from runtime is now available
-    DKGReshareSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>, Vec<TSSParticipant>), // Session info from runtime is now available
-    SigningSessionInfoReady(
-        SessionId,
-        u16,
-        u16,
-        Vec<TSSParticipant>,
-        TSSParticipant,
-        Vec<u8>,
-    ), // Session info from runtime is now available
-    ValidatorIdAssigned(TSSParticipant, u32)
-}
-
-struct TssValidator {
-    announcement: Option<TssMessage>,
-    signed_announcement: Option<SignedTssMessage>, // Pre-signed announcement
-    // Track processed messages with their timestamps
-    processed_messages: Arc<Mutex<HashMap<Vec<u8>, Instant>>>,
-    // How long to keep messages in the cache before expiring them
-    message_expiry: Duration,
-    // Sent announcments, to avoid double sending
-    sent_announcements: Arc<Mutex<HashMap<PeerId, Instant>>>,
-    // Maximum message age in seconds (for replay protection)
-    max_message_age: u64,
-}
-
-#[derive(Encode, Decode, Debug)]
-pub enum SessionManagerError {
-    IdentifierNotFound,
-    SessionNotYetInitiated,
-    Round2SecretPackageNotYetAvailable,
-    DeserializationError,
-    SignatureAggregationError,
-    SignatureNotReadyYet,
-}
-// ===== TssValidator =====
-
-impl TssValidator {
-    fn new(message_expiry: Duration, announcement: Option<TssMessage>, signed_announcement: Option<SignedTssMessage>) -> Self {
-        Self {
-            announcement,
-            signed_announcement,
-            processed_messages: Arc::new(Mutex::new(HashMap::new())),
-            message_expiry,
-            sent_announcements: Arc::new(Mutex::new(HashMap::new())),
-            max_message_age: 300, // 5 minutes max message age
-        }
-    }
-
-}
-
-
-impl<B: BlockT> Validator<B> for TssValidator {
-    fn new_peer(
-        &self,
-        context: &mut dyn ValidatorContext<B>,
-        who: &PeerId,
-        _role: sc_network::ObservedRole,
-    ) {
-        info!("[TSS]: New Peer Connected: {}", who.to_base58());
-
-        // Verify if we already sent an announcement to this peer
-        let mut sent_announcements = self.sent_announcements.lock().unwrap();
-
-        if sent_announcements.contains_key(who) {
-            log::info!("[TSS]: Already sent announcement to peer {}", who.to_base58());
-            return;
-        }
-
-        // If we haven't sent an announcement, send it now
-        sent_announcements.insert(who.clone(), Instant::now());
-        drop(sent_announcements);
-
-        // Send the pre-signed announcement message to the new peer
-        if let Some(signed_announcement) = &self.signed_announcement {
-            log::info!("[TSS] 📤 Sending SIGNED ANNOUNCEMENT to new peer: {}", who.to_base58());
-            context.send_message(
-                who,
-                signed_announcement.encode(),
-            );
-        } else {
-            log::warn!("[TSS] No pre-signed announcement available for peer: {}", who.to_base58());
-        }
-    }
-
-    fn validate(
-        &self,
-        _context: &mut dyn ValidatorContext<B>,
-        sender: &PeerId,
-        data: &[u8],
-    ) -> ValidationResult<B::Hash> {
-        info!("[TSS]: Received message from {}", sender.to_base58());
-
-        // Try to decode as SignedTssMessage first
-        match SignedTssMessage::decode(&mut &data[..]) {
-            Ok(signed_message) => {
-                log::info!("[TSS]: ✅ RECEIVED SIGNED MESSAGE from {} - message type: {:?}", 
-                    sender.to_base58(), 
-                    std::mem::discriminant(&signed_message.message));
-                
-                // Verify the signature
-                if !signed_message.verify_signature() {
-                    log::warn!("[TSS]: Message signature verification failed from {}", sender.to_base58());
-                    return ValidationResult::Discard;
-                }
-                
-                // Check timestamp to prevent replay attacks
-                let current_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                
-                if !signed_message.is_timestamp_valid(current_time, self.max_message_age) {
-                    log::warn!("[TSS]: Message timestamp invalid or too old from {}", sender.to_base58());
-                    return ValidationResult::Discard;
-                }
-
-                log::info!("[TSS]: ✅ Verified signed message from {} - signature and timestamp valid", sender.to_base58());
-            }
-            Err(_) => {
-                log::warn!("[TSS]: Failed to decode message from {}", sender.to_base58());
-                return ValidationResult::Discard;
-            }
-        }
-
-        // Safely modify the processed messages
-        let mut processed_messages = self.processed_messages.lock().unwrap();
-                
-        // Mark the message as processed
-        processed_messages.insert(data.to_vec(), Instant::now());
-        
-        // Cleanup can happen here or in a background task
-        let now = Instant::now();
-        processed_messages.retain(|_, timestamp| {
-            now.duration_since(*timestamp) < self.message_expiry
-        });
-        
-        let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
-        
-        ValidationResult::ProcessAndKeep(topic)
-    }
-
-    fn message_expired<'a>(&'a self) -> Box<dyn FnMut(<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
-        Box::new(move |_topic, data| {
-            let processed_messages = self.processed_messages.lock().unwrap();
-            if let Some(_timestamp) = processed_messages.get(data) {
-                return true;
-            }
-            false
-        })
-    }
-    fn message_allowed<'a>(
-            &'a self,
-        ) -> Box<dyn FnMut(&PeerId, sc_network_gossip::MessageIntent, &<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
-        Box::new(move |_peer_id, _intent, _topic, data| {
-            // The messages are always allowed, but we need to store what data we send out
-            // to avoid sending the same message multiple times
-
-            let mut processed_messages = self.processed_messages.lock().unwrap();
-            processed_messages.insert(data.to_vec(), Instant::now());
-
-            return true;
-        })  
-    }
-}
-
-// ===== PeerMapper =====
-struct PeerMapper {
-    peers: HashMap<PeerId, TSSPublic>,
-    sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
-    sessions_participants_u16: Arc<Mutex<HashMap<SessionId, HashMap<u16, TSSPublic>>>>,
-    validator_ids: Arc<Mutex<HashMap<TSSPublic, u32>>>,
-}
-
-impl PeerMapper {
-    fn new(
-        sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
-    ) -> Self {
-        PeerMapper {
-            peers: HashMap::new(),
-            sessions_participants,
-            sessions_participants_u16: Arc::new(Mutex::new(HashMap::new())),
-            validator_ids: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-    
-    pub fn get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
-        self.peers.get(peer_id)
-    }
-
-    pub fn get_peer_id_from_account_id(&mut self, account_id: &TSSPublic) -> Option<&PeerId> {
-        self.peers
-            .iter()
-            .find_map(|(key, val)| if val == account_id { Some(key) } else { None })
-    }
-
-    // Modified to use validator ID as identifier where possible
-    pub fn get_peer_id_from_identifier(
-        &mut self,
-        session_id: &SessionId,
-        identifier: &Identifier,
-    ) -> Option<&PeerId> {
-        let sessions_participants = self.sessions_participants.lock().unwrap();
-        let session = sessions_participants.get(session_id);
-
-        if let Some(session) = session {
-            let account_id = session.get(identifier).cloned();
-
-            drop(sessions_participants);
-            if let Some(account_id) = account_id {
-                return self.get_peer_id_from_account_id(&account_id);
-            }
-        }
-
-        None
-    }
-
-    pub fn get_peer_id_from_id(&mut self, session_id: &SessionId, id: u16) -> Option<&PeerId> {
-        let sessions_participants = self.sessions_participants_u16.lock().unwrap();
-        let session = sessions_participants.get(session_id);
-
-        if let Some(session) = session {
-            log::info!("Session found");
-            let account_id = session.get(&id).cloned();
-
-            drop(sessions_participants);
-            if let Some(account_id) = account_id {
-                log::info!("Account found {:?}", account_id);
-
-                return self.get_peer_id_from_account_id(&account_id);
-            } else {
-                log::info!("Account not found");
-            }
-        } else {
-            log::info!("Session not found");
-        }
-
-        None
-    }
-
-    pub fn get_identifier_from_peer_id(
-        &mut self,
-        session_id: &SessionId,
-        peer_id: &PeerId,
-    ) -> Option<Identifier> {
-        let account_id = self.peers.get(peer_id).cloned();
-        if let Some(account_id) = account_id {
-            self.get_identifier_from_account_id(session_id, &account_id)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_id_from_peer_id(&mut self, session_id: &SessionId, peer_id: &PeerId) -> Option<u16> {
-        let account_id = self.peers.get(peer_id).cloned();
-
-        if let Some(account_id) = account_id {
-            self.get_id_from_account_id(session_id, &account_id)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_id_from_account_id(
-        &mut self,
-        session_id: &SessionId,
-        account_id: &TSSPublic,
-    ) -> Option<u16> {
-        let handle = self.sessions_participants_u16.lock().unwrap();
-        let session = handle.get(session_id);
-
-        if let None = session {
-            return None;
-        }
-
-        for (_, (key, val)) in session.unwrap().iter().enumerate() {
-            if val == account_id {
-                return Some(*key);
-            }
-        }
-        drop(handle);
-
-        return None;
-    }
-
-    // Modified to use validator ID if available
-    pub fn get_identifier_from_account_id(
-        &mut self,
-        session_id: &SessionId,
-        account_id: &TSSPublic,
-    ) -> Option<Identifier> {
-        // First try to get the validator ID
-        let validator_id = self.get_validator_id(account_id);
-        
-        if let Some(id) = validator_id {
-            // If we have a validator ID, convert it to Identifier
-            let identifier: Identifier = u16::try_from(id).unwrap_or(u16::MAX).try_into().unwrap();
-            return Some(identifier);
-        }
-        
-        // If no validator ID is found, fall back to the original method
-        let handle = self.sessions_participants.lock().unwrap();
-        let session = handle.get(session_id);
-
-        if let None = session {
-            return None;
-        }
-
-        log::debug!(
-            "[TSS] get_identifier_from_account_id({:?}, {:?}) from session = {:?}",
-            session_id,
-            account_id,
-            session
-        );
-
-        for (_, (key, val)) in session.unwrap().iter().enumerate() {
-            if val == account_id {
-                return Some(key.clone());
-            }
-        }
-        drop(handle);
-
-        return None;
-    }
-
-    pub fn get_account_id_from_identifier(
-        &mut self,
-        session_id: &SessionId,
-        identifier: &Identifier,
-    ) -> Option<TSSPublic> {
-        let sessions_participants = self.sessions_participants.lock().unwrap();
-        let session = sessions_participants.get(session_id);
-
-        if let Some(session) = session {
-            let account_id = session.get(identifier).cloned();
-
-            drop(sessions_participants);
-            return account_id;
-        }
-
-        None
-    }
-
-    // Modified to use validator IDs
-    pub fn create_session(&mut self, session_id: SessionId, participants: Vec<TSSParticipant>) {
-        let mut sessions_participants = self.sessions_participants.lock().unwrap();
-        let mut sessions_participants_u16 = self.sessions_participants_u16.lock().unwrap();
-
-        let entry_sessions_participants = sessions_participants
-            .entry(session_id)
-            .or_insert(empty_hash_map());
-        let entry_sessions_participants_u16 = sessions_participants_u16
-            .entry(session_id)
-            .or_insert(empty_hash_map());
-
-        for (index, val) in participants.iter().enumerate() {
-            // Try to get validator ID for this participant
-            let validator_id = self.get_validator_id(&val.to_vec())
-                .unwrap_or_else(|| (index + 1) as u32); // Fall back to index+1 if no validator ID
-            
-            // Convert validator_id to Identifier
-            
-            let identifier: Identifier = u16::try_from(validator_id).unwrap_or_default().try_into().unwrap();
- 
-            
-            entry_sessions_participants.insert(identifier, val.to_vec());
-            entry_sessions_participants_u16.insert(u16::try_from(index + 1).unwrap(), val.to_vec());
-            
-            log::info!("[TSS] Added participant with validator ID {} to session {}", validator_id, session_id);
-        }
-
-        drop(sessions_participants_u16);
-        drop(sessions_participants);
-    }
-
-    pub fn add_peer(&mut self, peer_id: PeerId, public_key_data: TSSPublic) {
-        log::info!("Adding Peer {:?} with public key {:?}", peer_id, public_key_data);
-        self.peers.insert(peer_id, public_key_data);
-    }
-
-    pub fn get_validator_id(&self, public_key: &TSSPublic) -> Option<u32> {
-        let validator_ids = self.validator_ids.lock().unwrap();
-        let id = validator_ids.get(public_key).cloned();
-        drop(validator_ids);
-        id
-    }
-
-    pub fn get_validator_account_from_id(&mut self, id: u32) -> Option<TSSPublic> {
-        let validator_ids = self.validator_ids.lock().unwrap();
-        let account = validator_ids.iter().find_map(|(key, val)| {
-            if *val == id {
-                Some(key.clone())
-            } else {
-                None
-            }
-        });
-        drop(validator_ids);
-        account
-    }
-
-    pub fn set_validator_id(&mut self, public_key: TSSPublic, id: u32) {
-        let mut validator_ids = self.validator_ids.lock().unwrap();
-        validator_ids.insert(public_key, id);
-        drop(validator_ids);
-    }
-}
-
 // ===== SessionManager =====
-/// Error type for session operations
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionError {
-    /// Session with this ID already exists
-    SessionAlreadyExists,
-    /// Session with this ID doesn't exist
-    SessionDoesNotExist,
-    /// Session is in an invalid state for the requested operation
-    InvalidSessionState,
-    /// Participant is not allowed in this session
-    NotAuthorized,
-    /// Message couldn't be deserialized
-    DeserializationError,
-    /// Session timed out
-    SessionTimeout,
-    /// Generic error
-    GenericError(String),
-}
 
-
-
-struct SessionManager<B: BlockT, C: ClientManager<B>>
-{
+struct SessionManager<B: BlockT, C: ClientManager<B>> {
     storage: Arc<Mutex<MemoryStorage>>,
     key_storage: Arc<Mutex<FileStorage>>,
     sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
@@ -665,7 +105,7 @@ struct SessionManager<B: BlockT, C: ClientManager<B>>
     signing_session_states: Arc<Mutex<HashMap<SessionId, SigningSessionState>>>,
     validator_key: TSSPublic,
     validator_public_key: [u8; 32], // For signing messages
-    keystore: KeystorePtr, // For creating signed messages
+    keystore: KeystorePtr,      // For creating signed messages
     peer_mapper: Arc<Mutex<PeerMapper>>,
     _phantom: PhantomData<B>,
     ecdsa_manager: Arc<Mutex<ECDSAManager>>,
@@ -683,26 +123,12 @@ struct SessionManager<B: BlockT, C: ClientManager<B>>
     active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
     unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
     announcement: Option<TssMessage>,
-    
-    // Retry mechanism fields
-    retry_timeout: u64, // Time to wait before requesting retry (in seconds)
-    max_retry_attempts: u8, // Maximum retry attempts per participant
-    // Track received messages per session/phase/round/participant
-    received_messages: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8, String), std::time::Instant>>>,
-    // Track retry attempts per session/phase/round/participant
-    retry_attempts: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8, String), u8>>>,
-    // Track when retry requests were sent per session/phase/round
-    retry_request_timestamps: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8), std::time::Instant>>>,
-    // Track round start timestamps for timeout enforcement
-    round_timestamps: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8), std::time::Instant>>>,
-    // Store sent messages for retry responses per session/phase/round/participant
-    sent_messages: Arc<Mutex<HashMap<(SessionId, ECDSAPhase, u8, String), Vec<u8>>>>,
-    // Enable/disable retry mechanism
-    retry_enabled: bool,
+
+    // Retry mechanism
+    retry_mechanism: RetryMechanism,
 }
 
-impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
-{
+impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     fn new(
         storage: Arc<Mutex<MemoryStorage>>,
         key_storage: Arc<Mutex<FileStorage>>,
@@ -722,6 +148,9 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         client: C,
         retry_enabled: bool,
     ) -> Self {
+        let retry_mechanism =
+            RetryMechanism::new(300, 3, retry_enabled, local_peer_id.clone());
+
         Self {
             storage,
             key_storage,
@@ -747,85 +176,17 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             active_participants: Arc::new(Mutex::new(empty_hash_map())),
             unknown_peer_queue: Arc::new(Mutex::new(empty_hash_map())),
             announcement: announcment,
-            
-            // Initialize retry mechanism fields
-            retry_timeout: 300, // 5 minutes before requesting retry
-            max_retry_attempts: 3, // Maximum 3 retry attempts per participant
-            received_messages: Arc::new(Mutex::new(HashMap::new())),
-            retry_attempts: Arc::new(Mutex::new(HashMap::new())),
-            retry_request_timestamps: Arc::new(Mutex::new(HashMap::new())),
-            round_timestamps: Arc::new(Mutex::new(HashMap::new())),
-            sent_messages: Arc::new(Mutex::new(HashMap::new())),
-            retry_enabled,
+            retry_mechanism,
         }
     }
     
-    /// Create a signed message using the keystore
-    fn create_signed_message(&self, message: TssMessage) -> Result<SignedTssMessage, String> {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| format!("Failed to get current time: {}", e))?
-            .as_secs();
-        
-        // Create the payload to sign (message + public key + timestamp)
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&message.encode());
-        payload.extend_from_slice(&self.validator_public_key);
-        payload.extend_from_slice(&current_time.to_le_bytes());
-        
-        // Sign the payload using the keystore
-        let signature_result = self.keystore.sign_with(
-            UOMI,
-            sr25519::CRYPTO_ID,
-            &self.validator_public_key,
-            &payload,
-        ).map_err(|e| format!("Failed to sign message: {:?}", e))?;
-
-        let signature_bytes = signature_result.ok_or("Failed to get signature from keystore")?;
-        let signature: [u8; 64] = signature_bytes.try_into()
-            .map_err(|_| "Invalid signature length")?;
-        
-        Ok(SignedTssMessage {
-            message,
-            sender_public_key: self.validator_public_key,
-            signature,
-            timestamp: current_time,
-        })
-    }
     
-    /// Verify that a signed message is from the expected sender
-    fn verify_message_sender(&self, signed_message: &SignedTssMessage, expected_sender: &TSSPublic) -> bool {
-        // First verify the signature is valid
-        if !signed_message.verify_signature() {
-            log::warn!("[TSS] Message signature verification failed");
-            return false;
-        }
-        
-        // Check if the sender's public key matches the expected sender
-        if signed_message.sender_public_key.to_vec() != *expected_sender {
-            log::warn!("[TSS] Message sender public key doesn't match expected sender");
-            return false;
-        }
-        
-        // Check timestamp validity
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        
-        if !signed_message.is_timestamp_valid(current_time, 300) { // 5 minutes max age
-            log::warn!("[TSS] Message timestamp is invalid or too old");
-            return false;
-        }
-        
-        true
-    }
 
     /// Send a signed message to the gossip handler
     fn send_signed_message(&self, message: TssMessage) -> Result<(), String> {
         log::info!("[TSS] 📤 SessionManager CREATING SIGNED MESSAGE: {:?}", std::mem::discriminant(&message));
         
-        let signed_message = self.create_signed_message(message)?;
+        let signed_message = verification::create_signed_message(message, &self.validator_public_key, &self.keystore)?;
         
         log::info!("[TSS] ✅ Signed message created successfully, sending to gossip handler");
         
@@ -927,211 +288,6 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         }
         inactive_participants
 
-    }
-
-    /// Track that we sent a message for a specific session/phase/round/participant
-    fn track_sent_message(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, participant_index: String, message_data: Vec<u8>) {
-        let key = (session_id, phase, round, participant_index);
-        let mut sent_messages = self.sent_messages.lock().unwrap();
-        sent_messages.insert(key, message_data);
-    }
-
-    /// Track that we received a message from a specific session/phase/round/participant
-    fn track_received_message(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, participant_index: String) {
-        let key = (session_id, phase, round, participant_index);
-        let mut received_messages = self.received_messages.lock().unwrap();
-        received_messages.insert(key, std::time::Instant::now());
-    }
-
-    /// Track when a round starts for timeout enforcement
-    fn track_round_start(&self, session_id: SessionId, phase: ECDSAPhase, round: u8) {
-        let key = (session_id, phase, round);
-        let mut round_timestamps = self.round_timestamps.lock().unwrap();
-        round_timestamps.entry(key).or_insert_with(std::time::Instant::now);
-    }
-
-    /// Get expected participants from session data (all participants should participate in DKG)
-    fn get_expected_participants(&self, session_id: SessionId) -> Vec<String> {
-        let mut peer_mapper = self.peer_mapper.lock().unwrap();
-        let session_participants = peer_mapper.sessions_participants_u16.lock().unwrap();
-        
-        if let Some(participants) = session_participants.get(&session_id) {
-            participants.keys().map(|id| id.to_string()).collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Check for missing messages and trigger retry requests if needed
-    fn check_and_request_retries(&self, session_id: SessionId, phase: ECDSAPhase, round: u8) {
-        // Check if retry mechanism is enabled
-        if !self.retry_enabled {
-            return;
-        }
-
-        // Get all expected participants from session data
-        let expected_participants = self.get_expected_participants(session_id);
-        
-        if expected_participants.is_empty() {
-            return; // No participants found for this session
-        }
-
-        // Check which participants haven't sent messages yet
-        let mut missing_participants = Vec::new();
-        let received_messages = self.received_messages.lock().unwrap();
-        
-        for participant in expected_participants.iter() {
-            let message_key = (session_id, phase.clone(), round, participant.clone());
-            if !received_messages.contains_key(&message_key) {
-                missing_participants.push(participant.clone());
-            }
-        }
-        drop(received_messages);
-
-        if missing_participants.is_empty() {
-            return; // All participants have sent their messages
-        }
-
-        // Check if enough time has passed since round start to trigger retry
-        let should_retry = {
-            let round_timestamps = self.round_timestamps.lock().unwrap();
-            let round_key = (session_id, phase.clone(), round);
-            if let Some(round_start) = round_timestamps.get(&round_key) {
-                round_start.elapsed().as_secs() >= self.retry_timeout
-            } else {
-                false // Round hasn't started or timestamp not tracked
-            }
-        };
-
-        if !should_retry {
-            return;
-        }
-
-        // Check if we already sent a retry request recently for this session/phase/round
-        let should_send_retry = {
-            let retry_timestamps = self.retry_request_timestamps.lock().unwrap();
-            let key = (session_id, phase.clone(), round);
-            if let Some(last_retry) = retry_timestamps.get(&key) {
-                // Don't spam retry requests - wait at least half the retry timeout between requests
-                last_retry.elapsed().as_secs() >= (self.retry_timeout / 2)
-            } else {
-                true // Never sent a retry request for this session/phase/round
-            }
-        };
-
-        if should_send_retry {
-            log::info!("[TSS] Requesting retries for session {} phase {:?} round {} from {} participants: {:?}", 
-                session_id, phase, round, missing_participants.len(), missing_participants);
-            
-            // Send retry request
-            let retry_message = TssMessage::ECDSARetryRequest(session_id, phase.clone(), round, missing_participants);
-            
-            // Broadcast retry request to all participants
-            if let Err(e) = self.send_signed_message(retry_message) {
-                log::error!("[TSS] Failed to send retry request: {:?}", e);
-            } else {
-                // Track that we sent this retry request
-                let mut retry_timestamps = self.retry_request_timestamps.lock().unwrap();
-                retry_timestamps.insert((session_id, phase, round), std::time::Instant::now());
-            }
-        }
-    }
-
-    /// Handle incoming retry request by resending our data if available
-    fn handle_retry_request(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, missing_participants: Vec<String>) {
-        // Check if we are one of the participants being asked to retry
-        let our_index = {
-            let mut peer_mapper = self.peer_mapper.lock().unwrap();
-            peer_mapper.get_id_from_peer_id(&session_id, &PeerId::from_bytes(&self.local_peer_id[..]).unwrap())
-                .map(|id| id.to_string())
-        };
-
-        let Some(our_index) = our_index else {
-            return; // We're not a participant in this session
-        };
-
-        if !missing_participants.contains(&our_index) {
-            return; // We're not being asked to retry
-        }
-
-        // Check retry limits
-        let retry_key = (session_id, phase.clone(), round, our_index.clone());
-        let retry_count = {
-            let mut retry_attempts = self.retry_attempts.lock().unwrap();
-            let count = retry_attempts.get(&retry_key).copied().unwrap_or(0);
-            if count >= self.max_retry_attempts {
-                log::warn!("[TSS] Maximum retry attempts ({}) reached for session {} phase {:?} round {}", 
-                    self.max_retry_attempts, session_id, phase, round);
-                return;
-            }
-            retry_attempts.insert(retry_key.clone(), count + 1);
-            count + 1
-        };
-
-        log::info!("[TSS] Handling retry request for session {} phase {:?} round {} (attempt {})", 
-            session_id, phase, round, retry_count);
-
-        // Look up our stored message for this session/phase/round
-        let message_key = (session_id, phase.clone(), round, our_index.clone());
-        let stored_message = {
-            let sent_messages = self.sent_messages.lock().unwrap();
-            sent_messages.get(&message_key).cloned()
-        };
-
-        if let Some(message_data) = stored_message {
-            // Resend our message
-            let retry_response = TssMessage::ECDSARetryResponse(session_id, phase.clone(), round, our_index, message_data);
-            
-            if let Err(e) = self.send_signed_message(retry_response) {
-                log::error!("[TSS] Failed to send retry response: {:?}", e);
-            } else {
-                log::info!("[TSS] Sent retry response for session {} phase {:?} round {}", session_id, phase, round);
-            }
-        } else {
-            log::warn!("[TSS] No stored message found for retry request - session {} phase {:?} round {}", 
-                session_id, phase, round);
-        }
-    }
-
-    /// Handle incoming retry response by processing the resent data
-    fn handle_retry_response(&self, session_id: SessionId, phase: ECDSAPhase, round: u8, sender_index: String, message_data: Vec<u8>) {
-        log::info!("[TSS] Received retry response for session {} phase {:?} round {} from participant {}", 
-            session_id, phase, round, sender_index);
-
-        // Mark that we received a message from this participant
-        self.track_received_message(session_id, phase.clone(), round, sender_index.clone());
-
-        // Process the message data based on the phase
-        match phase {
-            ECDSAPhase::Key => {
-                // Re-inject the keygen message into the system
-                let message = TssMessage::ECDSAMessageKeygen(session_id, sender_index, message_data);
-                if let Err(e) = self.send_signed_message(message) {
-                    log::error!("[TSS] Failed to re-inject keygen message: {:?}", e);
-                }
-            }
-            ECDSAPhase::Reshare => {
-                // Re-inject the reshare message into the system  
-                let message = TssMessage::ECDSAMessageReshare(session_id, sender_index, message_data);
-                if let Err(e) = self.send_signed_message(message) {
-                    log::error!("[TSS] Failed to re-inject reshare message: {:?}", e);
-                }
-            }
-            ECDSAPhase::Sign => {
-                // Re-inject the sign message into the system
-                let message = TssMessage::ECDSAMessageSign(session_id, sender_index, message_data);
-                if let Err(e) = self.send_signed_message(message) {
-                    log::error!("[TSS] Failed to re-inject sign message: {:?}", e);
-                }
-            }
-            ECDSAPhase::SignOnline => {
-                // Re-inject the sign online message into the system
-                let message = TssMessage::ECDSAMessageSignOnline(session_id, sender_index, message_data);
-                if let Err(e) = self.send_signed_message(message) {
-                    log::error!("[TSS] Failed to re-inject sign online message: {:?}", e);
-                }
-            }
-        }
     }
 
     /// Add session data with validation
@@ -1276,7 +432,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             signed_message.sender_public_key);
         
         // Verify the signature and timestamp
-        if !signed_message.verify_signature() {
+        if !verification::verify_signature(&signed_message) {
             log::warn!("[TSS] Received message with invalid signature");
             return;
         }
@@ -1286,7 +442,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
             .unwrap_or_default()
             .as_secs();
         
-        if !signed_message.is_timestamp_valid(current_time, 300) { // 5 minutes max age
+        if !verification::is_timestamp_valid(&signed_message, current_time, 300) { // 5 minutes max age
             log::warn!("[TSS] Received message with invalid or old timestamp");
             return;
         }
@@ -1583,13 +739,22 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
             TssMessage::ECDSARetryRequest(session_id, phase, round, missing_participants) => {
                 log::info!("[TSS] Received retry request for session {} phase {:?} round {}", session_id, phase, round);
-                self.handle_retry_request(*session_id, phase.clone(), *round, missing_participants.clone());
+                if let Some(msg) = self.retry_mechanism.handle_retry_request(*session_id, phase.clone(), *round, missing_participants.clone(), &self.peer_mapper) {
+                    if let Err(e) = self.send_signed_message(msg) {
+                        log::error!("[TSS] Failed to send retry response: {:?}", e);
+                    }
+                }
             }
 
             TssMessage::ECDSARetryResponse(session_id, phase, round, sender_index, message_data) => {
                 log::info!("[TSS] Received retry response for session {} phase {:?} round {} from {}", 
                     session_id, phase, round, sender_index);
-                self.handle_retry_response(*session_id, phase.clone(), *round, sender_index.clone(), message_data.clone());
+                if let Some(msg) = self.retry_mechanism.handle_retry_response(*session_id, phase.clone(), *round, sender_index.clone(), message_data.clone()) {
+                    // Re-inject the message into the system
+                    if let Err(e) = self.send_signed_message(msg) {
+                        log::error!("[TSS] Failed to re-inject message from retry response: {:?}", e);
+                    }
+                }
             }
 
             TssMessage::ECDSAMessageKeygen(session_id, _index, msg)
@@ -1614,7 +779,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 }
 
                 // Track round start and received message for retry mechanism (if enabled)
-                if self.retry_enabled {
+                if self.retry_mechanism.is_enabled() {
                     let (phase, participant_index) = match &message {
                         TssMessage::ECDSAMessageKeygen(_, index, _) => (ECDSAPhase::Key, index.clone()),
                         TssMessage::ECDSAMessageReshare(_, index, _) => (ECDSAPhase::Reshare, index.clone()),
@@ -1626,8 +791,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                     // For now, assume round 0 - this should be extracted from message content in a real implementation
                     let round = 0u8; // TODO: Extract actual round from message content when available
                     
-                    self.track_round_start(*session_id, phase.clone(), round);
-                    self.track_received_message(*session_id, phase, round, participant_index);
+                    self.retry_mechanism.track_round_start(*session_id, phase.clone(), round);
+                    self.retry_mechanism.track_received_message(*session_id, phase, round, participant_index);
                 }
 
                 // This means we received a message through gossip. This can be handled in multiple ways depending on multiple possibilities
@@ -1687,10 +852,14 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                         // For simplicity, assume round 0 for now - in practice you'd need to determine the actual round
                         // from the message content or maintain round state
                         let round = 0;
-                        self.track_received_message(*session_id, phase.clone(), round, sender_index.to_string());
+                        self.retry_mechanism.track_received_message(*session_id, phase.clone(), round, sender_index.to_string());
                         
                         // Trigger retry check for this session/phase/round
-                        self.check_and_request_retries(*session_id, phase.clone(), round);
+                        if let Some(retry_message) = self.retry_mechanism.check_and_request_retries(*session_id, phase.clone(), round, &self.peer_mapper) {
+                            if let Err(e) = self.send_signed_message(retry_message) {
+                                log::error!("[TSS] Failed to send retry request: {:?}", e);
+                            }
+                        }
                     }
                     drop(peer_mapper);
                 }
@@ -2400,7 +1569,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         round1_secret_package: SecretPackage, // Pass the secret package directly
         round1_packages: BTreeMap<Identifier, Package>,
     ) {
-        match dkground2::round2_verify_round1_participants(
+        match dkg_session::round2_verify_round1_participants(
             session_id,
             round1_secret_package,
             &round1_packages,
@@ -2624,102 +1793,48 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         // Process the buffered messages before checking anything else
         self.dkg_process_buffer_for_round2(session_id);
 
-        let storage = self.storage.lock().unwrap();
-
-        let round2_secret_package = storage.read_secret_package_round2(session_id);
-        if let Err(_e) = round2_secret_package {
-            log::warn!(
-                "[TSS]: Received DKGRound2 for session {} but local round 2 secret package not ready yet.",
-                session_id
-            );
-            return Err(SessionManagerError::Round2SecretPackageNotYetAvailable);
-        }
-        let round2_secret_package = round2_secret_package.unwrap();
-
-        let n = round2_secret_package.max_signers();
-
-        let round1_packages = storage.fetch_round1_packages(session_id).unwrap();
-        let round2_packages = storage.fetch_round2_packages(session_id).unwrap();
-        drop(storage); // Release lock
-
-        if round2_packages.keys().len() >= (n - 1).into() {
-            match dkg::part3(&round2_secret_package, &round1_packages, &round2_packages) {
-                Ok((private_key, public_key)) => {
-
-
-                    let mut peer_mapper_handle = self.peer_mapper.lock().unwrap();
-                    let whoami_identifier = peer_mapper_handle.get_identifier_from_account_id(&session_id, &self.validator_key);
-
-                    if let None = whoami_identifier {
-                        log::error!("[TSS] We are not allowed to participate in the signing phase");
-                        return Err(SessionManagerError::IdentifierNotFound);
+        // Use the extracted DKG session completion module
+        match dkg_session::verify_and_complete(
+            session_id,
+            self.storage.clone(),
+            self.key_storage.clone(),
+            self.dkg_session_states.clone(),
+            self.peer_mapper.clone(),
+            &self.validator_key,
+        ) {
+            Ok(_) => {
+                log::info!("[TSS] DKG session {} completed successfully", session_id);
+            }
+            Err(SessionManagerError::DkgPart3Failed(_)) => {
+                // Handle DKG part 3 failure with offence reporting
+                let storage = self.storage.lock().unwrap();
+                let round2_packages = storage.fetch_round2_packages(session_id).unwrap();
+                drop(storage);
+                
+                // Report DKG failure - report all participants that submitted round2 packages
+                // since we can't determine which specific participant caused the verification failure
+                let mut peer_mapper = self.peer_mapper.lock().unwrap();
+                let mut offenders = Vec::new();
+                
+                for identifier in round2_packages.keys() {
+                    if let Some(account_id) = peer_mapper.get_account_id_from_identifier(&session_id, identifier) {
+                        if let Ok(account_bytes) = account_id.as_slice().try_into() {
+                            offenders.push(account_bytes);
+                        }
                     }
-
-                    drop(peer_mapper_handle);
-
-
-
-                    let mut storage = self.key_storage.lock().unwrap();
-                    let _ = storage.store_data(
-                        session_id,
-                        dkghelpers::StorageType::PubKey,
-                        &public_key.serialize().unwrap()[..],
-                        Some(&whoami_identifier.unwrap().serialize()),
-                    );
-                    if let Err(error) = storage.store_data(
-                        session_id,
-                        dkghelpers::StorageType::Key,
-                        &private_key.serialize().unwrap()[..],
-                        Some(&whoami_identifier.unwrap().serialize()),
-                    ) {
-                        log::error!("[TSS] There was an error storing key {:?}", error);
-                    }
-                    drop(storage);
-                    log::info!(
-                        "[TSS]: DKG Part 3 successful for session {}. Public Key: {:?}",
-                        session_id,
-                        public_key
-                    );
-                    // Update session state to KeyGenerated
-                    let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                    session_state_lock.insert(session_id, DKGSessionState::KeyGenerated);
-                    drop(session_state_lock); // Release lock
                 }
-                Err(e) => {
-                    log::error!(
-                        "[TSS]: DKG Part 3 failed for session {}: {:?}",
-                        session_id,
-                        e
-                    );
-                    // Update session state to Failed
-                    let mut session_state_lock = self.dkg_session_states.lock().unwrap();
-                    session_state_lock.insert(session_id, DKGSessionState::Failed);
-                    drop(session_state_lock);
-                    
-                    // Report DKG failure - report all participants that submitted round2 packages
-                    // since we can't determine which specific participant caused the verification failure
-                    let mut peer_mapper = self.peer_mapper.lock().unwrap();
-                    let mut offenders = Vec::new();
-                    
-                    for identifier in round2_packages.keys() {
-                        if let Some(account_id) = peer_mapper.get_account_id_from_identifier(&session_id, identifier) {
-                            if let Ok(account_bytes) = account_id.as_slice().try_into() {
-                                offenders.push(account_bytes);
-                            }
-                        }
-                    }
-                    drop(peer_mapper);
-                    
-                    if !offenders.is_empty() {
-                        let best_hash = self.client.best_hash();
-                        if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
-                            log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
-                        } else {
-                            log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for DKG part3 failure", session_id);
-                        }
+                drop(peer_mapper);
+                
+                if !offenders.is_empty() {
+                    let best_hash = self.client.best_hash();
+                    if let Err(e) = self.client.report_tss_offence(best_hash, session_id, uomi_runtime::pallet_tss::TssOffenceType::InvalidCryptographicData, offenders) {
+                        log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
+                    } else {
+                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for DKG part3 failure", session_id);
                     }
                 }
             }
+            Err(e) => return Err(e),
         }
 
         Ok(())
@@ -2736,84 +1851,16 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
     where
         B: BlockT,
     {
-        
-        // Validate threshold and participant count
-        if t == 0 || n == 0 || t > n {
-            log::error!("[TSS] Invalid threshold parameters for DKG session {}: t={}, n={}", session_id, t, n);
-            return Err(SessionError::GenericError(format!("Invalid threshold parameters: t={}, n={}", t, n)));
-        }
-        
-        if participants.len() != n as usize {
-            log::error!(
-                "[TSS] Mismatch between participant count and n parameter for DKG session {}: {} vs {}",
-                session_id, participants.len(), n
-            );
-            return Err(SessionError::GenericError(format!(
-                "Participant count ({}) doesn't match n parameter ({})",
-                participants.len(), n
-            )));
-        }
-        
-        let mut index = None;
-        log::debug!("[TSS] participants={:?}", participants);
-
-        // Check if we're part of the participants
-        for (i, el) in participants.iter().enumerate() {
-            if *el == self.validator_key[..] {
-                index = Some(i);
-                break;
-            }
-        }
-
-        if index.is_none() {
-            log::error!("[TSS] Not authorized to participate in DKG session {}", session_id);
-            return Err(SessionError::NotAuthorized);
-        }
-        
-        let index: Result<u16, TryFromIntError> = index.unwrap().try_into();
-        if let Err(e) = index {
-            log::error!("[TSS] Error converting index to u16: {:?}", e);
-            return Err(SessionError::GenericError("Error converting index to u16".into()));
-        }
-        
-        let index = index.unwrap();
-        info!("[TSS] Our index in DKG session {}: {}", session_id, index);
-
-        let participant_identifier: Identifier = (index + 1).try_into().unwrap();
-
-        log::info!("[TSS] Event received from DKG, starting round 1 for session {}", session_id);
-
-        // Generate round 1 package
-        let (r1, secret) = match dkground1::generate_round1_secret_package(
-            t.try_into().unwrap_or(u16::MAX),
-            n.try_into().unwrap(),
-            participant_identifier,
+        // Use the extracted DKG session module
+        let (r1, _secret) = dkg_session::handle_session_created(
             session_id,
-        ) {
-            Ok(result) => result,
-            Err(e) => {
-                log::error!("[TSS] Failed to generate round 1 package for session {}: {:?}", session_id, e);
-                return Err(SessionError::GenericError(format!("Failed to generate round 1 package: {:?}", e)));
-            }
-        };
-
-        // Store secret package
-        let mut storage = self.storage.lock().unwrap();
-        if let Err(e) = storage.store_data(
-            session_id,
-            dkghelpers::StorageType::DKGRound1SecretPackage,
-            &secret.serialize().unwrap()[..],
-            None,
-        ) {
-            log::error!("[TSS] Failed to store secret package for session {}: {:?}", session_id, e);
-            return Err(SessionError::GenericError(format!("Failed to store secret package: {:?}", e)));
-        }
-
-        // Update session state
-        let mut handle_state = self.dkg_session_states.lock().unwrap();
-        handle_state.insert(session_id, DKGSessionState::Round1Initiated);
-        drop(handle_state);
-        drop(storage);
+            n,
+            t,
+            participants.clone(),
+            &self.validator_key,
+            self.storage.clone(),
+            self.dkg_session_states.clone(),
+        )?;
 
         // Send round 1 message
         let dkg_round1_message = TssMessage::DKGRound1(session_id, r1.serialize().unwrap());
@@ -2914,7 +1961,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         }
         // Generate commitments and nonces from the key_package.signing_share()
         let (nonces, commitments) =
-            signlib::generate_signing_commitments_and_nonces(key_package.unwrap());
+            signing::frost::generate_signing_commitments_and_nonces(key_package.unwrap());
 
         drop(key_storage);
 
@@ -3069,7 +2116,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
         
         let message = &message[..];
 
-        let signing_package = signlib::get_signing_package(message, commitments.clone());
+        let signing_package = signing::frost::get_signing_package(message, commitments.clone());
 
         let mut handle_state = self.signing_session_states.lock().unwrap();
         handle_state.insert(session_id, SigningSessionState::Round2Initiated);
@@ -3656,8 +2703,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
 
     /// Configure retry mechanism parameters
     fn configure_retry_mechanism(&mut self, retry_timeout_secs: u64, max_retry_attempts: u8) {
-        self.retry_timeout = retry_timeout_secs;
-        self.max_retry_attempts = max_retry_attempts;
+        self.retry_mechanism.set_retry_timeout(retry_timeout_secs);
+        self.retry_mechanism.set_max_retry_attempts(max_retry_attempts);
         log::info!("[TSS] Retry mechanism configured: timeout={}s, max_attempts={}", 
             retry_timeout_secs, max_retry_attempts);
     }
@@ -3676,7 +2723,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C>
                 // Check all ECDSA phases and assume round 0 for simplicity
                 // In practice, you'd track the current round for each phase
                 for phase in [ECDSAPhase::Key, ECDSAPhase::Reshare, ECDSAPhase::Sign, ECDSAPhase::SignOnline] {
-                    self.check_and_request_retries(session_id, phase, 0);
+                    self.retry_mechanism.check_and_request_retries(session_id, phase, 0, &self.peer_mapper);
                 }
             }
         }

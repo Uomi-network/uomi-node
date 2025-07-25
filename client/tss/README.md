@@ -1,3 +1,194 @@
+# TSS Client Refactoring Plan
+
+This document tracks the progress of refactoring the TSS (Threshold Signature Scheme) client module, specifically the massive `lib.rs` file (~5000 lines) into a well-organized, maintainable structure.
+
+## Current State
+
+The TSS client is currently implemented as a monolithic `lib.rs` file containing approximately 5000 lines of code. This includes:
+
+- Message types and protocol definitions
+- Network validation logic
+- Peer mapping and session management
+- DKG (Distributed Key Generation) implementation
+- ECDSA signature handling
+- FROST protocol implementation
+- Retry mechanisms
+- Error handling
+- Storage management
+
+## Refactoring Strategy
+
+The refactoring will be conducted in multiple phases to ensure stability and maintain functionality throughout the process. Each phase will extract specific functionality into separate modules while keeping `lib.rs` operational.
+
+## Phase Plan
+
+### ✅ Phase 0: Planning & Setup
+- [x] Analyze existing codebase structure
+- [x] Create refactoring plan
+- [x] Set up progress tracking
+
+### ✅ Phase 1: Extract Message Types and Enums
+**Status: Completed**
+- [x] Extract `TssMessage` enum to `src/types/messages.rs`
+- [x] Extract `SignedTssMessage` struct to `src/types/messages.rs`
+- [x] Extract `ECDSAPhase` enum to `src/types/phases.rs`
+- [x] Extract session state enums to `src/types/states.rs`
+- [x] Extract type aliases to `src/types/mod.rs`
+- [x] Update imports in `lib.rs`
+
+### ✅ Phase 2: Extract TssValidator
+**Status: Completed**
+- [x] Create `src/validation/` module
+- [x] Extract `TssValidator` struct to `src/validation/validator.rs`
+- [x] Extract message validation logic
+- [x] Extract replay attack protection
+- [x] Update `lib.rs` to use new module
+
+### ✅ Phase 3: Extract PeerMapper
+**Status: Completed**
+- [x] Create `src/network/` module
+- [x] Extract `PeerMapper` struct to `src/network/peer_mapper.rs`
+- [x] Extract peer ID/account ID mapping logic
+- [x] Extract session participant management
+- [x] Update `lib.rs` to use new module
+
+### ✅ Phase 4: Extract Session Management Types and Errors
+**Status: Completed**
+- [x] Create `src/session/` module
+- [x] Extract `SessionManager` error types to `src/session/errors.rs`
+- [x] Extract session data structures to `src/session/types.rs`
+- [x] Extract session state management
+- [x] Update `lib.rs` imports
+
+### ✅ Phase 5: Extract DKG Session Handling Logic
+**Status: Completed**
+- [x] Create `src/dkg_session/` module
+- [x] Extract DKG round 1 logic to `src/dkg_session/round1.rs`
+- [x] Extract DKG round 2 logic to `src/dkg_session/round2.rs`
+- [x] Extract DKG session creation and completion
+- [x] Extract DKG state management
+- [x] Update `SessionManager` to use DKG session modules
+
+### ✅ Phase 6: Extract ECDSA Handling Logic
+**Status: Completed**
+- [x] Create `src/ecdsa/` module
+- [x] Extract ECDSA message handling to `src/ecdsa/handler.rs`
+- [x] Extract ECDSA phase management to `src/ecdsa/phases.rs`
+- [x] Extract key and sign operations to `src/ecdsa/operations.rs`
+- [x] Update `SessionManager` to use ECDSA modules
+
+### ✅ Phase 7: Extract Signing Session Handling Logic
+**Status: Completed**
+- [x] Create `src/signing/` module
+- [x] Extract FROST signing logic to `src/signing/frost.rs`
+- [x] Extract commitment handling
+- [x] Extract signature aggregation
+- [x] Update `SessionManager` to use signing modules
+
+### ✅ Phase 8: Extract Retry Mechanism
+**Status: Completed**
+- [x] Create `src/retry/` module
+- [x] Extract retry logic to `src/retry/mechanism.rs`
+- [x] Extract retry request/response handling
+- [x] Extract timeout management
+- [x] Update `SessionManager` to use retry module
+
+### ✅ Phase 9: Extract Message Validation and Security Logic
+**Status: Completed**
+- [x] Create `src/security/` module
+- [x] Extract signature verification to `src/security/verification.rs`
+- [x] Extract timestamp validation
+- [x] Extract cryptographic validation
+- [x] Update relevant modules to use security functions
+
+### 📋 Phase 10: Extract Gossip Message Handling Logic
+**Status: Pending**
+- [ ] Create `src/gossip/` module
+- [ ] Extract gossip message routing to `src/gossip/router.rs`
+- [ ] Extract message broadcasting logic
+- [ ] Extract P2P communication
+- [ ] Update `SessionManager` to use gossip module
+
+### 📋 Phase 11: Refactor SessionManager
+**Status: Pending**
+- [ ] Simplify `SessionManager` struct
+- [ ] Remove extracted functionality
+- [ ] Use composition instead of massive impl block
+- [ ] Clean up dependencies
+- [ ] Optimize imports
+
+### 📋 Phase 12: Final Cleanup and Simplification
+**Status: Pending**
+- [ ] Review `lib.rs` for remaining opportunities
+- [ ] Consolidate remaining utility functions
+- [ ] Optimize module structure
+- [ ] Update documentation
+- [ ] Run comprehensive tests
+- [ ] Performance verification
+
+## Module Structure (Target)
+
+```
+src/
+├── lib.rs                    # Main entry point (simplified)
+├── types/
+│   ├── mod.rs               # Type re-exports
+│   ├── messages.rs          # TssMessage, SignedTssMessage
+│   ├── phases.rs            # ECDSAPhase, protocol phases
+│   └── states.rs            # Session states
+├── validation/
+│   └── validator.rs         # TssValidator and validation logic
+├── network/
+│   └── peer_mapper.rs       # PeerMapper and peer management
+├── session/
+│   ├── mod.rs               # Session management re-exports
+│   ├── manager.rs           # Core SessionManager (simplified)
+│   ├── errors.rs            # Session-related errors
+│   └── types.rs             # Session data structures
+├── dkg_session/
+│   ├── mod.rs               # DKG session re-exports
+│   ├── round1.rs            # Round 1 logic
+│   ├── round2.rs            # Round 2 logic
+│   └── session.rs           # DKG session management
+├── ecdsa/
+│   ├── mod.rs               # ECDSA re-exports
+│   ├── handler.rs           # Message handling
+│   ├── phases.rs            # Phase management
+│   └── operations.rs        # Key operations
+├── signing/
+│   ├── mod.rs               # Signing re-exports
+│   └── frost.rs             # FROST protocol implementation
+├── retry/
+│   └── mechanism.rs         # Retry logic
+├── security/
+│   └── verification.rs      # Security validations
+└── gossip/
+    └── router.rs            # Gossip message routing
+```
+
+## Testing Strategy
+
+- After each phase, run existing tests to ensure no regression
+- Add module-specific tests for extracted functionality
+- Maintain integration tests for end-to-end functionality
+- Performance testing to ensure no degradation
+
+## Progress Tracking
+
+- ✅ Completed
+- 🔄 In Progress  
+- 📋 Pending
+- ❌ Blocked
+
+## Notes
+
+- Each phase should be completed and tested before moving to the next
+- The original `lib.rs` should remain functional throughout the process
+- Focus on extracting code first, optimization comes later
+- Maintain backward compatibility for external interfaces
+
+---
+
 # UOMI Threshold Signature Scheme (TSS) Implementation
 
 This document provides a comprehensive overview of the UOMI blockchain's Threshold Signature Scheme (TSS) implementation. It supports both FROST (Flexible Round-Optimized Schnorr Threshold signatures) for Ed25519 and ECDSA (using GG20/DMZ21-like protocols).
