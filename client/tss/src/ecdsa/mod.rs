@@ -17,6 +17,8 @@ use crate::types::SessionId;
 pub mod handler;
 pub mod operations;
 pub mod phases;
+pub mod message_processor;
+pub mod session_creator;
 
 pub use phases::ECDSAPhase;
 

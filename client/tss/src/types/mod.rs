@@ -4,7 +4,7 @@ pub mod states;
 // Re-export main types from submodules
 pub use messages::{TssMessage, SignedTssMessage, TSSPeerId, TSSPublic, TSSSignature};
 pub use states::{
-    DKGSessionState, SigningSessionState, SessionManagerMessage, TSSRuntimeEvent, 
+    SessionManagerMessage, TSSRuntimeEvent,
     SessionManagerError, TSSParticipant, SessionData, SessionError
 };
 

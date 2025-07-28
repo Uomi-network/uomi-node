@@ -14,9 +14,10 @@ use frost_ed25519::{
 };
 
 use crate::types::{
-    SessionId, SessionError, SessionManagerError, DKGSessionState, 
+    SessionId, SessionError, SessionManagerError,
     TSSParticipant, TSSPublic
 };
+use crate::session::dkg_state_manager::DKGSessionState;
 use crate::dkghelpers::{Storage, StorageType};
 use crate::network::PeerMapper;
 use crate::dkg_session::{round1, round2 as dkg_round2};

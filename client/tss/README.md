@@ -117,22 +117,45 @@ The refactoring will be conducted in multiple phases to ensure stability and mai
 - [x] Extract runtime interaction logic
 - [x] Update `SessionManager` to use client module
 
-### 📋 Phase 12: Refactor SessionManager
-**Status: Pending**
-- [ ] Simplify `SessionManager` struct
-- [ ] Remove extracted functionality
-- [ ] Use composition instead of massive impl block
-- [ ] Clean up dependencies
-- [ ] Optimize imports
+### ✅ Phase 12a: Extract Session Management Core Logic
+**Status: Completed**
+- [x] Extract core session management functions to `src/session/core.rs`
+- [x] Move session creation/initialization logic
+- [x] Separate session timeout management logic
 
-### 📋 Phase 13: Final Cleanup and Simplification
-**Status: Pending**
-- [ ] Review `lib.rs` for remaining opportunities
-- [ ] Consolidate remaining utility functions
-- [ ] Optimize module structure
-- [ ] Update documentation
-- [ ] Run comprehensive tests
-- [ ] Performance verification
+### ✅ Phase 12b: Extract Message Processing Logic
+**Status: Completed**
+- [x] Extract `handle_gossip_message()` to `src/session/message_processor.rs`
+- [x] Separate runtime message processing logic
+- [x] Consolidate message buffer management
+
+### ✅ Phase 12c: Extract Session State Management
+**Status: Completed**
+- [x] Extract DKG state management to `src/session/dkg_state_manager.rs`
+- [x] Extract Signing state management to `src/session/signing_state_manager.rs`
+- [x] Simplify session state access
+
+### ✅ Phase 12d: Extract Cleanup and Maintenance Logic
+**Status: Completed**
+- [x] Extract `cleanup_expired_sessions()` to `src/session/cleanup.rs`
+- [x] Separate retry check logic
+- [x] Consolidate inactive participant management
+
+### ✅ Phase 12e: Simplify SessionManager Structure
+**Status: Completed**
+- [x] Reduce SessionManager struct fields
+- [x] Use composition instead of direct fields
+- [x] Simplify constructor and dependencies
+- [x] Optimize imports
+
+### ✅ Phase 13: Final Cleanup and Simplification
+**Status: Completed**
+- [x] Review `lib.rs` for remaining opportunities
+- [x] Consolidate remaining utility functions
+- [x] Optimize module structure
+- [x] Update documentation
+- [x] Run comprehensive tests
+- [x] Performance verification
 
 ## Module Structure (Target)
 

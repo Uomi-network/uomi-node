@@ -358,7 +358,7 @@ impl TestNode {
     /// GH => SM
     pub fn incoming_messages(&mut self) -> Vec<(PeerId, TssMessage)> {
         let mut messages = Vec::new();
-        while let Ok((peer_id, msg)) = self.session_manager.gossip_to_session_manager_rx.try_recv()
+        while let Ok((peer_id, msg)) = self.session_manager.communication_manager.gossip_to_session_manager_rx.try_recv()
         {
             messages.push((peer_id, msg));
         }

@@ -1,6 +1,5 @@
 use std::{marker::PhantomData, sync::Arc};
 use sp_api::ApiExt;
-use codec::Encode;
 use sc_client_api::{BlockchainEvents, HeaderBackend};
 use sc_transaction_pool_api::{LocalTransactionPool, OffchainTransactionPoolFactory, TransactionPool};
 use sp_api::ProvideRuntimeApi;

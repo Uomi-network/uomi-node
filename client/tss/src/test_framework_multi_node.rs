@@ -3,8 +3,11 @@ mod tests {
     use crate::{
         dkghelpers::{Storage, StorageType},
         process_session_manager_message,
+        session::{
+            dkg_state_manager::DKGSessionState, signing_state_manager::SigningSessionState,
+        },
         test_framework::{MockTssMessageHandler, TestConfig, TestNetwork},
-        DKGSessionState, SessionId, SigningSessionState, TSSRuntimeEvent, TssMessageHandler,
+        SessionId, TSSRuntimeEvent, TssMessageHandler,
     };
 
     use frost_ed25519::Identifier;
