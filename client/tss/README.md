@@ -101,15 +101,23 @@ The refactoring will be conducted in multiple phases to ensure stability and mai
 - [x] Extract cryptographic validation
 - [x] Update relevant modules to use security functions
 
-### 📋 Phase 10: Extract Gossip Message Handling Logic
-**Status: Pending**
-- [ ] Create `src/gossip/` module
-- [ ] Extract gossip message routing to `src/gossip/router.rs`
-- [ ] Extract message broadcasting logic
-- [ ] Extract P2P communication
-- [ ] Update `SessionManager` to use gossip module
+### ✅ Phase 10: Extract Gossip Message Handling Logic
+**Status: Completed**
+- [x] Create `src/gossip/` module
+- [x] Extract gossip message routing to `src/gossip/router.rs`
+- [x] Extract message broadcasting logic
+- [x] Extract P2P communication
+- [x] Update `SessionManager` to use gossip module
 
-### 📋 Phase 11: Refactor SessionManager
+### ✅ Phase 11: Extract Client Manager
+**Status: Completed**
+- [x] Create `src/client/` module
+- [x] Extract `ClientManager` trait to `src/client/manager.rs`
+- [x] Extract `ClientWrapper` struct to `src/client/wrapper.rs`
+- [x] Extract runtime interaction logic
+- [x] Update `SessionManager` to use client module
+
+### 📋 Phase 12: Refactor SessionManager
 **Status: Pending**
 - [ ] Simplify `SessionManager` struct
 - [ ] Remove extracted functionality
@@ -117,7 +125,7 @@ The refactoring will be conducted in multiple phases to ensure stability and mai
 - [ ] Clean up dependencies
 - [ ] Optimize imports
 
-### 📋 Phase 12: Final Cleanup and Simplification
+### 📋 Phase 13: Final Cleanup and Simplification
 **Status: Pending**
 - [ ] Review `lib.rs` for remaining opportunities
 - [ ] Consolidate remaining utility functions
@@ -162,8 +170,12 @@ src/
 │   └── mechanism.rs         # Retry logic
 ├── security/
 │   └── verification.rs      # Security validations
-└── gossip/
-    └── router.rs            # Gossip message routing
+├── gossip/
+│   └── router.rs            # Gossip message routing
+└── client/
+    ├── mod.rs               # Client re-exports
+    ├── manager.rs           # ClientManager trait
+    └── wrapper.rs           # ClientWrapper implementation
 ```
 
 ## Testing Strategy
