@@ -27,6 +27,15 @@ impl PeerMapper {
             validator_ids: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    pub fn peers(&self) -> Arc<Mutex<HashMap<PeerId, TSSPublic>>> {
+        Arc::new(Mutex::new(self.peers.clone()))
+    }
+
+    pub fn remove_peer(&mut self, peer_id: &PeerId) {
+        log::info!("Removing Peer {:?}", peer_id);
+        self.peers.remove(peer_id);
+    }   
     
     pub fn get_account_id_from_peer_id(&mut self, peer_id: &PeerId) -> Option<&TSSPublic> {
         self.peers.get(peer_id)

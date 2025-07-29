@@ -174,6 +174,18 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         messages
     }
 
+    // Consume unknown peer messages by public key (used when the real PeerId becomes known)
+    pub fn consume_unknown_peer_queue_by_public_key(&self, public_key: &[u8]) -> Vec<TssMessage> {
+        use sp_core::hashing::blake2_256;
+        let public_key_hash = blake2_256(public_key);
+        
+        // Try to find messages stored under the temp PeerId derived from this public key
+        let temp_peer_id = PeerId::from_bytes(&public_key_hash[0..32])
+            .unwrap_or_else(|_| PeerId::random());
+            
+        self.consume_unknown_peer_queue(temp_peer_id)
+    }
+
     /// Add session data with validation
     pub fn add_session_data(
         &self,
@@ -209,22 +221,32 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         // 2. We now have verified the sender through their announcement
         // 3. The message was buffered while waiting for sender identification
         
+        // Get the actual public key for this peer from the peer mapper
+        let sender_public_key = {
+            let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
+            peer_mapper.get_account_id_from_peer_id(&sender_peer_id)
+                .map(|public_key| {
+                    let mut key_array = [0u8; 32];
+                    key_array.copy_from_slice(&public_key[..32.min(public_key.len())]);
+                    key_array
+                })
+                .unwrap_or([0u8; 32])
+        };
+        
         // Create a temporary SignedTssMessage for processing
         let signed_message = SignedTssMessage {
             message,
-            sender_public_key: [0u8; 32], // We don't have the actual public key here
-            signature: [0u8; 64], // We don't have the actual signature here
+            sender_public_key,
+            signature: [0u8; 64], // We don't have the actual signature here (but it's bypassed in test mode)
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
         };
         
-        // Delegate to the message processor
-        match crate::gossip::process_session_manager_message(self, signed_message) {
-            Ok(_) => log::info!("[TSS] ✅ Successfully processed queued message"),
-            Err(e) => log::error!("[TSS] ❌ Failed to process queued message: {:?}", e),
-        }
+        // Delegate to the message processor with the known sender PeerId
+        MessageProcessor::handle_gossip_message(self, signed_message, Some(sender_peer_id));
+        log::info!("[TSS] ✅ Successfully processed queued message");
     }
 
     pub async fn run(mut self) {
@@ -265,11 +287,15 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         }
     }
 
-    fn process_gossip_message(&mut self, signed_message: SignedTssMessage) {
-        MessageProcessor::handle_gossip_message(self, signed_message);
+    pub fn process_gossip_message(&mut self, signed_message: SignedTssMessage) {
+        MessageProcessor::handle_gossip_message(self, signed_message, None);
     }
 
-    fn process_runtime_message(&mut self, runtime_message: TSSRuntimeEvent) {
+    pub fn process_gossip_message_with_sender(&mut self, signed_message: SignedTssMessage, sender_peer_id: PeerId) {
+        MessageProcessor::handle_gossip_message(self, signed_message, Some(sender_peer_id));
+    }
+
+    pub fn process_runtime_message(&mut self, runtime_message: TSSRuntimeEvent) {
         match runtime_message {
             TSSRuntimeEvent::DKGSessionInfoReady(id, t, n, participants) => {
                 if let Err(e) = self.add_and_initialize_dkg_session(id, t, n, participants) {

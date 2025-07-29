@@ -3,12 +3,16 @@ use crate::*;
 use crate::{
     dkghelpers::{FileStorage, MemoryStorage},
     ecdsa::ECDSAManager,
+    gossip::router::ECDSAMessageRouter,
     PeerMapper, SessionId, SessionManager,
-    TSSPublic, TSSRuntimeEvent, TssMessage,
+    TSSPublic, TSSRuntimeEvent, TssMessage, SignedTssMessage,
 };
 use sc_network::PeerId;
+use sp_runtime::{
+    traits::{Block as BlockT, Hash as HashT, Header as HeaderT},
+};
 
-use sc_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
+use sc_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender, TrySendError};
 use std::cell::RefCell;
 use std::{
     collections::{HashMap, VecDeque},
@@ -16,6 +20,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 use uomi_runtime::Block;
+use uomi_runtime::pallet_tss::TssOffenceType;
+use sp_keystore::{testing::MemoryKeystore, Keystore};
 
 
 /// Simulates the network environment with configurable message passing
@@ -109,6 +115,17 @@ impl<B: BlockT> ClientManager<B> for TestClientManager {
         self.add_submit_dkg_result_call(session_id, aggregated_key);
         Ok(())
     }
+    
+    fn report_tss_offence(
+        &self,
+        _hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        _session_id: SessionId,
+        _offence_type: TssOffenceType,
+        _offenders: Vec<[u8; 32]>,
+    ) -> Result<(), String> {
+        // Test implementation just returns Ok
+        Ok(())
+    }
 }
 /// Represents a single node in the test network
 pub struct TestNode {
@@ -117,9 +134,9 @@ pub struct TestNode {
     /// Transmitter for runtime events
     pub runtime_tx: TracingUnboundedSender<TSSRuntimeEvent>,
     /// Receiver for outgoing gossip messages
-    pub gossip_rx: TracingUnboundedReceiver<(PeerId, TssMessage)>,
+    pub gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
     /// Sender for outgoing gossip messages
-    pub gossip_tx: TracingUnboundedSender<(PeerId, TssMessage)>,
+    pub gossip_tx: TracingUnboundedSender<SignedTssMessage>,
     /// Spy on storage state
     pub storage: Arc<Mutex<MemoryStorage>>,
     /// Spy on key storage
@@ -148,9 +165,9 @@ impl TestNetwork {
 
             for other_peer_id in node_keys_inner.iter() {
                 if peer_id != *other_peer_id {
-                    node.session_manager.peer_mapper.lock().unwrap().add_peer(
+                    node.session_manager.session_core.peer_mapper.lock().unwrap().add_peer(
                         other_peer_id.clone(),
-                        nodes.get(other_peer_id).unwrap().session_manager.validator_key.clone(),
+                        nodes.get(other_peer_id).unwrap().session_manager.session_core.validator_key.clone(),
                     );
             
                 }
@@ -159,7 +176,7 @@ impl TestNetwork {
             // verify that each peer_mapper contains the elements it should
             assert_eq!(
                 node_count,
-                node.session_manager.peer_mapper.lock().unwrap().peers.keys().len()
+                node.session_manager.session_core.peer_mapper.lock().unwrap().peers().lock().unwrap().len()
             );
         }
 
@@ -194,6 +211,15 @@ impl TestNetwork {
                 continue;
             }
 
+            // Get the sender's validator key before we start borrowing nodes mutably
+            let sender_validator_key = if let Some(sender_node) = self.nodes.get(&sender_id) {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&sender_node.session_manager.session_core.validator_key[..32]);
+                key
+            } else {
+                [0u8; 32] // fallback to dummy if sender not found
+            };
+
             // Handle broadcast (empty recipient) or direct message
             let recipients = if recipient_bytes.is_empty() {
                 // if it's broadcast it means we send to everyone BUT the sender_id
@@ -209,9 +235,17 @@ impl TestNetwork {
                 }
 
                 if let Some(node) = self.nodes.get_mut(&recipient_id) {
-                    //node.receive_gossip_message(sender_id.clone(), msg.clone());
-                    node.session_manager
-                        .process_gossip_message(sender_id.clone(), msg.clone());
+                    // Create a SignedTssMessage for testing
+                    let signed_message = SignedTssMessage {
+                        message: msg.clone(),
+                        sender_public_key: sender_validator_key,
+                        signature: [0u8; 64], // dummy for tests
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    };
+                    node.session_manager.process_gossip_message_with_sender(signed_message, sender_id.clone());
                 }
             }
 
@@ -230,23 +264,16 @@ impl TestNetwork {
     pub fn process_round(&mut self) -> Vec<(PeerId, Vec<u8>, TssMessage)> {
         // Collect all outgoing messages from nodes
         for (peer_id, node) in &mut self.nodes {
-            let mut handler = MockTssMessageHandler::default();
-            let outbound_queue = node.outgoing_messages();
+            let (broadcast_msgs, direct_msgs) = node.outgoing_messages();
 
-            for msg in outbound_queue {
-                assert!(process_session_manager_message(&mut handler, msg).is_ok());
-            }
-
-            // manage the handler.broadcast queue
-            for msg in handler.broadcast_messages.borrow().iter() {
+            for msg in broadcast_msgs {
                 self.message_queue
                     .push_back((peer_id.clone(), vec![], msg.clone()));
             }
 
-            // manage the p2p connections
-            for msg in handler.sent_messages.borrow().iter() {
+            for (msg, recipient_peer_id) in direct_msgs {
                 self.message_queue
-                    .push_back((peer_id.clone(), msg.1.to_bytes(), msg.0.clone()));
+                    .push_back((peer_id.clone(), recipient_peer_id.to_bytes(), msg.clone()));
             }
         }
 
@@ -287,41 +314,33 @@ impl TestNode {
             handle.add_peer(peer_id.clone(), validator_key.clone());
         }
 
-        let ecdsa_manager = Arc::new(Mutex::new(ECDSAManager::new()));
+        // Create a keystore and generate a key for the validator to sign messages.
+        let keystore = Arc::new(MemoryKeystore::new());
+        const UOMI: sp_core::crypto::KeyTypeId = sp_core::crypto::KeyTypeId(*b"uomi");
+        let validator_public_key = keystore
+            .sr25519_generate_new(UOMI, None)
+            .expect("failed to generate sr25519 key");
 
-        let session_manager = SessionManager {
-            storage: storage.clone(),
-            key_storage: key_storage.clone(),
+
+        let session_manager = SessionManager::new(
+            storage.clone(),
+            key_storage.clone(),
             sessions_participants,
-            sessions_data: Arc::new(Mutex::new(HashMap::new())),
-            dkg_session_states: Arc::new(Mutex::new(HashMap::new())),
-            signing_session_states: Arc::new(Mutex::new(HashMap::new())),
-            validator_key: validator_key.clone(),
+            Arc::new(Mutex::new(HashMap::new())), // sessions_data
+            Arc::new(Mutex::new(HashMap::new())), // dkg_session_states  
+            Arc::new(Mutex::new(HashMap::new())), // signing_session_states
+            validator_key.clone(),
+            validator_public_key.into(), // validator_public_key
+            keystore.clone(), // keystore
             peer_mapper,
-            gossip_to_session_manager_rx: gossip_to_sm_rx,
-            runtime_to_session_manager_rx: runtime_to_sm_rx,
-            session_manager_to_gossip_tx: sm_to_gossip_tx,
-            buffer: Arc::new(Mutex::new(HashMap::new())),
-            local_peer_id: peer_id.to_bytes(),
-            ecdsa_manager,
-            session_timeout: 3600,
-            session_timestamps: Arc::new(Mutex::new(HashMap::new())),
-            _phantom: PhantomData,
-            active_participants: Arc::new(Mutex::new(HashMap::new())),
-            client: TestClientManager::new(),
-            announcement:Some(TssMessage::Announce(Default::default(), Vec::new(), Vec::new(), Vec::new())),
-            unknown_peer_queue: Arc::new(Mutex::new(HashMap::new())),
-            
-            // Retry mechanism fields
-            retry_timeout: 300,
-            max_retry_attempts: 3,
-            received_messages: Arc::new(Mutex::new(HashMap::new())),
-            retry_attempts: Arc::new(Mutex::new(HashMap::new())),
-            retry_request_timestamps: Arc::new(Mutex::new(HashMap::new())),
-            round_timestamps: Arc::new(Mutex::new(HashMap::new())),
-            sent_messages: Arc::new(Mutex::new(HashMap::new())),
-            retry_enabled: false, // Disable retry mechanism in tests by default
-        };
+            gossip_to_sm_rx,
+            runtime_to_sm_rx,
+            sm_to_gossip_tx,
+            peer_id.to_bytes(),
+            Some(TssMessage::Announce(Default::default(), Vec::new(), Vec::new(), Vec::new())),
+            TestClientManager::new(),
+            false, // retry_enabled
+        );
 
         TestNode {
             session_manager,
@@ -340,27 +359,46 @@ impl TestNode {
 
     /// Simulate receiving a gossip message
     pub fn receive_gossip_message(&mut self, sender: PeerId, message: TssMessage) {
-        // Get the gossip_to_session_manager_tx from the session manager
-        // This would need an accessor method in the real SessionManager
-        self.gossip_tx.unbounded_send((sender, message)).unwrap();
+        // Create a SignedTssMessage for testing
+        let signed_message = SignedTssMessage {
+            message,
+            sender_public_key: [0u8; 32], // dummy for tests
+            signature: [0u8; 64], // dummy for tests
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+        self.gossip_tx.unbounded_send(signed_message).unwrap();
     }
 
     /// Get all outgoing messages from the session_manager to the gossip_handler
     /// SM => GH
-    pub fn outgoing_messages(&mut self) -> Vec<(PeerId, TssMessage)> {
-        let mut messages = Vec::new();
-        while let Ok((peer_id, msg)) = self.gossip_rx.try_recv() {
-            messages.push((peer_id, msg));
+    pub fn outgoing_messages(&mut self) -> (Vec<TssMessage>, Vec<(TssMessage, PeerId)>) { // (broadcast, direct)
+        let mut handler = MockTssMessageHandler::default();
+
+        while let Ok(signed_msg) = self.gossip_rx.try_recv() {
+            process_session_manager_message(&mut handler, signed_msg).unwrap();
         }
-        messages
+
+        let broadcast = handler.broadcast_messages.borrow().clone();
+        let direct = handler.sent_messages.borrow().clone();
+        
+        handler.broadcast_messages.borrow_mut().clear();
+        handler.sent_messages.borrow_mut().clear();
+
+        (broadcast, direct)
     }
     /// Get all incoming messages to the Session Manager from the Gossip Handler
     /// GH => SM
     pub fn incoming_messages(&mut self) -> Vec<(PeerId, TssMessage)> {
         let mut messages = Vec::new();
-        while let Ok((peer_id, msg)) = self.session_manager.communication_manager.gossip_to_session_manager_rx.try_recv()
+        while let Ok(signed_msg) = self.session_manager.communication_manager.gossip_to_session_manager_rx.try_recv()
         {
-            messages.push((peer_id, msg));
+            // Convert SignedTssMessage back to the expected format for tests
+            // In real scenarios, we'd need to extract the peer_id from the message
+            let dummy_peer_id = PeerId::from_bytes(&signed_msg.sender_public_key).unwrap_or_else(|_| PeerId::random());
+            messages.push((dummy_peer_id, signed_msg.message));
         }
         messages
     }
@@ -385,7 +423,7 @@ pub struct MockTssMessageHandler {
 }
 
 impl TssMessageHandler for MockTssMessageHandler {
-    fn send_message(&mut self, message: TssMessage, recipient: PeerId) -> Result<(), String> {
+    fn send_signed_message(&mut self, message: TssMessage, recipient: PeerId) -> Result<(), String> {
         if *self.should_fail.borrow() {
             return Err("SendFailure".to_string());
         }
@@ -393,7 +431,7 @@ impl TssMessageHandler for MockTssMessageHandler {
         Ok(())
     }
 
-    fn broadcast_message(&mut self, message: TssMessage) -> Result<(), String> {
+    fn broadcast_signed_message(&mut self, message: TssMessage) -> Result<(), String> {
         if *self.should_fail.borrow() {
             return Err("BroadcastFailure".to_string());
         }
@@ -444,14 +482,15 @@ fn test_process_session_manager_message_dkg_round1() {
     let mut handler = MockTssMessageHandler::default();
     let session_id: SessionId = 0;
     let data = vec![1, 2, 3];
-    let recipient = PeerId::random();
 
-    let message = (
-        recipient.clone(),
-        TssMessage::DKGRound1(session_id, data.clone()),
-    );
+    let signed_message = SignedTssMessage {
+        message: TssMessage::DKGRound1(session_id, data.clone()),
+        sender_public_key: [0u8; 32], // dummy sender key for tests
+        signature: [0u8; 64], // dummy signature for tests
+        timestamp: 0, // dummy timestamp for tests
+    };
 
-    let result = process_session_manager_message(&mut handler, message);
+    let result = process_session_manager_message(&mut handler, signed_message);
 
     assert!(result.is_ok());
     assert_eq!(handler.count_broadcast_messages(), 1);
