@@ -14,7 +14,7 @@ use uomi_runtime::{
     RuntimeEvent
 };
 
-use crate::types::TSSRuntimeEvent;
+use crate::types::{TSSRuntimeEvent, TSSParticipant};
 
 /// Handles runtime events from the blockchain and forwards them to the session manager
 pub struct RuntimeEventHandler<B: BlockT, C>
@@ -53,16 +53,15 @@ where
 
         let mut notification_stream = notification_stream.unwrap();
 
-        while let Some(event) = notification_stream.next().await {
-            let hash = event.block;
-            let events_key = sp_core::twox_128("System".as_bytes()).to_vec();
-            let events_storage_key =
-                [events_key, sp_core::twox_128("Events".as_bytes()).to_vec()].concat();
+        let events_key = sp_core::twox_128("System".as_bytes()).to_vec();
+        let events_storage_key =
+            [events_key, sp_core::twox_128("Events".as_bytes()).to_vec()].concat();
 
+        while let Some(event) = notification_stream.next().await {
             for (_parent_key, key, value) in event.changes.iter() {
                 if key.as_ref().starts_with(&events_storage_key[..]) {
                     if let Some(data) = value {
-                        self.process_events_data(hash, &data.0).await;
+                        self.process_events_data(event.block, &data.0).await;
                     }
                 }
             }
@@ -91,43 +90,23 @@ where
     /// Handle a specific runtime event
     async fn handle_runtime_event(&self, hash: B::Hash, event: RuntimeEvent) {
         match event {
-            RuntimeEvent::Tss(TssEvent::DKGSessionCreated(id)) => {
-                self.handle_dkg_session_created(hash, id).await;
-            }
-            RuntimeEvent::Tss(TssEvent::DKGReshareSessionCreated(id)) => {
-                self.handle_dkg_reshare_session_created(hash, id).await;
-            }
-            RuntimeEvent::Tss(TssEvent::SigningSessionCreated(signing_session_id, dkg_session_id)) => {
-                self.handle_signing_session_created(hash, signing_session_id, dkg_session_id).await;
-            }
-            RuntimeEvent::Tss(TssEvent::ValidatorIdAssigned(account_id, id)) => {
-                self.handle_validator_id_assigned(account_id, id).await;
-            }
+            RuntimeEvent::Tss(TssEvent::DKGSessionCreated(id)) => self.handle_dkg_session_created(hash, id).await,
+            RuntimeEvent::Tss(TssEvent::DKGReshareSessionCreated(id)) => self.handle_dkg_reshare_session_created(hash, id).await,
+            RuntimeEvent::Tss(TssEvent::SigningSessionCreated(signing_session_id, dkg_session_id)) => self.handle_signing_session_created(hash, signing_session_id, dkg_session_id).await,
+            RuntimeEvent::Tss(TssEvent::ValidatorIdAssigned(account_id, id)) => self.handle_validator_id_assigned(account_id, id).await,
             _ => (),
         }
     }
 
     /// Handle DKG session creation event
     async fn handle_dkg_session_created(&self, hash: B::Hash, id: u64) {
-        let n = self
-            .client
-            .runtime_api()
-            .get_dkg_session_participants_count(hash, id)
-            .unwrap();
-        let t = self
-            .client
-            .runtime_api()
-            .get_dkg_session_threshold(hash, id)
-            .unwrap();
+        let n = self.get_dkg_session_participants_count(hash, id);
+        let t = self.get_dkg_session_threshold(hash, id);
 
         // t is a percentage value, convert it to the actual threshold value
         let t = (t as f64 * n as f64 / 100.0) as u16;
 
-        let participants = self
-            .client
-            .runtime_api()
-            .get_dkg_session_participants(hash, id)
-            .unwrap_or(Vec::new());
+        let participants = self.get_dkg_session_participants(hash, id);
 
         // Notify the session manager about the new DKG Session
         if let Err(e) = self.sender.unbounded_send(
@@ -142,33 +121,45 @@ where
         }
     }
 
-    /// Handle DKG reshare session creation event
-    async fn handle_dkg_reshare_session_created(&self, hash: B::Hash, id: u64) {
-        let n = self
-            .client
+    fn get_dkg_session_participants_count(&self, hash: B::Hash, id: u64) -> u16 {
+        self.client
             .runtime_api()
             .get_dkg_session_participants_count(hash, id)
-            .unwrap();
-        let t = self
-            .client
+            .unwrap_or(0)
+    }
+
+    fn get_dkg_session_threshold(&self, hash: B::Hash, id: u64) -> u32 {
+        self.client
             .runtime_api()
             .get_dkg_session_threshold(hash, id)
-            .unwrap();
+            .unwrap_or(0)
+    }
+
+    fn get_dkg_session_participants(&self, hash: B::Hash, id: u64) -> Vec<TSSParticipant> {
+        self.client
+            .runtime_api()
+            .get_dkg_session_participants(hash, id)
+            .unwrap_or_else(|_| Vec::new())
+    }
+    
+    fn get_dkg_session_old_participants(&self, hash: B::Hash, id: u64) -> Vec<TSSParticipant> {
+        self.client
+            .runtime_api()
+            .get_dkg_session_old_participants(hash, id)
+            .unwrap_or_else(|_| Vec::new())
+    }
+
+    /// Handle DKG reshare session creation event
+    async fn handle_dkg_reshare_session_created(&self, hash: B::Hash, id: u64) {
+        let n = self.get_dkg_session_participants_count(hash, id);
+        let t = self.get_dkg_session_threshold(hash, id);
 
         // t is a percentage value, convert it to the actual threshold value
         let t = (t as f64 * n as f64 / 100.0) as u16;
 
-        let participants = self
-            .client
-            .runtime_api()
-            .get_dkg_session_participants(hash, id)
-            .unwrap_or(Vec::new());
+        let participants = self.get_dkg_session_participants(hash, id);
 
-        let old_participants = self
-            .client
-            .runtime_api()
-            .get_dkg_session_old_participants(hash, id)
-            .unwrap_or(Vec::new());
+        let old_participants = self.get_dkg_session_old_participants(hash, id);
 
         // Notify the session manager about the new DKG Reshare Session
         if let Err(e) = self.sender.unbounded_send(
@@ -187,26 +178,14 @@ where
     /// Handle signing session creation event
     async fn handle_signing_session_created(&self, hash: B::Hash, signing_session_id: u64, dkg_session_id: u64) {
         log::debug!("[TSS] Starting signing session {:?} using DKG session {:?}", signing_session_id, dkg_session_id);
-        
-        let n = self
-            .client
-            .runtime_api()
-            .get_dkg_session_participants_count(hash, dkg_session_id)
-            .unwrap();
-        let t = self
-            .client
-            .runtime_api()
-            .get_dkg_session_threshold(hash, dkg_session_id)
-            .unwrap();
 
+        let n = self.get_dkg_session_participants_count(hash, dkg_session_id);
+        let t = self.get_dkg_session_threshold(hash, dkg_session_id);
+            
         // t is a percentage value, convert it to the actual threshold value
         let t = (t as f64 * n as f64 / 100.0) as u16;
 
-        let participants = self
-            .client
-            .runtime_api()
-            .get_dkg_session_participants(hash, dkg_session_id)
-            .unwrap_or(Vec::new());
+        let participants = self.get_dkg_session_participants(hash, dkg_session_id);
 
         let message = self
             .client
