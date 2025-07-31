@@ -149,6 +149,13 @@ where
             .unwrap_or_else(|_| Vec::new())
     }
 
+    fn get_dkg_session_message(&self, hash: B::Hash, id: u64) -> Vec<u8> {
+        self.client
+            .runtime_api()
+            .get_dkg_session_message(hash, id)
+            .unwrap_or_else(|_| Vec::new())
+    }
+
     /// Handle DKG reshare session creation event
     async fn handle_dkg_reshare_session_created(&self, hash: B::Hash, id: u64) {
         let n = self.get_dkg_session_participants_count(hash, id);
@@ -187,11 +194,7 @@ where
 
         let participants = self.get_dkg_session_participants(hash, dkg_session_id);
 
-        let message = self
-            .client
-            .runtime_api()
-            .get_signing_session_message(hash, dkg_session_id)
-            .unwrap_or(Vec::new());
+        let message = self.get_dkg_session_message(hash, dkg_session_id);
 
         // TODO: add the function in the pallet for these three:
         let coordinator = participants[0];
