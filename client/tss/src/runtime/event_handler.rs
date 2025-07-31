@@ -152,7 +152,7 @@ where
     fn get_dkg_session_message(&self, hash: B::Hash, id: u64) -> Vec<u8> {
         self.client
             .runtime_api()
-            .get_dkg_session_message(hash, id)
+            .get_signing_session_message(hash, id)
             .unwrap_or_else(|_| Vec::new())
     }
 
