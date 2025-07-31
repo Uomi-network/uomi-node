@@ -69,60 +69,66 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         participants: Vec<TSSParticipant>,
         old_participants: Vec<TSSParticipant>,
     ) {
-        let mut handler = self.ecdsa_manager.lock().unwrap();
-
-
-        let my_id = participants
-            .iter()
-            .position(|&el| el == &self.session_core.validator_key[..]);
-
-        if let None = my_id {
-            log::info!("[TSS] We are not allowed to participate");
-            return;
-        }
-        log::info!("[TSS] My Id = {:?}", my_id.unwrap() + 1);
-
-        let identifier: Identifier = u16::try_from(my_id.unwrap() + 1).unwrap().try_into().unwrap();
-
-        let current_keys = self.storage_manager.key_storage.lock().unwrap().read_data(id, StorageType::EcdsaKeys, Some(&identifier.serialize()));
-
-        let current_keys = match current_keys {
-            Err(_) => None,
-            Ok(keys) => Some(String::from_utf8(keys).unwrap()),
+        let my_id = match self.get_participant_id(&participants) {
+            Some(id) => id,
+            None => {
+                log::info!("[TSS] We are not allowed to participate");
+                return;
+            }
         };
 
+        log::info!("[TSS] My Id = {:?}", my_id);
 
+        let current_keys = self.get_current_keys(id, my_id);
+        let mut handler = self.ecdsa_manager.lock().unwrap();
 
-        let reshare = handler.add_reshare(
+        let reshare_result = handler.add_reshare(
             id,
-            (my_id.unwrap() + 1).to_string(),
-            (1..old_participants.len() + 1)
-                .into_iter()
-                .map(|el| el.to_string())
-                .collect::<Vec<String>>(),
-            (1..participants.len() + 1)
-                .into_iter()
-                .map(|el| el.to_string())
-                .collect::<Vec<String>>(),
+            my_id.to_string(),
+            self.create_participant_indices(&old_participants),
+            self.create_participant_indices(&participants),
             t.into(),
             n.into(),
             current_keys,
         );
 
-        if let Some(_) = reshare {
-            let msg = {
-                let mut reshare = handler.get_reshare(id).unwrap();
-                reshare.process_begin()
-            };
-
-            match msg {
-                Err(error) => log::error!("[TSS] Error beginning process {:?}", error),
-                Ok(msg) => {
-                    self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Reshare)
-                }
-            }
+        if reshare_result.is_none() {
+            log::error!("[TSS] Failed to create reshare session");
+            return;
         }
-        drop(handler);
+
+        let msg = match handler.get_reshare(id).unwrap().process_begin() {
+            Ok(msg) => msg,
+            Err(error) => {
+                log::error!("[TSS] Error beginning reshare process: {:?}", error);
+                return;
+            }
+        };
+
+        self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Reshare);
+    }
+
+    fn get_participant_id(&self, participants: &[TSSParticipant]) -> Option<u16> {
+        participants
+            .iter()
+            .position(|&el| el == &self.session_core.validator_key[..])
+            .map(|pos| (pos + 1) as u16)
+    }
+
+    fn get_current_keys(&self, id: SessionId, my_id: u16) -> Option<String> {
+        let identifier: Identifier = my_id.try_into().ok()?;
+        let storage = self.storage_manager.key_storage.lock().unwrap();
+        
+        match storage.read_data(id, StorageType::EcdsaKeys, Some(&identifier.serialize())) {
+            Ok(keys) => String::from_utf8(keys).ok(),
+            Err(_) => None,
+        }
+    }
+
+    fn create_participant_indices(&self, participants: &[TSSParticipant]) -> Vec<String> {
+        (1..=participants.len())
+            .map(|el| el.to_string())
+            .collect()
     }
 
     pub fn ecdsa_create_sign_offline_phase(
