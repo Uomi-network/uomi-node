@@ -1,4 +1,6 @@
 pub mod router;
+pub mod signing;
+pub mod message_processor;
 
 pub use router::{
     GossipHandler,
