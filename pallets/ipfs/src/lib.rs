@@ -716,6 +716,10 @@ pub mod pallet {
 
             //iter cidsStatus
             for (cid, (expires_at, usable_from)) in CidsStatus::<T>::iter() {
+                if cid.is_empty() {
+                    log::info!("IPFS: Skipping empty CID");
+                    continue;
+                }
                 Self::process_pin(cid, &public, (expires_at, usable_from), &mut to_save)?;
             }
 
