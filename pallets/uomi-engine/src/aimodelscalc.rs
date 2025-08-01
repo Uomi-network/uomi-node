@@ -13,9 +13,14 @@ impl<T: Config> Pallet<T> {
 
         let most_used_version = Self::aimodelscalc_get_most_used_version();
         let local_names_per_versions = Self::aimodelscalc_get_local_names_per_versions();
-        let local_names_per_most_used_version = local_names_per_versions.get(&most_used_version).unwrap();
 
-        for (ai_model_key, local_name) in local_names_per_most_used_version {
+        let local_names_per_most_used_version = local_names_per_versions.get(&most_used_version);
+
+        if let None = local_names_per_most_used_version {
+            return Err(DispatchError::Other("This version has no local names defined"));
+        }
+
+        for (ai_model_key, local_name) in local_names_per_most_used_version.unwrap() {
             let (current_local_name, _previous_local_name, available_from) = AIModels::<T>::get(&ai_model_key);
             if current_local_name == *local_name { // the local name is already set as official name for this ai model, nothing to do
                 continue;
