@@ -357,6 +357,9 @@ pub mod pallet {
 
             let min_duration: BlockNumber<T> = MinExpireDuration::get().into();
 
+            // Check if cid is not empty
+            ensure!(!cid.is_empty(), "CID cannot be empty");
+
             //check if duration is more than 28800 (number of blocks in a day)
             ensure!(duration >= min_duration, "Duration must be more than 28800 blocks");
 
