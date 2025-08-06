@@ -1,0 +1,64 @@
+use codec::{Decode, Encode};
+use sp_core::sr25519;
+use sp_io::crypto::sr25519_verify;
+use uomi_runtime::pallet_tss::types::SessionId;
+use sp_core::Pair;
+
+use crate::ecdsa::ECDSAPhase;
+
+/// Type alias for TSS Peer ID
+pub type TSSPeerId = Vec<u8>;
+/// Type alias for TSS Public Key
+pub type TSSPublic = Vec<u8>;
+/// Type alias for TSS Signature
+pub type TSSSignature = Vec<u8>;
+
+/// Main TSS message enum containing all possible message types
+#[derive(Encode, Decode, Debug, Clone)]
+pub enum TssMessage {
+    /// Utilities
+    Announce(u16, TSSPeerId, TSSPublic, TSSSignature),
+    GetInfo(TSSPublic),
+    Ping,
+
+    /// FROST
+    DKGRound1(SessionId, Vec<u8>),
+    DKGRound2(SessionId, Vec<u8>, TSSPeerId),
+    SigningCommitment(SessionId, Vec<u8>),
+    SigningPackage(SessionId, Vec<u8>),
+    SigningShare(SessionId, Vec<u8>),
+
+    /// ECDSA OPEN TSS
+    /// Utils
+    ECDSAMessageBroadcast(SessionId, String, Vec<u8>, ECDSAPhase),
+    ECDSAMessageSubset(SessionId, String, Vec<u8>, ECDSAPhase),
+    ECDSAMessageP2p(SessionId, String, TSSPeerId, Vec<u8>, ECDSAPhase),
+
+    /// Utils Keygen
+    ECDSAMessageKeygen(SessionId, String, Vec<u8>),
+    /// Utils Reshare
+    ECDSAMessageReshare(SessionId, String, Vec<u8>),
+    /// Utils Sign Offline
+    ECDSAMessageSign(SessionId, String, Vec<u8>),
+    /// Utils Sign Online
+    ECDSAMessageSignOnline(SessionId, String, Vec<u8>),
+
+    /// Retry Mechanism
+    ECDSARetryRequest(SessionId, ECDSAPhase, u8, Vec<String>),      // session_id, phase, round, list of missing participant indices
+    ECDSARetryResponse(SessionId, ECDSAPhase, u8, String, Vec<u8>), // session_id, phase, round, sender_index, resent_data
+}
+
+/// A signed TSS message that provides cryptographic authenticity
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct SignedTssMessage {
+    /// The actual message content
+    pub message: TssMessage,
+    /// The sender's public key (32 bytes for sr25519)
+    pub sender_public_key: [u8; 32],
+    /// Message signature using sender's private key
+    pub signature: [u8; 64],
+    /// Timestamp to prevent replay attacks
+    pub timestamp: u64,
+}
+
+impl SignedTssMessage {}
