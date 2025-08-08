@@ -31,10 +31,8 @@ $ cd uomi-node
 # setup hooks (for conventional commits)
 $ sh ./scripts/setup-hooks.sh
 
-# download ipfs clients required for building and store them on ./client/ipfs-manager/src/
-wget https://storage.uomi.ai/ipfs_linux_amd64 -O ./client/ipfs-manager/src/ipfs_linux_amd64
-wget https://storage.uomi.ai/ipfs_linux_arm64 -O ./client/ipfs-manager/src/ipfs_linux_arm64
-wget https://storage.uomi.ai/ipfs_macOS -O ./client/ipfs-manager/src/ipfs_macOS
+# Download and verify IPFS client (with checksum + fallback)
+sh ./scripts/fetch-ipfs-binaries.sh
 
 # compile the node
 # note: you may encounter some errors if `wasm32-unknown-unknown` is not installed, or if the toolchain channel is outdated
