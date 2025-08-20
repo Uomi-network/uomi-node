@@ -151,7 +151,7 @@ pub struct TestNode {
     /// Receiver for outgoing gossip messages
     pub gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
     /// Sender for outgoing gossip messages
-    pub gossip_tx: TracingUnboundedSender<SignedTssMessage>,
+    pub gossip_tx: TracingUnboundedSender<(SignedTssMessage, Option<PeerId>)>,
     /// Spy on storage state
     pub storage: Arc<Mutex<MemoryStorage>>,
     /// Spy on key storage
@@ -384,7 +384,7 @@ impl TestNode {
                 .unwrap()
                 .as_secs(),
         };
-        self.gossip_tx.unbounded_send(signed_message).unwrap();
+        self.gossip_tx.unbounded_send((signed_message, Some(sender))).unwrap();
     }
 
     /// Get all outgoing messages from the session_manager to the gossip_handler
@@ -392,7 +392,7 @@ impl TestNode {
     pub fn outgoing_messages(&mut self) -> (Vec<TssMessage>, Vec<(TssMessage, PeerId)>) { // (broadcast, direct)
         let mut handler = MockTssMessageHandler::default();
 
-        while let Ok(signed_msg) = self.gossip_rx.try_recv() {
+    while let Ok(signed_msg) = self.gossip_rx.try_recv() {
             process_session_manager_message(&mut handler, signed_msg).unwrap();
         }
 
@@ -408,11 +408,11 @@ impl TestNode {
     /// GH => SM
     pub fn incoming_messages(&mut self) -> Vec<(PeerId, TssMessage)> {
         let mut messages = Vec::new();
-        while let Ok(signed_msg) = self.session_manager.communication_manager.gossip_to_session_manager_rx.try_recv()
+        while let Ok((signed_msg, sender)) = self.session_manager.communication_manager.gossip_to_session_manager_rx.try_recv()
         {
             // Convert SignedTssMessage back to the expected format for tests
             // In real scenarios, we'd need to extract the peer_id from the message
-            let dummy_peer_id = PeerId::from_bytes(&signed_msg.sender_public_key).unwrap_or_else(|_| PeerId::random());
+            let dummy_peer_id = sender.unwrap_or_else(|| PeerId::from_bytes(&signed_msg.sender_public_key).unwrap_or_else(|_| PeerId::random()));
             messages.push((dummy_peer_id, signed_msg.message));
         }
         messages
@@ -461,10 +461,12 @@ impl TssMessageHandler for MockTssMessageHandler {
     fn forward_to_session_manager(
         &self,
         signed_message: SignedTssMessage,
-    ) -> Result<(), TrySendError<SignedTssMessage>> {
+        sender: Option<PeerId>,
+    ) -> Result<(), TrySendError<(SignedTssMessage, Option<PeerId>)>> {
         // For testing, we'll extract the message and create a dummy peer ID from the sender's public key
-        let dummy_peer_id = PeerId::from_bytes(&signed_message.sender_public_key[..])
-            .unwrap_or_else(|_| PeerId::random());
+        let dummy_peer_id = sender.unwrap_or_else(|| {
+            PeerId::from_bytes(&signed_message.sender_public_key[..]).unwrap_or_else(|_| PeerId::random())
+        });
         self.forwarded_messages.borrow_mut().push((dummy_peer_id, signed_message.message));
         Ok(())
     }

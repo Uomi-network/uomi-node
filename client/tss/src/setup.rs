@@ -33,6 +33,7 @@ use sc_network_gossip::{
 use sc_utils::mpsc::TracingUnboundedReceiver;
 use sp_api::{ProvideRuntimeApi};
 use sp_core::crypto::Ss58AddressFormat;
+use std::option::Option;
 use sp_runtime::app_crypto::Ss58Codec;
 use uomi_runtime::pallet_uomi_engine::crypto::CRYPTO_KEY_TYPE as UOMI;
 use sp_runtime::traits::Member;
@@ -144,15 +145,15 @@ fn create_signed_announcement(
 }
 
 fn setup_communication_channels() -> (
-    sc_utils::mpsc::TracingUnboundedSender<SignedTssMessage>,
-    TracingUnboundedReceiver<SignedTssMessage>,
+    sc_utils::mpsc::TracingUnboundedSender<(SignedTssMessage, Option<PeerId>)>,
+    TracingUnboundedReceiver<(SignedTssMessage, Option<PeerId>)>,
     sc_utils::mpsc::TracingUnboundedSender<SignedTssMessage>,
     TracingUnboundedReceiver<SignedTssMessage>,
     sc_utils::mpsc::TracingUnboundedSender<TSSRuntimeEvent>,
     TracingUnboundedReceiver<TSSRuntimeEvent>,
 ) {
     let (gossip_to_session_manager_tx, gossip_to_session_manager_rx) =
-        sc_utils::mpsc::tracing_unbounded::<SignedTssMessage>(
+    sc_utils::mpsc::tracing_unbounded::<(SignedTssMessage, Option<PeerId>)>(
             "gossip_to_session_manager",
             1024,
         );
@@ -234,7 +235,7 @@ fn create_gossip_handler<B, N, S>(
     protocol_name: ProtocolName,
     gossip_validator: Arc<TssValidator>,
     registry: Option<&Registry>,
-    gossip_to_session_manager_tx: sc_utils::mpsc::TracingUnboundedSender<SignedTssMessage>,
+    gossip_to_session_manager_tx: sc_utils::mpsc::TracingUnboundedSender<(SignedTssMessage, Option<PeerId>)>,
     session_manager_to_gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
     peer_mapper: Arc<Mutex<PeerMapper>>,
     keystore: KeystorePtr,

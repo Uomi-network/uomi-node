@@ -70,7 +70,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         validator_public_key: [u8; 32],
         keystore: KeystorePtr,
         peer_mapper: Arc<Mutex<PeerMapper>>,
-        gossip_to_session_manager_rx: TracingUnboundedReceiver<SignedTssMessage>,
+    gossip_to_session_manager_rx: TracingUnboundedReceiver<(SignedTssMessage, Option<PeerId>)>,
         runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
         session_manager_to_gossip_tx: TracingUnboundedSender<SignedTssMessage>,
         local_peer_id: TSSPeerId,
@@ -272,8 +272,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 
                 // Process messages from the gossip network
                 gossip_notification = self.communication_manager.gossip_to_session_manager_rx.next().fuse() => {
-                    if let Some(signed_message) = gossip_notification {
-                        self.process_gossip_message(signed_message);
+                    if let Some((signed_message, sender)) = gossip_notification {
+                        self.process_gossip_message(signed_message, sender);
                     }
                 },
 
@@ -287,8 +287,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         }
     }
 
-    pub fn process_gossip_message(&mut self, signed_message: SignedTssMessage) {
-        MessageProcessor::handle_gossip_message(self, signed_message, None);
+    pub fn process_gossip_message(&mut self, signed_message: SignedTssMessage, sender_peer_id: Option<PeerId>) {
+        MessageProcessor::handle_gossip_message(self, signed_message, sender_peer_id);
     }
 
     pub fn process_gossip_message_with_sender(&mut self, signed_message: SignedTssMessage, sender_peer_id: PeerId) {
@@ -426,7 +426,7 @@ impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> 
         }
     }
 
-    fn forward_to_session_manager(&self, signed_message: SignedTssMessage) -> Result<(), TrySendError<SignedTssMessage>> {
+    fn forward_to_session_manager(&self, _signed_message: SignedTssMessage, _sender: Option<PeerId>) -> Result<(), TrySendError<(SignedTssMessage, Option<PeerId>)>> {
         // This is a no-op for SessionManager since we ARE the session manager
         Ok(())
     }

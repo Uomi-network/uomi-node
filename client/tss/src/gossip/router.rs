@@ -35,13 +35,13 @@ pub trait TssMessageHandler {
     fn send_signed_message(&mut self, message: TssMessage, recipient: PeerId) -> Result<(), String>;
     fn broadcast_signed_message(&mut self, message: TssMessage) -> Result<(), String>;
     fn handle_announcment(&mut self, sender: PeerId, message: TssMessage);
-    fn forward_to_session_manager(&self, signed_message: SignedTssMessage) -> Result<(), TrySendError<SignedTssMessage>>;
+    fn forward_to_session_manager(&self, signed_message: SignedTssMessage, sender: Option<PeerId>) -> Result<(), TrySendError<(SignedTssMessage, Option<PeerId>)>>;
 }
 
 pub struct GossipHandler<B: BlockT> {
     gossip_engine: GossipEngine<B>,
     peer_mapper: Arc<Mutex<PeerMapper>>,
-    gossip_to_session_manager_tx: TracingUnboundedSender<SignedTssMessage>,
+    gossip_to_session_manager_tx: TracingUnboundedSender<(SignedTssMessage, Option<PeerId>)>,
     session_manager_to_gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
     gossip_handler_message_receiver: Receiver<TopicNotification>,
     signing_service: SigningService,
@@ -50,8 +50,8 @@ pub struct GossipHandler<B: BlockT> {
 impl<B: BlockT> GossipHandler<B> {
     pub fn new(
         gossip_engine: GossipEngine<B>,
-        gossip_to_session_manager_tx: TracingUnboundedSender<SignedTssMessage>,
-        session_manager_to_gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
+    gossip_to_session_manager_tx: TracingUnboundedSender<(SignedTssMessage, Option<PeerId>)>,
+    session_manager_to_gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
         peer_mapper: Arc<Mutex<PeerMapper>>,
         gossip_handler_message_receiver: Receiver<TopicNotification>,
         keystore: KeystorePtr,
@@ -135,8 +135,8 @@ impl<B:BlockT> TssMessageHandler for GossipHandler<B> {
             }
         }
     }
-    fn forward_to_session_manager(&self, signed_message: SignedTssMessage) -> Result<(), TrySendError<SignedTssMessage>> {
-        self.gossip_to_session_manager_tx.unbounded_send(signed_message)
+    fn forward_to_session_manager(&self, signed_message: SignedTssMessage, sender: Option<PeerId>) -> Result<(), TrySendError<(SignedTssMessage, Option<PeerId>)>> {
+        self.gossip_to_session_manager_tx.unbounded_send((signed_message, sender))
     }
 }
 
@@ -213,7 +213,7 @@ pub fn process_gossip_notification<T: TssMessageHandler>(
                 sender.to_base58());
             
             // Forward the signed message to session manager
-            if let Err(e) = handler.forward_to_session_manager(signed_message) {
+            if let Err(e) = handler.forward_to_session_manager(signed_message, Some(sender.clone())) {
                 log::error!("[TSS] Failed to forward signed message to session manager: {:?}", e);
             } else {
                 log::info!("[TSS] ✅ Successfully forwarded signed message to session manager");

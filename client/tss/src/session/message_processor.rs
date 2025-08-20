@@ -58,45 +58,56 @@ impl MessageProcessor {
         // Extract the inner message and sender info
         let message = signed_message.message.clone();
         let sender_public_key = signed_message.sender_public_key.to_vec();
-        
-        // Try to find the peer ID from the public key
-        let mut peer_mapper = session_manager.session_core.peer_mapper.lock().unwrap();
-    let sender_peer_id = peer_mapper.get_peer_id_from_account_id(&sender_public_key).cloned();
-        drop(peer_mapper);
-        
-        let sender_peer_id = match sender_peer_id {
-            Some(peer_id) => peer_id,
-            None => {
-                // Special handling for announcement messages - they introduce new peers
-                if let TssMessage::Announce(_nonce, peer_id_bytes, _public_key_data, _signature) = &message {
-                    // For announcements, use the peer ID from the message itself
-                    match PeerId::from_bytes(&peer_id_bytes[..]) {
-                        Ok(peer_id) => {
-                            log::info!("[TSS] 🆕 Processing announcement from new peer: {}", peer_id.to_base58());
-                            peer_id
+
+        // Prefer the network-provided PeerId when available, else fall back to mapping/public key
+        let sender_peer_id = if let Some(network_peer_id) = network_sender_peer_id {
+            log::debug!(
+                "[TSS] Using network-provided PeerId as sender: {}",
+                network_peer_id.to_base58()
+            );
+            network_peer_id
+        } else {
+            // Try to find the peer ID from the public key
+            let mut peer_mapper = session_manager.session_core.peer_mapper.lock().unwrap();
+            let mapped = peer_mapper
+                .get_peer_id_from_account_id(&sender_public_key)
+                .cloned();
+            drop(peer_mapper);
+
+            match mapped {
+                Some(peer_id) => peer_id,
+                None => {
+                    // Special handling for announcement messages - they introduce new peers
+                    if let TssMessage::Announce(_nonce, peer_id_bytes, _public_key_data, _signature) = &message {
+                        // For announcements, use the peer ID from the message itself
+                        match PeerId::from_bytes(&peer_id_bytes[..]) {
+                            Ok(peer_id) => {
+                                log::info!(
+                                    "[TSS] 🆕 Processing announcement from new peer: {}",
+                                    peer_id.to_base58()
+                                );
+                                peer_id
+                            }
+                            Err(_) => {
+                                log::error!("[TSS] Cannot create peer ID from announcement message");
+                                return;
+                            }
                         }
-                        Err(_) => {
-                            log::error!("[TSS] Cannot create peer ID from announcement message");
-                            return;
-                        }
-                    }
-                } else {
-                    log::warn!("[TSS] Sender public key not found in peer_mapper: {:?}", sender_public_key);
-                    // If we have the sender's real PeerId from the network layer, use it for unknown peer queue
-                    if let Some(network_peer_id) = network_sender_peer_id {
-                        log::info!("[TSS] Using network-provided PeerId for unknown peer: {}", network_peer_id.to_base58());
-                        session_manager.add_unknown_peer_message(network_peer_id.clone(), message.clone());
-                        
-                        // Send a GetInfo message to identify the sender
-                        let get_info_message = TssMessage::GetInfo(session_manager.session_core.validator_key.clone());
+                    } else {
+                        log::warn!(
+                            "[TSS] Sender public key not found in peer_mapper and no network sender PeerId: {:?}",
+                            sender_public_key
+                        );
+
+                        // Without a network-provided PeerId, we cannot attribute or queue by peer.
+                        // Ask the sender to identify themselves.
+                        let get_info_message =
+                            TssMessage::GetInfo(session_manager.session_core.validator_key.clone());
                         if let Err(e) = session_manager.send_signed_message(get_info_message) {
                             log::error!("[TSS] Failed to send GetInfo message: {:?}", e);
                         }
                         return;
                     }
-                    
-                    log::error!("[TSS] No sender PeerId available and public key not found in peer_mapper");
-                    return;
                 }
             }
         };

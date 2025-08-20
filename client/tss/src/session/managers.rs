@@ -40,14 +40,14 @@ impl StorageManager {
 
 /// Groups communication channels
 pub struct CommunicationManager {
-    pub gossip_to_session_manager_rx: TracingUnboundedReceiver<SignedTssMessage>,
+    pub gossip_to_session_manager_rx: TracingUnboundedReceiver<(SignedTssMessage, Option<PeerId>)>,
     pub runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
     pub session_manager_to_gossip_tx: TracingUnboundedSender<SignedTssMessage>,
 }
 
 impl CommunicationManager {
     pub fn new(
-        gossip_to_session_manager_rx: TracingUnboundedReceiver<SignedTssMessage>,
+    gossip_to_session_manager_rx: TracingUnboundedReceiver<(SignedTssMessage, Option<PeerId>)>,
         runtime_to_session_manager_rx: TracingUnboundedReceiver<TSSRuntimeEvent>,
         session_manager_to_gossip_tx: TracingUnboundedSender<SignedTssMessage>,
     ) -> Self {
