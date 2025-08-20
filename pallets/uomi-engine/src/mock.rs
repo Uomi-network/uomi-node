@@ -355,6 +355,23 @@ impl Get<&'static str> for TestIpfsUrl {
         &"http://127.0.0.1:5001/api/v0"
     }
 }
+
+// Mock implementation for TssInterface to satisfy pallet_ipfs Config in this test runtime
+pub struct MockTssInterface;
+
+impl uomi_primitives::TssInterface<Test> for MockTssInterface {
+    fn create_agent_wallet(_nft_id: sp_core::U256, _threshold: u8) -> frame_support::pallet_prelude::DispatchResult {
+        Ok(())
+    }
+
+    fn agent_wallet_exists(_nft_id: sp_core::U256) -> bool {
+        true
+    }
+
+    fn get_agent_wallet_address(_nft_id: sp_core::U256) -> Option<sp_core::H160> {
+        None
+    }
+}
 impl pallet_ipfs::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type IpfsApiUrl = TestIpfsUrl;
@@ -362,6 +379,7 @@ impl pallet_ipfs::Config for Test {
     type Currency = pallet_balances::Pallet<Test>;
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    type TssInterface = MockTssInterface;
 }
 
 impl pallet_uomi_engine::Config for Test {

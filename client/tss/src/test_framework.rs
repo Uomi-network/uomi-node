@@ -22,6 +22,21 @@ use std::{
 use uomi_runtime::Block;
 use uomi_runtime::pallet_tss::TssOffenceType;
 use sp_keystore::{testing::MemoryKeystore, Keystore};
+use std::sync::Once;
+
+// Initialize logging for tests once per test binary. Works with `RUST_LOG=...` and `-- --nocapture`.
+#[cfg(test)]
+static INIT_LOG: Once = Once::new();
+#[cfg(test)]
+fn init_test_logging() {
+    INIT_LOG.call_once(|| {
+        let _ = env_logger::Builder::from_env(
+            env_logger::Env::default().default_filter_or("debug"),
+        )
+        .is_test(true)
+        .try_init();
+    });
+}
 
 
 /// Simulates the network environment with configurable message passing
@@ -479,6 +494,7 @@ impl MockTssMessageHandler {
 
 #[test]
 fn test_process_session_manager_message_dkg_round1() {
+    init_test_logging();
     let mut handler = MockTssMessageHandler::default();
     let session_id: SessionId = 0;
     let data = vec![1, 2, 3];
@@ -507,7 +523,77 @@ fn test_process_session_manager_message_dkg_round1() {
 }
 
 #[test]
+fn test_buffer_stores_peerid_bytes_for_dkg_round1() {
+    init_test_logging();
+    // Create a 2-node test network
+    let mut network = TestNetwork::new(2, TestConfig::default());
+
+    // Pick two distinct peers: receiver (A) and sender (B)
+    let mut iter = network.nodes().keys();
+    let a_peer = iter.next().expect("at least one node").clone();
+    let b_peer = iter.next().expect("at least two nodes").clone();
+
+    // Prepare a signed DKGRound1 message from B to A for a session that doesn't exist yet on A
+    let session_id: SessionId = 42;
+    let payload = vec![9, 9, 9];
+
+    // Use B's validator key as the sender_public_key
+    let b_validator_key = network
+        .nodes()
+        .get(&b_peer)
+        .unwrap()
+        .session_manager
+        .session_core
+        .validator_key
+        .clone();
+    let mut sender_pk = [0u8; 32];
+    sender_pk.copy_from_slice(&b_validator_key[..32]);
+
+    // Timestamp must be recent to pass timestamp validation
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let signed = SignedTssMessage {
+        message: TssMessage::DKGRound1(session_id, payload.clone()),
+        sender_public_key: sender_pk,
+        signature: [0u8; 64], // in tests this bypasses signature verification
+        timestamp: now,
+    };
+
+    // Inject directly into A's SessionManager as if received from B
+    let node_a = network.node_mut(&a_peer);
+    node_a
+        .session_manager
+        .process_gossip_message_with_sender(signed, b_peer.clone());
+
+    // Since the session doesn't exist on A, the message should be buffered
+    let buffer_guard = node_a.session_manager.buffer.lock().unwrap();
+    let entry = buffer_guard
+        .get(&session_id)
+        .expect("buffer entry should exist for session");
+    assert!(entry.len() >= 1, "buffer should contain at least one message");
+
+    // The buffered tuple must store the sender PeerId bytes, not a public key
+    let (sender_bytes, buffered_msg) = &entry[0];
+    let parsed_pid = PeerId::from_bytes(&sender_bytes[..])
+        .expect("buffer must contain valid PeerId bytes");
+    assert_eq!(parsed_pid, b_peer, "decoded PeerId should match sender");
+
+    // And the buffered message should match the original DKGRound1
+    match buffered_msg {
+        TssMessage::DKGRound1(id, bytes) => {
+            assert_eq!(*id, session_id);
+            assert_eq!(bytes, &payload);
+        }
+        _ => panic!("buffered message must be DKGRound1"),
+    }
+}
+
+#[test]
 fn test_route_ecdsa_message() {
+    init_test_logging();
     let mut handler = MockTssMessageHandler::default();
     let session_id: SessionId = 1;
     let data = vec![1, 2, 3];
