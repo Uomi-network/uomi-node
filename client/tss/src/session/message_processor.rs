@@ -65,6 +65,26 @@ impl MessageProcessor {
                 "[TSS] Using network-provided PeerId as sender: {}",
                 network_peer_id.to_base58()
             );
+            // If this isn't an announcement and the peer is unknown, buffer and request identification
+            if !matches!(message, TssMessage::Announce(..)) {
+                let mut peer_mapper = session_manager.session_core.peer_mapper.lock().unwrap();
+                let is_known = peer_mapper.get_account_id_from_peer_id(&network_peer_id).is_some();
+                drop(peer_mapper);
+                if !is_known {
+                    log::info!(
+                        "[TSS] Buffering message from unknown network peer {} and requesting identification",
+                        network_peer_id.to_base58()
+                    );
+                    session_manager.add_unknown_peer_message(network_peer_id.clone(), message.clone());
+                    let get_info_message = TssMessage::GetInfo(
+                        session_manager.session_core.validator_key.clone(),
+                    );
+                    if let Err(e) = session_manager.send_signed_message(get_info_message) {
+                        log::error!("[TSS] Failed to send GetInfo message: {:?}", e);
+                    }
+                    return;
+                }
+            }
             network_peer_id
         } else {
             // Try to find the peer ID from the public key
@@ -99,8 +119,14 @@ impl MessageProcessor {
                             sender_public_key
                         );
 
-                        // Without a network-provided PeerId, we cannot attribute or queue by peer.
-                        // Ask the sender to identify themselves.
+                        // Derive a temporary PeerId from the sender's public key so we can buffer
+                        use sp_core::hashing::blake2_256;
+                        let public_key_hash = blake2_256(&sender_public_key);
+                        let temp_peer_id = PeerId::from_bytes(&public_key_hash[0..32])
+                            .unwrap_or_else(|_| PeerId::random());
+
+                        // Buffer the message and ask the sender to identify themselves
+                        session_manager.add_unknown_peer_message(temp_peer_id, message.clone());
                         let get_info_message =
                             TssMessage::GetInfo(session_manager.session_core.validator_key.clone());
                         if let Err(e) = session_manager.send_signed_message(get_info_message) {
