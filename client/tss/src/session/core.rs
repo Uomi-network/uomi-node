@@ -53,10 +53,12 @@ impl SessionCore {
     /// Check if node is authorized to participate in a session
     pub fn is_authorized_for_session(&self, session_id: &SessionId) -> bool {
         let mut peer_mapper = self.peer_mapper.lock().unwrap();
-        let id = peer_mapper.get_id_from_peer_id(
-            session_id,
-            &PeerId::from_bytes(&self.local_peer_id[..]).unwrap(),
-        );
+        let id = if let Ok(local_pid) = PeerId::from_bytes(&self.local_peer_id[..]) {
+            peer_mapper.get_id_from_peer_id(session_id, &local_pid)
+        } else {
+            log::error!("[TSS] Invalid local_peer_id bytes; cannot determine authorization for session {:?}", session_id);
+            None
+        };
         drop(peer_mapper);
         id.is_some()
     }

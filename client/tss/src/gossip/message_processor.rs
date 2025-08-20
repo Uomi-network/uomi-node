@@ -76,7 +76,7 @@ impl MessageProcessor {
         bytes: Vec<u8>,
         recipient_bytes: Vec<u8>
     ) -> Result<(), String> {
-        match PeerId::from_bytes(&recipient_bytes[..]) {
+    match PeerId::from_bytes(&recipient_bytes[..]) {
             Ok(peer_id) => {
                 handler.send_signed_message(TssMessage::DKGRound2(id, bytes, recipient_bytes.clone()), peer_id)
                     .map_err(|e| {
@@ -123,7 +123,7 @@ impl MessageProcessor {
         bytes: Vec<u8>,
         phase: ECDSAPhase
     ) -> Result<(), String> {
-        match PeerId::from_bytes(&peer_id[..]) {
+    match PeerId::from_bytes(&peer_id[..]) {
             Ok(recipient_peer) => {
                 handler.route_ecdsa_message(session_id, index, bytes, phase, Some(recipient_peer))
             }

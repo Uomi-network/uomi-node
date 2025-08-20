@@ -61,7 +61,7 @@ impl MessageProcessor {
         
         // Try to find the peer ID from the public key
         let mut peer_mapper = session_manager.session_core.peer_mapper.lock().unwrap();
-        let sender_peer_id = peer_mapper.get_peer_id_from_account_id(&sender_public_key).cloned();
+    let sender_peer_id = peer_mapper.get_peer_id_from_account_id(&sender_public_key).cloned();
         drop(peer_mapper);
         
         let sender_peer_id = match sender_peer_id {
@@ -124,7 +124,7 @@ impl MessageProcessor {
                         .unwrap()
                         .entry(*session_id)
                         .or_insert(Vec::new())
-                        .push((sender_public_key.clone(), TssMessage::DKGRound1(*session_id, bytes.clone())));
+                        .push((sender_peer_id.to_bytes(), TssMessage::DKGRound1(*session_id, bytes.clone())));
                     return;
                 }
                 
@@ -152,7 +152,7 @@ impl MessageProcessor {
                                 .unwrap()
                                 .entry(*session_id)
                                 .or_insert(Vec::new())
-                                .push((sender_public_key.clone(), TssMessage::DKGRound1(*session_id, bytes.clone())));
+                                .push((sender_peer_id.to_bytes(), TssMessage::DKGRound1(*session_id, bytes.clone())));
                         },
                         _ => {
                             log::error!("[TSS] Error handling DKGRound1 for session {}: {:?}", session_id, error);
@@ -201,7 +201,7 @@ impl MessageProcessor {
                                 .entry(*session_id)
                                 .or_insert(Vec::new())
                                 .push((
-                                    sender_public_key.clone(),
+                                    sender_peer_id.to_bytes(),
                                     TssMessage::DKGRound2(
                                         *session_id,
                                         bytes.clone(),

@@ -108,10 +108,21 @@ impl<B:BlockT> TssMessageHandler for GossipHandler<B> {
                 &[&public_key_data[..], &peer_id[..]].concat(),
                 public_key,
             ) {
-                self.peer_mapper
-                    .lock()
-                    .unwrap()
-                    .add_peer(PeerId::from_bytes(&peer_id[..]).unwrap(), public_key_data);
+                match PeerId::from_bytes(&peer_id[..]) {
+                    Ok(pid) => {
+                        self.peer_mapper
+                            .lock()
+                            .unwrap()
+                            .add_peer(pid, public_key_data);
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "[TSS] Invalid peer ID bytes in Announce message: {:?}",
+                            e
+                        );
+                        return;
+                    }
+                }
                 // info!(
                 //     "[TSS] Handling peer_id {:?} with pubkey {:?} SIGN CHECK OK",
                 //     peer_id, public_key_data

@@ -242,12 +242,15 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
     fn get_local_index(&self, session_id: &SessionId) -> Option<String> {
         let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
-        let index = peer_mapper
-            .get_id_from_peer_id(
-                session_id,
-                &PeerId::from_bytes(&self.session_core.local_peer_id[..]).unwrap(),
-            )
-            .clone();
+        let index = match PeerId::from_bytes(&self.session_core.local_peer_id[..]) {
+            Ok(local_pid) => peer_mapper
+                .get_id_from_peer_id(session_id, &local_pid)
+                .clone(),
+            Err(e) => {
+                log::error!("[TSS] Invalid local_peer_id bytes when resolving local index: {:?}", e);
+                None
+            }
+        };
         drop(peer_mapper);
 
         if index.is_none() {
@@ -576,12 +579,15 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     ) -> frost_core::Identifier<frost_ed25519::Ed25519Sha512> {
         let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
 
-        let index = peer_mapper
-            .get_id_from_peer_id(
-                &session_id,
-                &PeerId::from_bytes(&self.session_core.local_peer_id[..]).unwrap(),
-            )
-            .clone();
+        let index = match PeerId::from_bytes(&self.session_core.local_peer_id[..]) {
+            Ok(local_pid) => peer_mapper
+                .get_id_from_peer_id(&session_id, &local_pid)
+                .clone(),
+            Err(e) => {
+                log::error!("[TSS] Invalid local_peer_id bytes when getting my identifier: {:?}", e);
+                None
+            }
+        };
 
         drop(peer_mapper);
 
