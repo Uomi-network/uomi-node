@@ -414,23 +414,43 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let entries = handle.entry(session_id).or_default().clone();
         drop(handle);
 
-        for (peer_id, message) in entries {
+        for (sender_bytes, message) in entries {
             match message {
                 crate::types::TssMessage::DKGRound1(_, bytes) => {
-                    log::info!(
-                        "[TSS] Processing buffered DKGRound1 message for session {} from peer_id {:?}",
-                        session_id,
-                        PeerId::from_bytes(&peer_id[..]).unwrap().to_base58()
-                    );
-                    if let Err(e) = self.dkg_handle_round1_message(
-                        session_id,
-                        &bytes,
-                        PeerId::from_bytes(&peer_id[..]).unwrap(),
-                    ) {
-                        log::error!(
-                            "[TSS] Error processing buffered DKGRound1 message for session {}: {:?}",
+                    // sender_bytes may be either a real PeerId-encoded byte array or the sender's public key
+                    // Try to resolve a PeerId safely without panicking
+                    let resolved_peer_id = {
+                        // First try to parse as a real PeerId
+                        if let Ok(pid) = PeerId::from_bytes(&sender_bytes[..]) {
+                            Some(pid)
+                        } else {
+                            // Fall back to resolving via peer mapper using sender public key bytes
+                            let mut pm = self.session_core.peer_mapper.lock().unwrap();
+                            pm.get_peer_id_from_account_id(&sender_bytes).cloned()
+                        }
+                    };
+
+                    if let Some(pid) = resolved_peer_id {
+                        log::info!(
+                            "[TSS] Processing buffered DKGRound1 message for session {} from peer {}",
                             session_id,
-                            e
+                            pid.to_base58()
+                        );
+                        if let Err(e) = self.dkg_handle_round1_message(
+                            session_id,
+                            &bytes,
+                            pid,
+                        ) {
+                            log::error!(
+                                "[TSS] Error processing buffered DKGRound1 message for session {}: {:?}",
+                                session_id,
+                                e
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[TSS] Skipping buffered DKGRound1 for session {}: unable to resolve sender PeerId",
+                            session_id
                         );
                     }
                 }
@@ -450,23 +470,40 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             buffer.entry(session_id).or_default().clone()
         };
 
-        for (peer_id, message) in messages {
+        for (sender_bytes, message) in messages {
             // Process the (peer_id, message) pair without holding the lock
             match message {
                 crate::types::TssMessage::DKGRound2(_, bytes, recipient) => {
-                    log::info!(
-                        "[TSS] Handling buffered message from peer_id {:?}",
-                        PeerId::from_bytes(&peer_id[..]).unwrap().to_base58()
-                    );
-                    if let Err(e) = self.dkg_handle_round2_message(
-                        session_id,
-                        &bytes,
-                        &recipient,
-                        PeerId::from_bytes(&peer_id[..]).unwrap(),
-                    ) {
-                        log::error!(
-                            "[TSS] There was an error while handling buffered message {:?}",
-                            e
+                    // sender_bytes may be either a real PeerId-encoded byte array or the sender's public key
+                    let resolved_peer_id = {
+                        if let Ok(pid) = PeerId::from_bytes(&sender_bytes[..]) {
+                            Some(pid)
+                        } else {
+                            let mut pm = self.session_core.peer_mapper.lock().unwrap();
+                            pm.get_peer_id_from_account_id(&sender_bytes).cloned()
+                        }
+                    };
+
+                    if let Some(pid) = resolved_peer_id {
+                        log::info!(
+                            "[TSS] Handling buffered DKGRound2 from peer {}",
+                            pid.to_base58()
+                        );
+                        if let Err(e) = self.dkg_handle_round2_message(
+                            session_id,
+                            &bytes,
+                            &recipient,
+                            pid,
+                        ) {
+                            log::error!(
+                                "[TSS] There was an error while handling buffered message {:?}",
+                                e
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[TSS] Skipping buffered DKGRound2 for session {}: unable to resolve sender PeerId",
+                            session_id
                         );
                     }
                 }

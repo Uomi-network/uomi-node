@@ -540,11 +540,20 @@ impl MemoryStorage {
 
         if let Some(inner_map) = self.round1.get(&id) {
             for (key, bytes) in inner_map {
-                // result_map.insert(Identifier., value)
-                result_map.insert(
-                    Identifier::deserialize(key).unwrap(),
-                    frost_ed25519::keys::dkg::round1::Package::deserialize(bytes).unwrap(),
-                );
+                // Safely deserialize identifier and package; skip invalid entries instead of panicking
+                match (Identifier::deserialize(key), frost_ed25519::keys::dkg::round1::Package::deserialize(bytes)) {
+                    (Ok(identifier), Ok(pkg)) => {
+                        result_map.insert(identifier, pkg);
+                    }
+                    (id_res, pkg_res) => {
+                        log::error!(
+                            "[TSS] Invalid stored round1 entry: id_ok={}, pkg_ok={} (session {})",
+                            id_res.is_ok(),
+                            pkg_res.is_ok(),
+                            session_id
+                        );
+                    }
+                }
             }
         }
 
@@ -560,11 +569,19 @@ impl MemoryStorage {
 
         if let Some(inner_map) = self.round2.get(&id) {
             for (key, bytes) in inner_map {
-                // result_map.insert(Identifier., value)
-                result_map.insert(
-                    Identifier::deserialize(key).unwrap(),
-                    frost_ed25519::keys::dkg::round2::Package::deserialize(bytes).unwrap(),
-                );
+                match (Identifier::deserialize(key), frost_ed25519::keys::dkg::round2::Package::deserialize(bytes)) {
+                    (Ok(identifier), Ok(pkg)) => {
+                        result_map.insert(identifier, pkg);
+                    }
+                    (id_res, pkg_res) => {
+                        log::error!(
+                            "[TSS] Invalid stored round2 entry: id_ok={}, pkg_ok={} (session {})",
+                            id_res.is_ok(),
+                            pkg_res.is_ok(),
+                            session_id
+                        );
+                    }
+                }
             }
         }
 
@@ -613,11 +630,19 @@ impl MemoryStorage {
 
         if let Some(inner_map) = self.commitments.get(&id) {
             for (key, bytes) in inner_map {
-                // result_map.insert(Identifier., value)
-                result_map.insert(
-                    Identifier::deserialize(key).unwrap(),
-                    SigningCommitments::deserialize(bytes).unwrap(),
-                );
+                match (Identifier::deserialize(key), SigningCommitments::deserialize(bytes)) {
+                    (Ok(identifier), Ok(pkg)) => {
+                        result_map.insert(identifier, pkg);
+                    }
+                    (id_res, pkg_res) => {
+                        log::error!(
+                            "[TSS] Invalid stored commitment entry: id_ok={}, pkg_ok={} (session {})",
+                            id_res.is_ok(),
+                            pkg_res.is_ok(),
+                            session_id
+                        );
+                    }
+                }
             }
         }
 
@@ -633,11 +658,19 @@ impl MemoryStorage {
 
         if let Some(inner_map) = self.signature_shares.get(&id) {
             for (key, bytes) in inner_map {
-                // result_map.insert(Identifier., value)
-                result_map.insert(
-                    Identifier::deserialize(key).unwrap(),
-                    SignatureShare::deserialize(bytes).unwrap(),
-                );
+                match (Identifier::deserialize(key), SignatureShare::deserialize(bytes)) {
+                    (Ok(identifier), Ok(pkg)) => {
+                        result_map.insert(identifier, pkg);
+                    }
+                    (id_res, pkg_res) => {
+                        log::error!(
+                            "[TSS] Invalid stored signature share entry: id_ok={}, pkg_ok={} (session {})",
+                            id_res.is_ok(),
+                            pkg_res.is_ok(),
+                            session_id
+                        );
+                    }
+                }
             }
         }
 
