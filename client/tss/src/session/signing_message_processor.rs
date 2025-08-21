@@ -102,7 +102,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let mut peer_handle = self.session_core.peer_mapper.lock().unwrap();
         let peer_id = peer_handle.get_peer_id_from_account_id(&coordinator.to_vec());
         if let Some(peer_id) = peer_id {
-            let signing_commitment_message = crate::types::TssMessage::SigningCommitment(session_id, commitments.serialize().unwrap());
+            let signing_commitment_message = crate::types::TssMessage::SigningCommitmentP2p(session_id, commitments.serialize().unwrap(), peer_id.to_bytes());
             match self.send_signed_message(signing_commitment_message) {
                 Err(error) => log::error!(
                     "[TSS] There was an error sending signed commitments to the coordinator {:?}",
@@ -249,7 +249,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 continue;
             }
 
-            let signing_package_message = crate::types::TssMessage::SigningPackage(session_id.clone(), signing_package.clone());
+            let peer_id = peer_id.unwrap(); // We already checked for None above
+            let signing_package_message = crate::types::TssMessage::SigningPackageP2p(session_id.clone(), signing_package.clone(), peer_id.to_bytes());
             if let Err(error) = self.send_signed_message(signing_package_message) {
                 log::error!(
                     "[TSS] There was an error sending signed signing package {:?}",
@@ -367,7 +368,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         if let Some(coordinator) = coordinator {
             log::debug!("I found that coordinator is associated with peer_id = {:?}", coordinator);
-            let signing_share_message = crate::types::TssMessage::SigningShare(session_id, signature_share.serialize());
+            let signing_share_message = crate::types::TssMessage::SigningShareP2p(session_id, signature_share.serialize(), coordinator.to_bytes());
             match self.send_signed_message(signing_share_message) {
                 Err(error) => log::error!(
                     "[TSS] There was an error sending signed Signature Share to the coordinator {:?}",

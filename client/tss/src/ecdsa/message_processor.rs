@@ -153,10 +153,20 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 }
             }
         }
-        (
-            manager.handle_keygen_message(*session_id, index, &msg),
-            ECDSAPhase::Key,
-        )
+        // Try to handle the keygen message
+        let keygen_result = manager.handle_keygen_message(*session_id, index, &msg);
+        
+        // If keygen session doesn't exist, log error and suggest session recreation
+        if matches!(keygen_result, Err(ECDSAError::KeygenNotFound)) {
+            log::error!(
+                "[TSS] ECDSA keygen session {} not found when processing message. Session may need to be recreated.",
+                session_id
+            );
+            // Return a more specific error instead of letting it become "Generic error"
+            return (Err(ECDSAError::KeygenNotFound), ECDSAPhase::Key);
+        }
+        
+        (keygen_result, ECDSAPhase::Key)
     }
 
     pub fn handle_buffer_and_sending_messages_for_reshare(
@@ -201,10 +211,20 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 }
             }
         }
-        (
-            manager.handle_reshare_message(*session_id, index, &msg),
-            ECDSAPhase::Reshare,
-        )
+        // Try to handle the reshare message
+        let reshare_result = manager.handle_reshare_message(*session_id, index, &msg);
+        
+        // If reshare session doesn't exist, log error and suggest session recreation
+        if matches!(reshare_result, Err(ECDSAError::ReshareNotFound)) {
+            log::error!(
+                "[TSS] ECDSA reshare session {} not found when processing message. Session may need to be recreated.",
+                session_id
+            );
+            // Return a more specific error instead of letting it become "Generic error"
+            return (Err(ECDSAError::ReshareNotFound), ECDSAPhase::Reshare);
+        }
+        
+        (reshare_result, ECDSAPhase::Reshare)
     }
 
     pub fn handle_ecdsa_sending_messages(

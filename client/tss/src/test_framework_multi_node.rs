@@ -7,7 +7,7 @@ mod tests {
             dkg_state_manager::DKGSessionState, signing_state_manager::SigningSessionState,
             MessageProcessor,
         },
-        test_framework::{MockTssMessageHandler, TestConfig, TestNetwork},
+        test_framework::{MockTssMessageHandler, TestConfig, TestNetwork, reset_tss_storage_dir},
         SessionId, TSSRuntimeEvent, TssMessageHandler, SignedTssMessage,
     };
 
@@ -844,6 +844,7 @@ mod tests {
 
     #[test]
     fn test_signing_session_after_dkg() {
+        reset_tss_storage_dir();
         let _ = env_logger::try_init();
 
         let nodes_count = 3;
@@ -873,6 +874,14 @@ mod tests {
             assert_eq!(state.is_some(), true);
             assert_eq!(*state.unwrap(), DKGSessionState::KeyGenerated);
             assert_eq!(node.session_manager.client.submit_dkg_result_calls().len(), 1);
+            assert_eq!(node.session_manager.session_core.session_timeout, 3600);
+        }
+
+        // Force delete the current session, first set the session_timeout to 0
+        for (_, node) in network.nodes_mut() {
+            node.session_manager.session_core.session_timeout = 0;
+            node.session_manager.cleanup_expired_sessions();
+            node.session_manager.session_core.session_timeout = 3600; // Reset to default after cleanup
         }
 
         // --- 2. Initiate Signing Session ---
@@ -959,7 +968,7 @@ mod tests {
         println!("Messages after round 3: {:?}", messages);
         assert_eq!(
             messages.len(),
-            7,
+            5,
             "We expect only 5 messages, t=2 + 3 for EDCSA"
         );
 
@@ -1027,15 +1036,18 @@ mod tests {
                 "All signatures should be the same"
             );
         }
+        assert_eq!(signatures.len(), 3, "We should have 3 signatures from 3 nodes");
+        assert!(first_signature.len() > 0, "First signature should not be empty");
     }
 
 
     #[test]
     fn test_signing_session_after_dkg_and_reshare() {
+        reset_tss_storage_dir();
         let _ = env_logger::try_init();
 
         let nodes_count = 3;
-        let session_id: SessionId = 9;
+        let session_id: SessionId = 19;
         let dkg_session_id: SessionId = session_id; // DKG and Signing use the same session ID for simplicity in this test
         let t = 2;
         let n: u16 = nodes_count.try_into().unwrap();
@@ -1062,6 +1074,14 @@ mod tests {
             assert_eq!(*state.unwrap(), DKGSessionState::KeyGenerated);
         }
 
+        // Force delete the current session, first set the session_timeout to 0
+        for (_, node) in network.nodes_mut() {
+            node.session_manager.session_core.session_timeout = 0;
+            node.session_manager.cleanup_expired_sessions();
+            node.session_manager.session_core.session_timeout = 3600; // Reset to default after cleanup
+        }
+
+
 
         for (_, node) in network.nodes_mut() {
             let event = TSSRuntimeEvent::DKGReshareSessionInfoReady(
@@ -1077,6 +1097,24 @@ mod tests {
         let messages = network.process_round(); // Here each member sends its material to the coordinator
         assert_eq!(messages.len(), 9, "Reshare, We expect only 6 messages");
         let _messages = network.process_all_rounds();
+
+
+        // // Verify DKG completion (optional, but good to check)
+        // for (_, node) in network.nodes() {
+        //     let session_states = node.session_manager.state_managers.dkg_state_manager.dkg_session_states.lock().unwrap();
+        //     let state = session_states.get(&dkg_session_id);
+        //     assert_eq!(state.is_some(), true);
+        //     assert_eq!(*state.unwrap(), DKGSessionState::KeyGenerated);
+        // }
+
+
+        // Force delete the current session, first set the session_timeout to 0
+        for (_, node) in network.nodes_mut() {
+            node.session_manager.session_core.session_timeout = 0;
+            node.session_manager.cleanup_expired_sessions();
+            node.session_manager.session_core.session_timeout = 3600; // Reset to default after cleanup
+        }
+
 
 
 
@@ -1171,7 +1209,7 @@ mod tests {
         }
         assert_eq!(
             len,
-            7,
+            5,
             "We expect only 5 messages, t=2 + 3 for EDCSA"
         );
 

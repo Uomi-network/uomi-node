@@ -42,6 +42,15 @@ where
         self.client.info().best_hash
     }
 
+    fn get_all_validator_ids(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+    ) -> Vec<(u32, [u8; 32])> {
+        let runtime = self.client.runtime_api();
+        // Simple call, no extensions required
+        runtime.get_all_validator_ids(hash).unwrap_or_default()
+    }
+
     fn report_participants(
         &self,
         hash: <<B as BlockT>::Header as HeaderT>::Hash,

@@ -24,6 +24,18 @@ impl MessageProcessor {
                 Self::handle_dkg_round2(handler, id, bytes, recipient_bytes)
             }
             
+            TssMessage::SigningCommitmentP2p(id, bytes, recipient_bytes) => {
+                Self::handle_signing_p2p(handler, "SigningCommitment", id, bytes, recipient_bytes)
+            }
+            
+            TssMessage::SigningPackageP2p(id, bytes, recipient_bytes) => {
+                Self::handle_signing_p2p(handler, "SigningPackage", id, bytes, recipient_bytes)
+            }
+            
+            TssMessage::SigningShareP2p(id, bytes, recipient_bytes) => {
+                Self::handle_signing_p2p(handler, "SigningShare", id, bytes, recipient_bytes)
+            }
+            
             TssMessage::SigningPackage(id, bytes) => {
                 Self::handle_signing_message(handler, "SigningPackage", id, bytes)
             }
@@ -87,6 +99,36 @@ impl MessageProcessor {
             }
             Err(e) => {
                 log::error!("[TSS] Invalid peer ID in DKGRound2 message: {:?}", e);
+                Err("Invalid Peer Id".to_string())
+            }
+        }
+    }
+
+    fn handle_signing_p2p<T: TssMessageHandler>(
+        handler: &mut T,
+        message_type: &str,
+        id: SessionId,
+        bytes: Vec<u8>,
+        recipient_bytes: Vec<u8>
+    ) -> Result<(), String> {
+        match PeerId::from_bytes(&recipient_bytes[..]) {
+            Ok(peer_id) => {
+                let message = match message_type {
+                    "SigningCommitment" => TssMessage::SigningCommitmentP2p(id, bytes, recipient_bytes.clone()),
+                    "SigningPackage" => TssMessage::SigningPackageP2p(id, bytes, recipient_bytes.clone()),
+                    "SigningShare" => TssMessage::SigningShareP2p(id, bytes, recipient_bytes.clone()),
+                    _ => return Err(format!("Unknown signing P2P message type: {}", message_type)),
+                };
+                
+                handler.send_signed_message(message, peer_id)
+                    .map_err(|e| {
+                        log::error!("[TSS] Error sending signed TssMessage::{} for session_id {:?}, peer_id {:?} with error {:?}", 
+                            message_type, id, recipient_bytes, e);
+                        e
+                    })
+            }
+            Err(e) => {
+                log::error!("[TSS] Invalid peer ID in {} P2P message: {:?}", message_type, e);
                 Err("Invalid Peer Id".to_string())
             }
         }

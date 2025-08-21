@@ -184,6 +184,6 @@ impl ECDSAManager {
                 .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::ReshareMsgHandlerError(format!("{:?}", e), index.clone())));
         }
-        Err(ECDSAError::KeygenNotFound)
+        Err(ECDSAError::ReshareNotFound)
     }
 }

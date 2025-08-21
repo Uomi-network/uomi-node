@@ -277,6 +277,29 @@ impl MessageProcessor {
                     session_manager.add_active_participant(session_id, &sender_peer_id);
                 }
             }
+            
+            TssMessage::SigningCommitmentP2p(session_id, ref bytes, _recipient) => {
+                // Same as SigningCommitment but sent as P2P - recipient should be us
+                if !session_manager.session_exists(session_id) {
+                    log::warn!("[TSS] Received SigningCommitmentP2p message for non-existent session {}", session_id);
+                    return;
+                }
+                
+                if session_manager.is_session_timed_out(session_id) {
+                    log::warn!("[TSS] Received SigningCommitmentP2p message for timed out session {}", session_id);
+                    return;
+                }
+
+                if let Err(error) = session_manager.signing_handle_commitment(
+                    *session_id,
+                    bytes,
+                    sender_peer_id,
+                ) {
+                    log::error!("[TSS] Error Handling Signing CommitmentP2p for session {}: {:?}", session_id, error);
+                } else {
+                    session_manager.add_active_participant(session_id, &sender_peer_id);
+                }
+            }
             TssMessage::SigningShare(session_id, ref bytes) => {
                 // Check if this session exists or is timed out
                 if !session_manager.session_exists(session_id) {
@@ -296,6 +319,31 @@ impl MessageProcessor {
                     sender_peer_id,
                 ) {
                     Err(error) => log::error!("[TSS] Error Handling Signing Share for session {}: {:?}", session_id, error),
+                    Ok(_signature) => {
+                        session_manager.add_active_participant(session_id, &sender_peer_id);
+                    }
+                } 
+            }
+            
+            TssMessage::SigningShareP2p(session_id, ref bytes, _recipient) => {
+                // Same as SigningShare but sent as P2P - recipient should be us
+                if !session_manager.session_exists(session_id) {
+                    log::warn!("[TSS] Received SigningShareP2p message for non-existent session {}", session_id);
+                    return;
+                }
+                
+                if session_manager.is_session_timed_out(session_id) {
+                    log::warn!("[TSS] Received SigningShareP2p message for timed out session {}", session_id);
+                    return;
+                }
+
+                // only the coordinator is supposed to receive this
+                match session_manager.signing_handle_signature_share(
+                    *session_id,
+                    bytes,
+                    sender_peer_id,
+                ) {
+                    Err(error) => log::error!("[TSS] Error Handling Signing ShareP2p for session {}: {:?}", session_id, error),
                     Ok(_signature) => {
                         session_manager.add_active_participant(session_id, &sender_peer_id);
                     }
@@ -323,6 +371,30 @@ impl MessageProcessor {
                     sender_peer_id,
                 ) {
                     log::error!("[TSS] Error Handling Signing Package for session {}: {:?}", session_id, error);
+                } else {
+                    session_manager.add_active_participant(session_id, &sender_peer_id);
+                }
+            }
+            
+            TssMessage::SigningPackageP2p(session_id, bytes, _recipient) => {
+                // Same as SigningPackage but sent as P2P - recipient should be us
+                if !session_manager.session_exists(session_id) {
+                    log::warn!("[TSS] Received SigningPackageP2p message for non-existent session {}", session_id);
+                    return;
+                }
+                
+                if session_manager.is_session_timed_out(session_id) {
+                    log::warn!("[TSS] Received SigningPackageP2p message for timed out session {}", session_id);
+                    return;
+                }
+
+                // this should be for the participants
+                if let Err(error) = session_manager.signing_handle_signing_package(
+                    *session_id,
+                    &bytes,
+                    sender_peer_id,
+                ) {
+                    log::error!("[TSS] Error Handling Signing PackageP2p for session {}: {:?}", session_id, error);
                 } else {
                     session_manager.add_active_participant(session_id, &sender_peer_id);
                 }
@@ -473,6 +545,13 @@ impl MessageProcessor {
                             &mut manager,
                             ECDSAIndexWrapper(index),
                         ),
+                    TssMessage::ECDSAMessageReshare(_, index, _) => session_manager
+                        .handle_buffer_and_sending_messages_for_reshare(
+                            session_id,
+                            msg,
+                            &mut manager,
+                            ECDSAIndexWrapper(index),
+                        ),
                     TssMessage::ECDSAMessageSign(_, index, _) => {
                         log::debug!("[TSS] Starting consuming buffer");
                         session_manager.handle_buffer_and_sending_messages_for_sign_offline(
@@ -504,7 +583,17 @@ impl MessageProcessor {
                 );
 
                 if let Err(error) = &sending_messages {
-                    log::error!("[TSS] Error sending messages for session {}: {:?}", session_id, error);
+                    match error {
+                        crate::ecdsa::ECDSAError::KeygenNotFound => {
+                            log::warn!("[TSS] ECDSA keygen session {} not initialized for received message. This usually means session creation is incomplete.", session_id);
+                        }
+                        crate::ecdsa::ECDSAError::ReshareNotFound => {
+                            log::warn!("[TSS] ECDSA reshare session {} not initialized for received message. This usually means reshare session creation is incomplete.", session_id);
+                        }
+                        _ => {
+                            log::error!("[TSS] Error sending messages for session {}: {:?}", session_id, error);
+                        }
+                    }
                     return;
                 } else{
                     session_manager.add_active_participant(session_id, &sender_peer_id);

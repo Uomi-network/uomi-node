@@ -5,6 +5,14 @@ use crate::types::SessionId;
 
 pub trait ClientManager<B: BlockT> {
     fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash;
+    /// Fetch all validator IDs from the runtime as pairs of (validator_id, account_id)
+    /// Default is empty; concrete clients can override.
+    fn get_all_validator_ids(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+    ) -> Vec<(u32, [u8; 32])> {
+        Vec::new()
+    }
     fn report_participants(
         &self,
         hash: <<B as BlockT>::Header as HeaderT>::Hash,

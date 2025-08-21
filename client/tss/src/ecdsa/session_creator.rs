@@ -21,16 +21,19 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     ) {
         let mut handler = self.ecdsa_manager.lock().unwrap();
 
-        let my_id = participants
-            .iter()
-            .position(|&el| el == &self.session_core.validator_key[..]);
+        // Resolve our stable session index using PeerMapper (validator_id-backed), not array position
+        let my_id: Option<u16> = {
+            let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
+            peer_mapper.get_id_from_account_id(&id, &self.session_core.validator_key)
+        };
 
-        if let None = my_id {
+        if my_id.is_none() {
             log::info!("[TSS] We are not allowed to participate");
             return;
         }
 
-        log::info!("[TSS] My Id = {:?}", my_id.unwrap() + 1);
+        let my_id = my_id.unwrap();
+        log::info!("[TSS] My Id = {:?}", my_id);
 
         let participant_indices: Vec<String> = (1..participants.len() + 1)
             .into_iter()
@@ -39,7 +42,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         let keygen = handler.add_keygen(
             id,
-            (my_id.unwrap() + 1).to_string(),
+            my_id.to_string(),
             participant_indices,
             t.into(),
             n.into(),
@@ -69,7 +72,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         participants: Vec<TSSParticipant>,
         old_participants: Vec<TSSParticipant>,
     ) {
-        let my_id = match self.get_participant_id(&participants) {
+    let my_id = match self.get_my_index(id) {
             Some(id) => id,
             None => {
                 log::info!("[TSS] We are not allowed to participate");
@@ -108,11 +111,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Reshare);
     }
 
-    fn get_participant_id(&self, participants: &[TSSParticipant]) -> Option<u16> {
-        participants
-            .iter()
-            .position(|&el| el == &self.session_core.validator_key[..])
-            .map(|pos| (pos + 1) as u16)
+    // Resolve our session-local index via PeerMapper for the given session
+    fn get_my_index(&self, session_id: SessionId) -> Option<u16> {
+        let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
+        peer_mapper.get_id_from_account_id(&session_id, &self.session_core.validator_key)
     }
 
     fn get_current_keys(&self, id: SessionId, my_id: u16) -> Option<String> {
@@ -181,17 +183,15 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         participants: Vec<TSSParticipant>,
         message: Vec<u8>,
     ) {
-        let my_id = participants
-            .iter()
-            .position(|&el| el == &self.session_core.validator_key[..]);
-
-        if let None = my_id {
-            log::info!("[TSS] We are not allowed to participate");
-            return;
-        }
-
-        let my_id = my_id.unwrap() + 1;
-        let identifier: Identifier = u16::try_from(my_id).unwrap().try_into().unwrap();
+        // Use PeerMapper-provided index for this session
+        let my_id = match self.get_my_index(id) {
+            Some(idx) => idx,
+            None => {
+                log::info!("[TSS] We are not allowed to participate");
+                return;
+            }
+        };
+        let identifier: Identifier = my_id.try_into().unwrap();
 
         let mut handler = self.ecdsa_manager.lock().unwrap();
         let storage = self.storage_manager.key_storage.lock().unwrap();

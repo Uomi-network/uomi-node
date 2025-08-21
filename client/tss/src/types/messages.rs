@@ -25,8 +25,11 @@ pub enum TssMessage {
     DKGRound1(SessionId, Vec<u8>),
     DKGRound2(SessionId, Vec<u8>, TSSPeerId),
     SigningCommitment(SessionId, Vec<u8>),
+    SigningCommitmentP2p(SessionId, Vec<u8>, TSSPeerId),
     SigningPackage(SessionId, Vec<u8>),
+    SigningPackageP2p(SessionId, Vec<u8>, TSSPeerId),
     SigningShare(SessionId, Vec<u8>),
+    SigningShareP2p(SessionId, Vec<u8>, TSSPeerId),
 
     /// ECDSA OPEN TSS
     /// Utils

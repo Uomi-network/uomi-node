@@ -28,6 +28,7 @@ pub const GENERIC_ERROR: &str = "Generic error";
 #[derive(Debug)]
 pub enum ECDSAError {
     KeygenNotFound,
+    ReshareNotFound,
     SignNotFound,
     SignOnlineNotFound,
     KeygenMsgHandlerError(String, ECDSAIndexWrapper),

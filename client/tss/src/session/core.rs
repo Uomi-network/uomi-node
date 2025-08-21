@@ -39,7 +39,14 @@ impl SessionCore {
     pub fn session_exists(&self, session_id: &SessionId) -> bool {
         self.sessions_data.lock().unwrap().contains_key(session_id)
     }
-    
+
+    /// Set Session Timeout
+    pub fn set_session_timeout(&mut self, session_id: &SessionId, timeout: u64) {
+       (self.session_timeout) = timeout;
+        log::info!("[TSS] Session timeout for session {} set to {} seconds", session_id, timeout);
+    }
+
+
     /// Check if a session has timed out
     pub fn is_session_timed_out(&self, session_id: &SessionId) -> bool {
         let timestamps = self.session_timestamps.lock().unwrap();
@@ -76,7 +83,7 @@ impl SessionCore {
         // Check if session already exists
         if self.session_exists(&session_id) {
             log::warn!("[TSS] Session {} already exists, refusing to create again", session_id);
-        //    return Err(SessionError::SessionAlreadyExists);
+            return Err(SessionError::SessionAlreadyExists);
         }
         
         // Validate threshold requirements

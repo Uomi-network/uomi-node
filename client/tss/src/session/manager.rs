@@ -113,7 +113,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         
         let retry_mechanism = RetryMechanism::new(300, 3, retry_enabled, local_peer_id.clone());
 
-        Self {
+        let mut obj = Self {
             session_core,
             storage_manager,
             communication_manager,
@@ -126,7 +126,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             announcement: announcment,
             retry_mechanism,
             _phantom: PhantomData,
-        }
+        };
+
+        obj.initialize_validator_ids();
+
+        obj
     }
     
     /// Send a signed message to the gossip handler
@@ -184,6 +188,23 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             .unwrap_or_else(|_| PeerId::random());
             
         self.consume_unknown_peer_queue(temp_peer_id)
+    }
+
+    /// Populate PeerMapper.validator_ids with the current on-chain mapping at startup.
+    fn initialize_validator_ids(&mut self) {
+        let best = self.client.best_hash();
+        let id_pairs = self.client.get_all_validator_ids(best);
+        if id_pairs.is_empty() {
+            log::info!("[TSS] No validator IDs fetched at startup (maybe not initialized yet)");
+            return;
+        }
+        let mut mapper = self.session_core.peer_mapper.lock().unwrap();
+        let len = id_pairs.len();
+        for (id, account) in id_pairs {
+            mapper.set_validator_id(account.to_vec(), id);
+        }
+        drop(mapper);
+        log::info!("[TSS] Initialized {} validator IDs in PeerMapper", len);
     }
 
     /// Add session data with validation

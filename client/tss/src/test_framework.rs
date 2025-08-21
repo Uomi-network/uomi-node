@@ -19,6 +19,8 @@ use std::{
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::fs;
 use uomi_runtime::Block;
 use uomi_runtime::pallet_tss::TssOffenceType;
 use sp_keystore::{testing::MemoryKeystore, Keystore};
@@ -36,6 +38,20 @@ fn init_test_logging() {
         .is_test(true)
         .try_init();
     });
+}
+
+/// Create a fresh temporary directory, set TSS_STORAGE_DIR to it, and ensure it's empty.
+pub fn reset_tss_storage_dir() -> std::path::PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let base = std::env::temp_dir().join(format!("tss-tests-{}", now));
+    // Best-effort cleanup if it exists
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).expect("failed to create fresh TSS storage dir");
+    std::env::set_var("TSS_STORAGE_DIR", &base);
+    base
 }
 
 
@@ -161,6 +177,8 @@ pub struct TestNode {
 impl TestNetwork {
     /// Create a new test network with the given number of nodes
     pub fn new(node_count: usize, config: TestConfig) -> Self {
+    // Ensure a clean TSS storage dir for every test network
+    reset_tss_storage_dir();
         let mut nodes = HashMap::with_capacity(node_count);
 
         for i in 0..node_count {
@@ -236,12 +254,20 @@ impl TestNetwork {
             };
 
             // Handle broadcast (empty recipient) or direct message
-            let recipients = if recipient_bytes.is_empty() {
+            let mut recipients: Vec<PeerId> = if recipient_bytes.is_empty() {
                 // if it's broadcast it means we send to everyone BUT the sender_id
-                self.nodes.keys().filter(|key| **key != sender_id).cloned().collect()
+                self
+                    .nodes
+                    .keys()
+                    .filter(|key| **key != sender_id)
+                    .cloned()
+                    .collect()
             } else {
                 vec![PeerId::from_bytes(&recipient_bytes).unwrap()]
             };
+
+            // Ensure deterministic recipient order
+            recipients.sort_by(|a, b| a.to_bytes().cmp(&b.to_bytes()));
 
             for recipient_id in recipients {
                 // Skip failed peers
@@ -277,8 +303,12 @@ impl TestNetwork {
 
     /// Process one complete network round (send + receive)
     pub fn process_round(&mut self) -> Vec<(PeerId, Vec<u8>, TssMessage)> {
-        // Collect all outgoing messages from nodes
-        for (peer_id, node) in &mut self.nodes {
+        // Collect all outgoing messages from nodes in a deterministic order
+        let mut peer_ids: Vec<PeerId> = self.nodes.keys().cloned().collect();
+        peer_ids.sort_by(|a, b| a.to_bytes().cmp(&b.to_bytes()));
+
+        for peer_id in peer_ids {
+            let node = self.nodes.get_mut(&peer_id).expect("Node should exist");
             let (broadcast_msgs, direct_msgs) = node.outgoing_messages();
 
             for msg in broadcast_msgs {
@@ -497,6 +527,7 @@ impl MockTssMessageHandler {
 #[test]
 fn test_process_session_manager_message_dkg_round1() {
     init_test_logging();
+    reset_tss_storage_dir();
     let mut handler = MockTssMessageHandler::default();
     let session_id: SessionId = 0;
     let data = vec![1, 2, 3];
@@ -527,6 +558,7 @@ fn test_process_session_manager_message_dkg_round1() {
 #[test]
 fn test_buffer_stores_peerid_bytes_for_dkg_round1() {
     init_test_logging();
+    reset_tss_storage_dir();
     // Create a 2-node test network
     let mut network = TestNetwork::new(2, TestConfig::default());
 
@@ -596,6 +628,7 @@ fn test_buffer_stores_peerid_bytes_for_dkg_round1() {
 #[test]
 fn test_route_ecdsa_message() {
     init_test_logging();
+    reset_tss_storage_dir();
     let mut handler = MockTssMessageHandler::default();
     let session_id: SessionId = 1;
     let data = vec![1, 2, 3];
