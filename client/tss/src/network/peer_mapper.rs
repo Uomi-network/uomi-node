@@ -217,7 +217,7 @@ impl PeerMapper {
  
             
             entry_sessions_participants.insert(identifier, val.to_vec());
-            entry_sessions_participants_u16.insert(u16::try_from(index + 1).unwrap(), val.to_vec());
+            entry_sessions_participants_u16.insert(u16::try_from(validator_id).unwrap(), val.to_vec());
             
             log::info!("[TSS] Added participant with validator ID {} to session {} with index {}", validator_id, session_id, index);
         }

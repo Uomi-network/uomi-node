@@ -33,34 +33,32 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     ) where
         B: BlockT,
     {
-        // Store the participants
+        // Store the participants using stable validator IDs as Identifiers
         let mut handle = self.participant_manager.sessions_participants.lock().unwrap();
         let mut tmp = HashMap::<Identifier, TSSPublic>::new();
 
-        let mut index = None;
-
         log::debug!("[TSS] participants={:?}", participants);
 
-        for (i, el) in participants.into_iter().enumerate() {
-            tmp.insert(u16::try_from(i + 1).unwrap().try_into().unwrap(), el.into());
-
-            if el == self.session_core.validator_key[..] {
-                index = Some(i);
+        let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
+        for el in participants.into_iter() {
+            if let Some(identifier) = peer_mapper.get_identifier_from_account_id(&session_id, &el.to_vec()) {
+                tmp.insert(identifier, el.into());
+            } else {
+                log::warn!(
+                    "[TSS] Could not resolve validator ID for participant during signing session {}",
+                    session_id
+                );
             }
         }
+        drop(peer_mapper);
 
-        // Check if we are part of this
+        // Ensure we are authorized (we must have an identifier)
+        let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
+        let whoami_identifier = peer_mapper.get_identifier_from_account_id(&session_id, &self.session_core.validator_key);
+        drop(peer_mapper);
 
-        if let None = index {
-            log::error!("[TSS] Not allowed to participate in Signing");
-            return;
-        }
-        let index: Result<u16, TryFromIntError> = index.unwrap().try_into();
-
-        info!("[TSS] Index: {:?}", index);
-
-        if let Err(_) = index {
-            log::error!("[TSS] Not allowed to participate in Signing");
+        if whoami_identifier.is_none() {
+            log::error!("[TSS] Not allowed to participate in Signing (identifier not found)");
             return;
         }
 
@@ -69,9 +67,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         log::debug!("[TSS]: Event received from Signing, starting round 1");
 
-        let key_storage = self.storage_manager.key_storage.lock().unwrap();
-
-        let key_package = key_storage.get_key_package(session_id, &(u16::try_from(index.unwrap()+1).unwrap().try_into().unwrap()));
+    let key_storage = self.storage_manager.key_storage.lock().unwrap();
+    let key_package = key_storage.get_key_package(session_id, &whoami_identifier.unwrap());
 
         if let Err(error) = key_package {
             log::error!("[TSS] Error fetching Key Package {:?}", error);
@@ -274,6 +271,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     ) -> Result<(), SessionManagerError> {
         let signing_package = SigningPackage::deserialize(bytes);
 
+        log::debug!("[TSS] Debug SigningPackage = {:?}", signing_package);
+
         log::info!("[TSS] Handling signing package from coordinator");
 
         // Update session state to Round1Completed
@@ -324,6 +323,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let mut peer_mapper_handle = self.session_core.peer_mapper.lock().unwrap();
         let whoami_identifier = peer_mapper_handle.get_identifier_from_account_id(&session_id, &self.session_core.validator_key);
 
+        log::info!("[TSS] WHOAMI Id: {:?}", whoami_identifier);
+
         if let None = whoami_identifier {
             log::error!("[TSS] We are not allowed to participate in the signing phase");
             return Err(SessionManagerError::IdentifierNotFound);
@@ -336,8 +337,18 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             log::error!("[TSS] Error fetching the key package {:?}", error);
         }
 
+        // If there are not enough signing commitments, we cannot proceed
         if (&signing_package.as_ref()).unwrap().signing_commitments().len() < (*(&key_package.as_ref()).unwrap().min_signers()).into() {
             log::info!("[TSS] FROST round 2 signing requires at least {:?} signers, for now only {:?} provided", key_package.unwrap().min_signers(), signing_package.unwrap().signing_commitments().len());
+            return Ok(());
+        }
+
+        // If this participant has not yet committed, we wait until he does:
+        if let None = &signing_package.as_ref().unwrap()
+            .signing_commitments()
+            .get(&whoami_identifier.unwrap())
+        {
+            log::info!("[TSS] Signing commitment not found for participant {:?}, waiting...", whoami_identifier.unwrap());
             return Ok(());
         }
 
