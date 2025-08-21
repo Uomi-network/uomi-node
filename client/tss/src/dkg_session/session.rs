@@ -29,8 +29,8 @@ pub fn handle_session_created<S: Storage>(
     session_id: SessionId,
     n: u64,
     t: u64,
-    participants: Vec<TSSParticipant>,
-    validator_key: &TSSPublic,
+    _participants: Vec<TSSParticipant>,
+    participant_identifier: Identifier,
     storage: Arc<Mutex<S>>,
     dkg_session_states: Arc<Mutex<std::collections::HashMap<SessionId, DKGSessionState>>>,
 ) -> Result<(frost_ed25519::keys::dkg::round1::Package, frost_ed25519::keys::dkg::round1::SecretPackage), SessionError> {
@@ -40,45 +40,23 @@ pub fn handle_session_created<S: Storage>(
         return Err(SessionError::GenericError(format!("Invalid threshold parameters: t={}, n={}", t, n)));
     }
     
-    if participants.len() != n as usize {
+    if _participants.len() != n as usize {
         log::error!(
             "[TSS] Mismatch between participant count and n parameter for DKG session {}: {} vs {}",
-            session_id, participants.len(), n
+            session_id, _participants.len(), n
         );
         return Err(SessionError::GenericError(format!(
             "Participant count ({}) doesn't match n parameter ({})",
-            participants.len(), n
+            _participants.len(), n
         )));
     }
     
-    // Check if we're part of the participants
-    let mut index = None;
-    log::debug!("[TSS] participants={:?}", participants);
-
-    for (i, el) in participants.iter().enumerate() {
-        if *el == validator_key[..] {
-            index = Some(i);
-            break;
-        }
-    }
-
-    if index.is_none() {
-        log::error!("[TSS] Not authorized to participate in DKG session {}", session_id);
-        return Err(SessionError::NotAuthorized);
-    }
-    
-    let index: Result<u16, std::num::TryFromIntError> = index.unwrap().try_into();
-    if let Err(e) = index {
-        log::error!("[TSS] Error converting index to u16: {:?}", e);
-        return Err(SessionError::GenericError("Error converting index to u16".into()));
-    }
-    
-    let index = index.unwrap();
-    log::info!("[TSS] Our index in DKG session {}: {}", session_id, index);
-
-    let participant_identifier: Identifier = (index + 1).try_into().unwrap();
-    
-    log::info!("[TSS] Event received from DKG, starting round 1 for session {}", session_id);
+    // Use the provided identifier; do not attempt to derive it here
+    log::info!(
+        "[TSS] Event received from DKG, starting round 1 for session {} with identifier {:?}",
+        session_id,
+        participant_identifier
+    );
 
     // Generate round 1 package
     let (r1, secret) = match round1::generate_round1_secret_package(

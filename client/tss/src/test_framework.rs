@@ -180,9 +180,13 @@ impl TestNetwork {
     // Ensure a clean TSS storage dir for every test network
     reset_tss_storage_dir();
         let mut nodes = HashMap::with_capacity(node_count);
+        // Keep track of (validator_key, assigned_id) for all nodes
+        let mut validator_map: Vec<(TSSPublic, u32)> = Vec::with_capacity(node_count);
 
         for i in 0..node_count {
             let (peer_id, validator_key) = generate_peer_data(i);
+            // Deterministic validator id: index + 1
+            validator_map.push((validator_key.clone(), (i as u32) + 1));
             let node = TestNode::new(peer_id, validator_key);
             nodes.insert(peer_id, node);
         }
@@ -205,6 +209,13 @@ impl TestNetwork {
             
                 }
             
+            }
+            // Populate validator_id assignments for all known validators in this node's PeerMapper
+            {
+                let mut mapper = node.session_manager.session_core.peer_mapper.lock().unwrap();
+                for (account, id) in validator_map.iter() {
+                    mapper.set_validator_id(account.clone(), *id);
+                }
             }
             // verify that each peer_mapper contains the elements it should
             assert_eq!(

@@ -388,13 +388,28 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     where
         B: BlockT,
     {
-        // Use the extracted DKG session module
+        // Resolve our stable identifier using PeerMapper.get_validator_id
+        let participant_identifier = {
+            let peer_mapper = &mut *self.session_core.peer_mapper.lock().unwrap();
+            match peer_mapper.get_validator_id(&self.session_core.validator_key) {
+                Some(id_u32) => {
+                    let id_u16 = u16::try_from(id_u32).map_err(|_| SessionError::GenericError("Validator ID out of range for u16".into()))?;
+                    Identifier::try_from(id_u16).map_err(|_| SessionError::GenericError("Failed to convert validator ID to Identifier".into()))?
+                }
+                None => {
+                    log::error!("[TSS] Validator ID not found for local validator key; cannot initialize DKG session {}", session_id);
+                    return Err(SessionError::NotAuthorized);
+                }
+            }
+        };
+
+        // Use the DKG session module with resolved identifier
         let (r1, _secret) = dkg_session::handle_session_created(
             session_id,
             n,
             t,
             participants.clone(),
-            &self.session_core.validator_key,
+            participant_identifier,
             self.storage_manager.storage.clone(),
             self.state_managers.dkg_state_manager.dkg_session_states.clone(),
         )?;
