@@ -403,16 +403,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 // Implement TssMessageHandler trait for SessionManager
 impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> {
     fn send_signed_message(&mut self, message: TssMessage, recipient: PeerId) -> Result<(), String> {
-        // Create a signed message and send it via the communication manager
-        let signed_message = SignedTssMessage {
+        // Create a signed message using the centralized signing helper
+        let signed_message = verification::create_signed_message(
             message,
-            sender_public_key: self.auth_manager.validator_public_key,
-            signature: [0u8; 64], // TODO: Implement proper signing
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
+            &self.auth_manager.validator_public_key,
+            &self.auth_manager.keystore,
+        )?;
         
         // Send via gossip channel - this will be handled by the gossip handler
         self.communication_manager.session_manager_to_gossip_tx
@@ -421,16 +417,12 @@ impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> 
     }
 
     fn broadcast_signed_message(&mut self, message: TssMessage) -> Result<(), String> {
-        // Create a signed message and broadcast it via the communication manager
-        let signed_message = SignedTssMessage {
+        // Create a signed message using the centralized signing helper
+        let signed_message = verification::create_signed_message(
             message,
-            sender_public_key: self.auth_manager.validator_public_key,
-            signature: [0u8; 64], // TODO: Implement proper signing
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
+            &self.auth_manager.validator_public_key,
+            &self.auth_manager.keystore,
+        )?;
         
         // Send via gossip channel - this will be handled by the gossip handler
         self.communication_manager.session_manager_to_gossip_tx

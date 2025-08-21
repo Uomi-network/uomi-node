@@ -1,10 +1,11 @@
 use codec::Encode;
-use sp_core::{sr25519, Pair};
+use sp_core::sr25519;
 use sp_io::crypto::sr25519_verify;
-use sp_keystore::{KeystoreExt, KeystorePtr};
+use sp_keystore::KeystorePtr;
 use uomi_runtime::pallet_uomi_engine::crypto::CRYPTO_KEY_TYPE as UOMI;
 
 use crate::types::{SignedTssMessage, TssMessage, TSSPublic};
+use crate::gossip::signing::SigningService;
 
 /// Verifies the signature of a `SignedTssMessage`.
 pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
@@ -15,20 +16,18 @@ pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
             return true;
         }
     }
-    
-    // // Reconstruct the payload that was signed
-    // let mut payload = Vec::new();
-    // payload.extend_from_slice(&signed_message.message.encode());
-    // payload.extend_from_slice(&signed_message.sender_public_key);
-    // payload.extend_from_slice(&signed_message.timestamp.to_le_bytes());
 
-    // // Verify the signature
-    // let public_key = sr25519::Public::from_raw(signed_message.sender_public_key);
-    // let signature = sr25519::Signature::from_raw(signed_message.signature);
+    // Reconstruct the payload that was signed: message + sender_public_key + timestamp
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&signed_message.message.encode());
+    payload.extend_from_slice(&signed_message.sender_public_key);
+    payload.extend_from_slice(&signed_message.timestamp.to_le_bytes());
 
-    // sr25519_verify(&signature, &payload, &public_key)
+    // Verify the signature using sr25519
+    let public_key = sr25519::Public::from_raw(signed_message.sender_public_key);
+    let signature = sr25519::Signature::from_raw(signed_message.signature);
 
-    true
+    sr25519_verify(&signature, &payload, &public_key)
 }
 
 /// Checks if the message timestamp is within acceptable bounds.
@@ -49,35 +48,9 @@ pub fn create_signed_message(
     validator_public_key: &[u8; 32],
     keystore: &KeystorePtr,
 ) -> Result<SignedTssMessage, String> {
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("Failed to get current time: {}", e))?
-        .as_secs();
-
-    // Create the payload to sign (message + public key + timestamp)
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&message.encode());
-    payload.extend_from_slice(validator_public_key);
-    payload.extend_from_slice(&current_time.to_le_bytes());
-
-    // Sign the payload using the keystore
-    let signature_result = keystore.sign_with(
-        UOMI,
-        sr25519::CRYPTO_ID,
-        validator_public_key,
-        &payload,
-    ).map_err(|e| format!("Failed to sign message: {:?}", e))?;
-
-    let signature_bytes = signature_result.ok_or("Failed to get signature from keystore")?;
-    let signature: [u8; 64] = signature_bytes.try_into()
-        .map_err(|_| "Invalid signature length")?;
-
-    Ok(SignedTssMessage {
-        message,
-        sender_public_key: *validator_public_key,
-        signature,
-        timestamp: current_time,
-    })
+    // Delegate to the centralized SigningService to avoid duplication
+    let service = SigningService::new(keystore.clone(), *validator_public_key);
+    service.create_signed_message(message)
 }
 
 /// Verifies that a signed message is from the expected sender and has a valid signature and timestamp.
