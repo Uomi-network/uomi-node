@@ -133,7 +133,7 @@ impl<T: Config> Pallet<T> {
 
         // Check if the session is in progress
         ensure!(
-            session.state == SessionState::DKGInProgress,
+            session.state <= SessionState::DKGInProgress,
             Error::<T>::InvalidSessionState
         );
 

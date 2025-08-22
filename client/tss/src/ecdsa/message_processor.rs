@@ -492,6 +492,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             crate::dkghelpers::StorageType::EcdsaKeys,
             msg.as_bytes(),
         ).is_err() {
+            log::error!("[TSS] Failed to store ECDSA keys");
             return;
         }
 
