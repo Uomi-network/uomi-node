@@ -499,7 +499,6 @@ impl MessageProcessor {
                 // Check if this session exists or is timed out
                 if !session_manager.session_exists(session_id) {
                     log::warn!("[TSS] Received ECDSA message for non-existent session {} - Buffering them", session_id);
-                    // return;
                 }
                 
                 if session_manager.is_session_timed_out(session_id) {
@@ -508,7 +507,8 @@ impl MessageProcessor {
                 }
                 
                 // Check if the node is authorized for this session
-                if !session_manager.is_authorized_for_session(session_id) {
+                if !session_manager.is_authorized_for_session(session_id) 
+                && session_manager.session_exists(session_id) {
                     log::warn!("[TSS] Node not authorized for session {}", session_id);
                     return;
                 }
