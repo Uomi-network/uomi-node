@@ -498,8 +498,8 @@ impl MessageProcessor {
             | TssMessage::ECDSAMessageSignOnline(session_id, _index, msg) => {
                 // Check if this session exists or is timed out
                 if !session_manager.session_exists(session_id) {
-                    log::warn!("[TSS] Received ECDSA message for non-existent session {}", session_id);
-                    return;
+                    log::warn!("[TSS] Received ECDSA message for non-existent session {} - Buffering them", session_id);
+                    // return;
                 }
                 
                 if session_manager.is_session_timed_out(session_id) {
