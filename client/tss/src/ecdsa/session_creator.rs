@@ -35,10 +35,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let my_id = my_id.unwrap();
         log::info!("[TSS] My Id = {:?}", my_id);
 
-        let participant_indices: Vec<String> = (1..participants.len() + 1)
-            .into_iter()
-            .map(|el| el.to_string())
-            .collect();
+        let participant_indices: Vec<String> = {
+            let mut pm = self.session_core.peer_mapper.lock().unwrap();
+            participants.iter()
+                .filter_map(|p| pm.get_validator_id(&p.to_vec()))
+                .map(|vid| vid.to_string())
+                .collect()
+        };
 
         let keygen = handler.add_keygen(
             id,

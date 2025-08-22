@@ -120,6 +120,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     ) -> (Result<SendingMessages, ECDSAError>, ECDSAPhase) {
         match manager.handle_keygen_buffer(*session_id) {
             Err(ECDSAError::KeygenMsgHandlerError(error, index)) => {
+
+                log::error!("[TSS] Keygen message handler error: {:?}", error);
                 // Report the offender
                 // First we translate the index into an account_id
                 let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
