@@ -408,7 +408,7 @@ where
         );
         
         // Configure session timeout
-        session_manager.session_core.session_timeout = 15;
+        session_manager.session_core.session_timeout = 3600;
 
         // Start the components
         let runtime_event_handler_future = runtime_event_handler.run();
