@@ -124,6 +124,7 @@ impl<T: Config> Pallet<T> {
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> DispatchResult {
+        log::info!("[TSS] Casting vote on DKG result for session_id: {:?}...", session_id);
         let aggregated_key = BoundedVec::try_from(aggregated_key)
             .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
         
@@ -131,6 +132,7 @@ impl<T: Config> Pallet<T> {
         let session =
             DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
+        log::info!("[TSS] Current session state: {:?}", session.state);
         // Check if the session is in progress
         ensure!(
             session.state <= SessionState::DKGInProgress,
@@ -141,9 +143,11 @@ impl<T: Config> Pallet<T> {
         let signer = Signer::<T, <T as crate::pallet::Config>::AuthorityId>::all_accounts();
 
         if !signer.can_sign() {
-            log::error!("TSS: No accounts available to sign cast_vote_on_dkg_result");
+            log::error!("[TSS]: No accounts available to sign cast_vote_on_dkg_result");
             return Err(Error::<T>::KeyUpdateFailed.into());
         }
+
+        log::info!("[TSS] Sending unsigned transaction for DKG result...");
 
         // Send unsigned transaction with signed payload
         let _ = signer.send_unsigned_transaction(
@@ -154,6 +158,8 @@ impl<T: Config> Pallet<T> {
             },
             |payload, signature| crate::pallet::Call::submit_dkg_result { payload, signature },
         );
+
+        log::info!("[TSS] DKG result submitted successfully.");
 
         Ok(())
     }

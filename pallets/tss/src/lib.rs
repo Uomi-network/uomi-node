@@ -493,7 +493,7 @@ pub mod pallet {
         ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
 
         let slashed_validators = Self::get_slashed_validators();
-        let deadline = frame_system::Pallet::<T>::block_number() + 100u32.into();
+        let deadline = frame_system::Pallet::<T>::block_number() + 1000u32.into();
 
         let active_validators = ActiveValidators::<T>::get();
 
@@ -640,6 +640,7 @@ pub mod pallet {
     ) -> DispatchResult {
         ensure_none(origin)?;
 
+        log::info!("[TSS] Call::submit_dkg_result");
 
         let who = payload.public().into_account();
         let session_id = payload.session_id;
@@ -649,6 +650,7 @@ pub mod pallet {
         let mut session =
             DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
+        log::info!("[TSS] Current session state: {:?}", session.state);
         ensure!(
             session.state <= SessionState::DKGInProgress,
             Error::<T>::InvalidSessionState
@@ -659,6 +661,8 @@ pub mod pallet {
 
         // Check if the validator was involved in the DKG session
         let validator_id = ValidatorIds::<T>::get(who.clone()).ok_or(Error::<T>::UnauthorizedParticipation)?;
+        log::info!("[TSS] Validator ID: {:?}", validator_id);
+        log::info!("[TSS] Is participant: {:?}", session.participants.contains(&who));
         ensure!(
             session.participants.contains(&who),
             Error::<T>::UnauthorizedParticipation
@@ -666,6 +670,8 @@ pub mod pallet {
 
         // Add the vote to the proposed public keys
         ProposedPublicKeys::<T>::insert(nft_id.clone(), validator_id, aggregated_key.clone());
+
+        log::info!("[TSS] Proposed public key inserted");
 
         let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
 
@@ -680,6 +686,8 @@ pub mod pallet {
 
         let total_validators = session.participants.len() as u32;
         let required_votes = (total_validators * threshold) / 100;
+
+        log::info!("[TSS] Votes: {}, Required: {}", votes, required_votes);
 
         if votes >= required_votes {
             // If the threshold is met, finalize the DKG session
