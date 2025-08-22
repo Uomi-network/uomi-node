@@ -1073,6 +1073,14 @@ pub mod pallet {
                     .propagate(true)
                     .build();
             }
+            Call::submit_dkg_result { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX)
+                    .and_provides(call.encode())
+                    .longevity(64)
+                    .propagate(true)
+                    .build();
+            }
 
             // Reject all other unsigned calls
             _ => {

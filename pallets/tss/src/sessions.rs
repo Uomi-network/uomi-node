@@ -171,7 +171,7 @@ impl<T: Config> Pallet<T> {
             DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
         ensure!(
-            session.state == SessionState::DKGInProgress,
+            session.state <= SessionState::DKGInProgress,
             Error::<T>::InvalidSessionState
         );
 
