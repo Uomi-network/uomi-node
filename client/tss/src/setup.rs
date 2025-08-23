@@ -288,7 +288,7 @@ where
     C::Api: uomi_runtime::pallet_tss::TssApi<B>,
     N: Network<B> + Clone + Send + Sync + 'static + NetworkStateInfo + NetworkSigner,
     S: Syncing<B> + Clone + Send + 'static,
-    TP: TransactionPool + LocalTransactionPool<Block = B> + Send + Sync + 'static,
+    TP: TransactionPool<Block = B> + LocalTransactionPool<Block = B> + Send + Sync + 'static,
     RE: EncodeLike + Eq + Debug + Parameter + Sync + Send + Member,
 {
     let mut rng = rand::thread_rng();
