@@ -504,35 +504,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             }
         };
 
-        // Extract aggregated public key bytes from JSON result instead of submitting full JSON.
-        // Expected structure: { "pubkey": { "pk": ["<hex-compressed-or-uncompressed>", ...], ... }, ... }
-        // We take the first element of pubkey.pk[] as the aggregated key.
-        // Robust parsing with serde_json plus fallbacks (raw hex / bytes) for resilience.
-        fn extract_agg_key(msg: &str) -> Result<Vec<u8>, String> {
-            let trimmed = msg.trim();
-            if !trimmed.starts_with('{') { // fallback simple modes
-                if trimmed.starts_with("0x") {
-                    return hex::decode(&trimmed[2..]).map_err(|e| format!("Invalid hex aggregated key: {e}"));
-                }
-                if trimmed.chars().all(|c| c.is_ascii_hexdigit()) && trimmed.len() % 2 == 0 {
-                    return hex::decode(trimmed).map_err(|e| format!("Invalid hex aggregated key: {e}"));
-                }
-                return Ok(msg.as_bytes().to_vec());
-            }
 
-            #[derive(serde::Deserialize)]
-            struct PubKeyInner { pk: Vec<String> }
-            #[derive(serde::Deserialize)]
-            struct TopLevel { #[serde(default)] pubkey: Option<PubKeyInner> }
-
-            // Try strict parsing first
-            let parsed: TopLevel = serde_json::from_str(trimmed).map_err(|e| format!("JSON parse error: {e}"))?;
-            let pk_list = parsed.pubkey.ok_or("Missing 'pubkey' object")?.pk;
-            let first = pk_list.get(0).ok_or("'pubkey.pk' array empty")?;
-            let key_hex = first.trim_start_matches("0x");
-            let bytes = hex::decode(key_hex).map_err(|e| format!("Failed to decode pk hex: {e}"))?;
-            Ok(bytes)
-        }
 
         let maybe_agg_key = extract_agg_key(&msg);
         match maybe_agg_key {
@@ -659,5 +631,50 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         log::info!("[TSS] My Id is {:?}", _id);
         let _id: frost_ed25519::Identifier = _id.try_into().unwrap();
         _id
+    }
+}
+
+// Extract aggregated public key bytes from JSON result instead of submitting full JSON.
+// Expected structure: { "pubkey": { "pk": ["<hex-compressed-or-uncompressed>", ...], ... }, ... }
+// We take the first element of pubkey.pk[] as the aggregated key.
+// Robust parsing with serde_json plus fallbacks (raw hex / bytes) for resilience.
+pub(crate) fn extract_agg_key(msg: &str) -> Result<Vec<u8>, String> {
+    let trimmed = msg.trim();
+    if !trimmed.starts_with('{') { // fallback simple modes
+        if trimmed.starts_with("0x") {
+            return hex::decode(&trimmed[2..]).map_err(|e| format!("Invalid hex aggregated key: {e}"));
+        }
+        if trimmed.chars().all(|c| c.is_ascii_hexdigit()) && trimmed.len() % 2 == 0 {
+            return hex::decode(trimmed).map_err(|e| format!("Invalid hex aggregated key: {e}"));
+        }
+        return Ok(msg.as_bytes().to_vec());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct PubKeyInner { pk: Vec<String> }
+    #[derive(serde::Deserialize)]
+    struct TopLevel { #[serde(default)] pubkey: Option<PubKeyInner> }
+
+    // Try strict parsing first
+    let parsed: TopLevel = serde_json::from_str(trimmed).map_err(|e| format!("JSON parse error: {e}"))?;
+    let pk_list = parsed.pubkey.ok_or("Missing 'pubkey' object")?.pk;
+    // pk_list is the set of coordinates (x, y)
+    let first = pk_list.get(0).ok_or("'pubkey.pk' array empty")?;
+    let second = pk_list.get(1).ok_or("'pubkey.pk' array too short")?;
+    let key_hex = first.trim_start_matches("0x");
+    let second_hex = second.trim_start_matches("0x");
+    let bytes = hex::decode(format!("{key_hex}{second_hex}")).map_err(|e| format!("Failed to decode pk hex: {e}"))?;
+    Ok(bytes)
+}
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_extract_agg_key() {
+        let test_msg = "{\"index\":\"3\",\"participants\":[\"2\",\"3\",\"4\",\"5\",\"1\"],\"pubkey\":{\"pk\":[\"e38cff8a210ee94297111b08aaf5cb1c364ba008f3ac39ea20cfacd51022fe4c\",\"f4e890cfe699b58cbab33b212241b3b315927af48ae204cae0abae1b77c4d432\"],\"share_pks\":{\"4\":[\"240da99e7c39fe9ec117d81c021cbf74bf7a49b47553fbf397b44fa61b957cda\",\"45943a02f4093f306da762c22c9069d969cf30150de94f2c58b4296d9a73a1a3\"],\"1\":[\"dfcad00853b34e0573a7ff3fb0519156e1b906159aee4589bca2cef3963c3e6c\",\"c6cb8e473dd2b829475b3e9083f3593d1dc4db21d1562196ae03ba8e93a7c2f7\"],\"2\":[\"94d8247eccb6a2e65615db4c40b2a3160431908592154a1a3620347f5dbd193c\",\"8da043b72a3f8df73ec9da33d7a04d30f74e9d020d0821da147f91455707d2c9\"],\"5\":[\"79cb40902ee09bc21e43c294f6a4db300ab698a633f4b1676ef140c7ff4be850\",\"307bd4afc37b84bfe190afa92e357fffa8b81e00665c77702d66e13e01c9b36d\"],\"3\":[\"b0d1ffff1bf13602ee209ca8e9dce8a2e7a0140246f36515f1ec72bf9a6b2594\",\"4cf02eb78dc68aa951c19edc7580f4ad7a2e947a2ac9d043951668b6e21a0a20\"]}},\"privkey\":{\"cl_sk\":\"46a82b1662cc48a491678457a99fba1e2951c1be850f37941a3e47327947ccb72692572b217184a9769cebedd54cf7527e5a59070b97237f944104ff647de218275e6030764fffb1f9c0ac6ef9dbaf86fe6e527e3a58c0b03839ee2266163b2f246b14caea5c54bad8a9f24ccb1869967c8c5042ffa64974c4f85d8e24247c6a61b3720457f44727a28c50f70\",\"ec_sk\":\"606f42b0848225e3a0713c84cd77dbc5851cd0c66e4455e11ec8455b21dd6d8a\",\"share_sk\":\"567e06ab2e7111735c405765f9a9a956d8db58dcfb5aebd7dbf97efa724f52d2\"}}";
+        let bytes = super::extract_agg_key(test_msg).unwrap();
+        assert_eq!(bytes, hex::decode("e38cff8a210ee94297111b08aaf5cb1c364ba008f3ac39ea20cfacd51022fe4cf4e890cfe699b58cbab33b212241b3b315927af48ae204cae0abae1b77c4d432").unwrap());
+        assert!(bytes.len() <= 65, "Unexpected aggregated key length");
     }
 }
