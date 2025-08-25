@@ -16505,6 +16505,8 @@ dependencies = [
  "sc-transaction-pool-api",
  "sc-utils",
  "scale-info",
+ "serde",
+ "serde_json",
  "sha2 0.10.8",
  "sp-api",
  "sp-core",

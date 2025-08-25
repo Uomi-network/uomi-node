@@ -504,8 +504,49 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             }
         };
 
-        if let Err(err) = self.client.submit_dkg_result(self.client.best_hash(), session_id, msg.as_bytes().to_vec()) {
-            log::error!("[TSS] Error submitting DKG result to chain: {:?}", err);
+        // Extract aggregated public key bytes from JSON result instead of submitting full JSON.
+        // Expected structure: { "pubkey": { "pk": ["<hex-compressed-or-uncompressed>", ...], ... }, ... }
+        // We take the first element of pubkey.pk[] as the aggregated key.
+        // Robust parsing with serde_json plus fallbacks (raw hex / bytes) for resilience.
+        fn extract_agg_key(msg: &str) -> Result<Vec<u8>, String> {
+            let trimmed = msg.trim();
+            if !trimmed.starts_with('{') { // fallback simple modes
+                if trimmed.starts_with("0x") {
+                    return hex::decode(&trimmed[2..]).map_err(|e| format!("Invalid hex aggregated key: {e}"));
+                }
+                if trimmed.chars().all(|c| c.is_ascii_hexdigit()) && trimmed.len() % 2 == 0 {
+                    return hex::decode(trimmed).map_err(|e| format!("Invalid hex aggregated key: {e}"));
+                }
+                return Ok(msg.as_bytes().to_vec());
+            }
+
+            #[derive(serde::Deserialize)]
+            struct PubKeyInner { pk: Vec<String> }
+            #[derive(serde::Deserialize)]
+            struct TopLevel { #[serde(default)] pubkey: Option<PubKeyInner> }
+
+            // Try strict parsing first
+            let parsed: TopLevel = serde_json::from_str(trimmed).map_err(|e| format!("JSON parse error: {e}"))?;
+            let pk_list = parsed.pubkey.ok_or("Missing 'pubkey' object")?.pk;
+            let first = pk_list.get(0).ok_or("'pubkey.pk' array empty")?;
+            let key_hex = first.trim_start_matches("0x");
+            let bytes = hex::decode(key_hex).map_err(|e| format!("Failed to decode pk hex: {e}"))?;
+            Ok(bytes)
+        }
+
+        let maybe_agg_key = extract_agg_key(&msg);
+        match maybe_agg_key {
+            Ok(agg_key_bytes) => {
+                if agg_key_bytes.len() > 80 { // sanity log to help in future debugging
+                    log::warn!("[TSS] Extracted aggregated key length {} seems large; expected <=65", agg_key_bytes.len());
+                }
+                if let Err(err) = self.client.submit_dkg_result(self.client.best_hash(), session_id, agg_key_bytes) {
+                    log::error!("[TSS] Error submitting DKG result to chain: {:?}", err);
+                }
+            }
+            Err(parse_err) => {
+                log::error!("[TSS] Failed to parse aggregated key from DKG result JSON: {}", parse_err);
+            }
         }
 
         let session_data = self.get_session_data(&session_id);
