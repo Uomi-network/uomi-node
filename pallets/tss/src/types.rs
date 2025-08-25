@@ -7,7 +7,10 @@ use scale_info::TypeInfo;
 
 const MAX_KEY_SIZE: u32 = 64;
 const MAX_SHARE_SIZE: u32 = 128;
-const MAX_PUBLIC_KEY_SIZE: u32 = 33;
+// Aggregated public keys (e.g. uncompressed secp256k1) can be 65 bytes. We previously
+// limited this to 33 (compressed form) which caused client side BoundedVec errors when
+// uncompressed keys were submitted. Increase to 65 to accept both representations.
+const MAX_PUBLIC_KEY_SIZE: u32 = 65;
 const MAX_SIGNATURE_SIZE: u32 = 65;
 const MAX_NUMBER_OF_SHARES: u32 = 65_536;
 const MAX_MESSAGE_SIZE: u32 = 4096; // 4 KB

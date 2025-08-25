@@ -114,9 +114,15 @@ where
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> Result<(), String> {
-        // Prepare bounded public key
-        let pk = BoundedVec::try_from(aggregated_key.clone())
-            .map_err(|_| "Aggregated key exceeds MaxPublicKeySize".to_string())?;
+        // Prepare bounded public key with better diagnostics
+        let len = aggregated_key.len();
+        let pk = BoundedVec::try_from(aggregated_key.clone()).map_err(|_| {
+            format!(
+                "Aggregated key length {} exceeds MaxPublicKeySize (runtime limit) – raw hex: 0x{}",
+                len,
+                hex::encode(&aggregated_key)
+            )
+        })?;
         let first = self.first_authority_key()?;
 
         let payload = SubmitDKGResultPayload::<uomi_runtime::Runtime> {
