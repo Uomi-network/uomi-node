@@ -59,6 +59,8 @@ pub struct SessionManager<B: BlockT, C: ClientManager<B>> {
     pub outstanding_challenges: Arc<Mutex<HashMap<TSSPeerId, u32>>>,
     // Recently satisfied challenges to prevent reuse (nonce replay). Simple bounded LRU list.
     pub satisfied_challenges: Arc<Mutex<Vec<(TSSPeerId, u32)>>>,
+    // Map signing session_id -> originating DKG session_id (for key material lookup)
+    pub signing_to_dkg: Arc<Mutex<HashMap<SessionId, SessionId>>>,
     pub _phantom: PhantomData<B>,
 }
 
@@ -131,6 +133,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             retry_mechanism,
             outstanding_challenges: Arc::new(Mutex::new(HashMap::new())),
             satisfied_challenges: Arc::new(Mutex::new(Vec::new())),
+            signing_to_dkg: Arc::new(Mutex::new(empty_hash_map())),
             _phantom: PhantomData,
         };
 
@@ -396,6 +399,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         }
 
         log::info!("[TSS] Successfully added data for signing session {} (dkg source {})", signing_id, dkg_id);
+
+        // Record mapping for key material resolution
+        {
+            let mut map = self.signing_to_dkg.lock().unwrap();
+            map.insert(signing_id, dkg_id);
+        }
 
         self.signing_handle_session_created(signing_id, participants.clone(), coordinator.clone());
     

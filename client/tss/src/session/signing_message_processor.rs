@@ -67,8 +67,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         log::debug!("[TSS]: Event received from Signing, starting round 1");
 
+    // Resolve underlying DKG session id for key material (may be same as signing session)
+    let dkg_session_id = {
+        let map = self.signing_to_dkg.lock().unwrap();
+        *map.get(&session_id).unwrap_or(&session_id)
+    };
     let key_storage = self.storage_manager.key_storage.lock().unwrap();
-    let key_package = key_storage.get_key_package(session_id, &whoami_identifier.unwrap());
+    let key_package = key_storage.get_key_package(dkg_session_id, &whoami_identifier.unwrap());
 
         if let Err(error) = key_package {
             log::error!("[TSS] Error fetching Key Package {:?}", error);
@@ -329,8 +334,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             log::error!("[TSS] We are not allowed to participate in the signing phase");
             return Err(SessionManagerError::IdentifierNotFound);
         }
+        let dkg_session_id = {
+            let map = self.signing_to_dkg.lock().unwrap();
+            *map.get(&session_id).unwrap_or(&session_id)
+        };
         let key_storage = self.storage_manager.key_storage.lock().unwrap();
-        let key_package = key_storage.get_key_package(session_id, &whoami_identifier.unwrap());
+        let key_package = key_storage.get_key_package(dkg_session_id, &whoami_identifier.unwrap());
         drop(key_storage);
         drop(peer_mapper_handle);
         if let Err(error) = key_package {
@@ -500,6 +509,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 );
             }
 
+            let dkg_session_id = {
+                let map = self.signing_to_dkg.lock().unwrap();
+                *map.get(&session_id).unwrap_or(&session_id)
+            };
             let key_storage = self.storage_manager.key_storage.lock().unwrap();
             let mut peer_mapper_handle = self.session_core.peer_mapper.lock().unwrap();
             let whoami_identifier = peer_mapper_handle.get_identifier_from_account_id(&session_id, &self.session_core.validator_key);
@@ -508,7 +521,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 log::error!("[TSS] We are not allowed to participate in the signing phase");
                 return Err(SessionManagerError::IdentifierNotFound);
             }
-            let pubkeys = key_storage.get_pubkey(session_id, &whoami_identifier.unwrap());
+            let pubkeys = key_storage.get_pubkey(dkg_session_id, &whoami_identifier.unwrap());
             drop(peer_mapper_handle);
 
             if let Err(error) = signing_package {
