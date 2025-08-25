@@ -1553,6 +1553,7 @@ mod tests {
 
             // Act
             assert_ok!(TestingPallet::finalize_dkg_session(
+                RuntimeOrigin::signed(account(1)),
                 session_id,
                 agg_key.clone().into_inner()
             ));
@@ -1577,7 +1578,7 @@ mod tests {
 
             // Act & Assert
             assert_noop!(
-                TestingPallet::finalize_dkg_session(session_id, agg_key.into_inner()),
+                TestingPallet::finalize_dkg_session(RuntimeOrigin::signed(account(1)), session_id, agg_key.into_inner()),
                 Error::<Test>::DkgSessionNotFound
             );
         });
@@ -1601,7 +1602,7 @@ mod tests {
 
             // Act & Assert
             assert_noop!(
-                TestingPallet::finalize_dkg_session(session_id, agg_key.clone().into_inner()),
+                TestingPallet::finalize_dkg_session(RuntimeOrigin::signed(account(1)), session_id, agg_key.clone().into_inner()),
                 Error::<Test>::InvalidSessionState
             );
 
@@ -1617,7 +1618,7 @@ mod tests {
 
             // Act & Assert
             assert_noop!(
-                TestingPallet::finalize_dkg_session(session_id + 1, agg_key.into_inner()),
+                TestingPallet::finalize_dkg_session(RuntimeOrigin::signed(account(1)), session_id + 1, agg_key.into_inner()),
                 Error::<Test>::InvalidSessionState
             );
         });

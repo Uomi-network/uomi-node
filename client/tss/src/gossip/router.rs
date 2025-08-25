@@ -102,7 +102,7 @@ impl<B:BlockT> TssMessageHandler for GossipHandler<B> {
     }
 
     fn handle_announcment(&mut self, _peer_id: PeerId, data: TssMessage) {
-        process_announcement(
+    process_announcement(
             &self.peer_mapper,
             &mut self.announce_replay_cache,
             &mut self.announce_replay_set,
@@ -122,7 +122,7 @@ pub fn process_announcement(
     replay_set: &mut HashSet<(Vec<u8>, u16)>,
     data: TssMessage,
 ) -> bool {
-    if let TssMessage::Announce(nonce, peer_id, public_key_data, signature) = data {
+    if let TssMessage::Announce(nonce, peer_id, public_key_data, signature, challenge_answer) = data {
         info!(
             "[TSS] Handling peer_id {:?} with pubkey {:?}",
             peer_id, public_key_data
@@ -146,7 +146,8 @@ pub fn process_announcement(
         let mut payload = Vec::with_capacity(public_key_data.len() + peer_id.len() + 2);
         payload.extend_from_slice(&public_key_data[..]);
         payload.extend_from_slice(&peer_id[..]);
-        payload.extend_from_slice(&nonce.to_le_bytes());
+    payload.extend_from_slice(&nonce.to_le_bytes());
+    if challenge_answer != 0 { payload.extend_from_slice(&challenge_answer.to_le_bytes()); }
 
         let Ok(sig_bytes): Result<[u8;64], _> = signature.clone().try_into() else {
             log::warn!("[TSS] Invalid signature length in announcement");
@@ -194,7 +195,19 @@ mod tests {
         payload.extend_from_slice(&peer_bytes);
         payload.extend_from_slice(&nonce.to_le_bytes());
         let signature = pair.sign(&payload).0.to_vec();
-        TssMessage::Announce(nonce, peer_bytes, pubkey, signature)
+    TssMessage::Announce(nonce, peer_bytes, pubkey, signature, 0)
+    }
+
+    fn make_signed_announce_with_challenge(nonce: u16, challenge_answer: u32, pair: &sr25519::Pair, peer_id: &PeerId) -> TssMessage {
+        let pubkey = pair.public().0.to_vec();
+        let peer_bytes = peer_id.to_bytes();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&pubkey);
+        payload.extend_from_slice(&peer_bytes);
+        payload.extend_from_slice(&nonce.to_le_bytes());
+        if challenge_answer != 0 { payload.extend_from_slice(&challenge_answer.to_le_bytes()); }
+        let signature = pair.sign(&payload).0.to_vec();
+        TssMessage::Announce(nonce, peer_bytes, pubkey, signature, challenge_answer)
     }
 
     #[test]
@@ -227,11 +240,44 @@ mod tests {
         assert!(process_announcement(&peer_mapper, &mut cache, &mut set, valid.clone()));
 
         // Craft tampered message: change nonce but reuse signature (invalid signature)
-        if let TssMessage::Announce(_, peer_bytes, pubkey, signature) = valid {
-            let tampered = TssMessage::Announce(43, peer_bytes, pubkey, signature); // signature does not match new nonce
+        if let TssMessage::Announce(_, peer_bytes, pubkey, signature, _) = valid {
+            let tampered = TssMessage::Announce(43, peer_bytes, pubkey, signature, 0); // signature does not match new nonce
             let accepted = process_announcement(&peer_mapper, &mut cache, &mut set, tampered);
             assert!(!accepted, "Tampered nonce with old signature must be rejected");
         } else { panic!("Unexpected variant"); }
+    }
+
+    #[test]
+    fn test_announce_with_challenge_binding_valid() {
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+        let pair = sr25519::Pair::from_seed(&[9u8;32]);
+        let peer_id = PeerId::random();
+        let challenge_answer: u32 = 0xDEADBEEF;
+        let msg = make_signed_announce_with_challenge(55, challenge_answer, &pair, &peer_id);
+        let accepted = process_announcement(&peer_mapper, &mut cache, &mut set, msg);
+        assert!(accepted, "Announcement with bound challenge should verify");
+    }
+
+    #[test]
+    fn test_announce_with_incorrect_challenge_signature_fails() {
+        // Create a valid message first
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+        let pair = sr25519::Pair::from_seed(&[10u8;32]);
+        let peer_id = PeerId::random();
+        let challenge_answer: u32 = 12345678;
+        let valid = make_signed_announce_with_challenge(60, challenge_answer, &pair, &peer_id);
+        // Tamper challenge without resigning
+        if let TssMessage::Announce(nonce, peer_bytes, pubkey, signature, _old) = valid {
+            let tampered = TssMessage::Announce(nonce, peer_bytes, pubkey, signature, challenge_answer + 1);
+            let accepted = process_announcement(&peer_mapper, &mut cache, &mut set, tampered);
+            assert!(!accepted, "Tampered challenge answer should cause signature verification failure");
+        } else { panic!("pattern"); }
     }
 
     #[test]

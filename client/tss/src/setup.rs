@@ -82,12 +82,14 @@ fn create_announcement_message(
         validator_key,
         &local_peer_id.to_bytes()[..],
         nonce,
+    0,
     ) {
         let announcement = TssMessage::Announce(
             nonce,
             local_peer_id.to_bytes(),
             validator_key.to_vec(),
             signature,
+            0, // no challenge satisfied at creation time
         );
         Some(announcement)
     } else {

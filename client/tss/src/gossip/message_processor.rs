@@ -57,7 +57,7 @@ impl MessageProcessor {
                 Self::handle_ecdsa_p2p(handler, session_id, index, peer_id, bytes, phase)
             }
             
-            TssMessage::GetInfo(_) | TssMessage::Announce(_,_,_,_) => {
+            TssMessage::GetInfo(_, _) | TssMessage::Announce(_,_,_,_,_) => {
                 handler.broadcast_signed_message(message)
             }
             

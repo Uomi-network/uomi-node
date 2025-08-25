@@ -1391,7 +1391,7 @@ fn test_unknown_peer_handling() {
         assert!(broadcast.len() >= 1, "Node A should send one broadcast message back");
         let sent_message = &broadcast[0];
         match sent_message {
-            TssMessage::GetInfo(pk) => {
+            TssMessage::GetInfo(pk, _) => {
                 // Check if the public key matches Node A's key
                  assert_eq!(pk, &node_a.session_manager.session_core.validator_key);
             },
@@ -1415,7 +1415,8 @@ fn test_unknown_peer_handling() {
         rand::thread_rng().gen(), // Nonce
         node_b_id.to_bytes(),     // PeerId bytes
         node_b_pubkey.clone(),    // Public key
-        vec![0u8; 64],                // Signature
+        vec![0u8; 64],            // Signature
+        0,                        // Challenge answer placeholder
     );
 
     {

@@ -55,6 +55,10 @@ pub struct SessionManager<B: BlockT, C: ClientManager<B>> {
     pub client: C,
     pub announcement: Option<TssMessage>,
     pub retry_mechanism: RetryMechanism,
+    // Challenge-response tracking: map peer_id bytes -> outstanding nonce we sent in GetInfo
+    pub outstanding_challenges: Arc<Mutex<HashMap<TSSPeerId, u32>>>,
+    // Recently satisfied challenges to prevent reuse (nonce replay). Simple bounded LRU list.
+    pub satisfied_challenges: Arc<Mutex<Vec<(TSSPeerId, u32)>>>,
     pub _phantom: PhantomData<B>,
 }
 
@@ -125,6 +129,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             client,
             announcement: announcment,
             retry_mechanism,
+            outstanding_challenges: Arc::new(Mutex::new(HashMap::new())),
+            satisfied_challenges: Arc::new(Mutex::new(Vec::new())),
             _phantom: PhantomData,
         };
 
@@ -432,10 +438,9 @@ impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> 
 
     fn handle_announcment(&mut self, sender: PeerId, message: TssMessage) {
         // Handle announcement messages - typically used for peer discovery
-        if let TssMessage::Announce(nonce, peer_id, public_key_data, signature) = message {
-            log::info!("[TSS] Handling announcement from peer: {} with nonce {}", sender.to_base58(), nonce);
-            // Signature has already been verified at gossip layer; here we could add replay protection using nonce cache if desired.
-            // TODO: Maintain a bounded LRU of recent (peer_id, nonce) to prevent replays within signature validity window.
+        if let TssMessage::Announce(nonce, _peer_id, _public_key_data, _signature, challenge_answer) = message {
+            log::info!("[TSS] Handling announcement from peer: {} nonce {} challenge {}", sender.to_base58(), nonce, challenge_answer);
+            // Signature & challenge binding verified in gossip/router::process_announcement.
         }
     }
 

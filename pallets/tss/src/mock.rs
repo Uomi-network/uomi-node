@@ -16,6 +16,9 @@ use pallet_ipfs::{
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
 };
 use pallet_session::{SessionHandler, ShouldEndSession};
+use pallet_offences;
+// Simple converter for historical session full identification
+use sp_runtime::traits::Convert;
 use pallet_staking::TestBenchmarkingConfig;
 use sp_core::{sr25519::{Public, Signature}, ConstU128, ConstU16, ConstU32, ConstU64, Get, H256, U256
 };
@@ -82,6 +85,8 @@ construct_runtime!(
         Timestamp: pallet_timestamp,
         Ipfs: pallet_ipfs,
         Uomi: pallet_uomi_engine,
+    Offences: pallet_offences,
+    Historical: pallet_session::historical,
     }
 );
 
@@ -95,6 +100,23 @@ impl pallet_session::Config for Test {
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+}
+
+// Provide an identity converter (AccountId -> Option<AccountId>) for historical session pallet
+pub struct IdentityOf;
+impl Convert<AccountId, Option<AccountId>> for IdentityOf {
+    fn convert(a: AccountId) -> Option<AccountId> { Some(a) }
+}
+
+impl pallet_session::historical::Config for Test {
+    type FullIdentification = AccountId; // minimal
+    type FullIdentificationOf = IdentityOf; // simple identity mapping
+}
+
+impl pallet_offences::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
+    type OnOffenceHandler = (); // no-op in tests
 }
 
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig as frame_system::DefaultConfig)]
@@ -154,6 +176,13 @@ impl crate::pallet::Config for Test {
 
     type AuthorityId = crate::crypto::AuthId;
     type MinimumValidatorThreshold = MinimumValidatorThreshold;
+    type OffenceReporter = TestOffenceReporter;
+}
+
+pub struct TestOffenceReporter;
+impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking::offence::ReportOffence<Reporter, Offender, Off> for TestOffenceReporter {
+    fn report_offence(_reporters: Vec<Reporter>, _offence: Off) -> Result<(), sp_staking::offence::OffenceError> { Ok(()) }
+    fn is_known_offence(_offenders: &[Offender], _time_slot: &Off::TimeSlot) -> bool { false }
 }
 
 impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {

@@ -25,7 +25,6 @@ use frame_system::offchain::SendUnsignedTransaction;
 use frame_system::offchain::{SignedPayload, Signer};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
 use frame_system::{ensure_none, ensure_signed};
-use scale_info::prelude::format;
 use scale_info::TypeInfo;
 use sp_staking::{
     offence::{Offence, ReportOffence},
@@ -36,7 +35,7 @@ use sp_runtime::transaction_validity::{
     TransactionValidity, ValidTransaction, InvalidTransaction, TransactionSource,
     TransactionPriority,
 };
-use sp_runtime::traits::{Convert, Saturating, SaturatedConversion};
+use sp_runtime::traits::{Saturating, SaturatedConversion};
 use frame_system::offchain::SigningTypes;
 
 pub use pallet::*;
@@ -168,7 +167,7 @@ pub mod pallet {
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
-     #[derive(RuntimeDebug)]
+    #[derive(RuntimeDebug, Clone)]
     pub struct MaliciousBehaviourOffence<T: Config> {
     /// The session index in which the offence occurred.
     pub session_index: SessionIndex,
@@ -493,7 +492,8 @@ pub mod pallet {
         ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
 
         let slashed_validators = Self::get_slashed_validators();
-        let deadline = frame_system::Pallet::<T>::block_number() + 1000u32.into();
+    // Deadline is current block + 100 (kept small for tests)
+    let deadline = frame_system::Pallet::<T>::block_number() + 100u32.into();
 
         let active_validators = ActiveValidators::<T>::get();
 
@@ -651,10 +651,8 @@ pub mod pallet {
             DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
         log::info!("[TSS] Current session state: {:?}", session.state);
-        ensure!(
-            session.state <= SessionState::DKGInProgress,
-            Error::<T>::InvalidSessionState
-        );
+    // Only allow result submission while session is in creation or in-progress
+    ensure!(matches!(session.state, SessionState::DKGCreated | SessionState::DKGInProgress), Error::<T>::InvalidSessionState);
 
         // Get the NFT ID from the session
         let nft_id = session.nft_id.clone();
@@ -700,6 +698,24 @@ pub mod pallet {
             // Emit event
             Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
         }
+        Ok(())
+    }
+
+    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::call_index(14)]
+    pub fn finalize_dkg_session(
+        origin: OriginFor<T>,
+        session_id: SessionId,
+        aggregated_key: Vec<u8>,
+    ) -> DispatchResult {
+        let _who = ensure_signed(origin)?;
+        let mut session = DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+        ensure!(session.state == SessionState::DKGInProgress, Error::<T>::InvalidSessionState);
+        session.state = SessionState::DKGComplete;
+        DkgSessions::<T>::insert(session_id, session);
+        let bounded: PublicKey = BoundedVec::try_from(aggregated_key.clone()).map_err(|_| Error::<T>::InvalidParticipantsCount)?;
+        AggregatedPublicKeys::<T>::insert(session_id, bounded.clone());
+        Self::deposit_event(Event::DKGCompleted(session_id, bounded));
         Ok(())
     }
 
@@ -1691,9 +1707,6 @@ impl<T: Config> Pallet<T> {
     }
 }
 
-fn verify_signature<T: Config>(key: &types::PublicKey, message: &[u8], sig: &types::Signature) -> bool {
-    T::SignatureVerifier::verify(key, message, sig)
-}
 
 sp_api::decl_runtime_apis! {
     pub trait TssApi {

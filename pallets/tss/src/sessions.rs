@@ -164,7 +164,7 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    pub fn finalize_dkg_session(
+    pub fn finalize_dkg_session_internal(
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> DispatchResult {

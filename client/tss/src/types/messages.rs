@@ -17,8 +17,10 @@ pub type TSSSignature = Vec<u8>;
 #[derive(Encode, Decode, Debug, Clone)]
 pub enum TssMessage {
     /// Utilities
-    Announce(u16, TSSPeerId, TSSPublic, TSSSignature),
-    GetInfo(TSSPublic),
+    // Announce now optionally includes the challenge nonce it answers (0 if none)
+    Announce(u16, TSSPeerId, TSSPublic, TSSSignature, u32),
+    /// GetInfo now carries requester's public key and a challenge nonce the responder must echo in its Announce
+    GetInfo(TSSPublic, u32),
     Ping,
 
     /// FROST

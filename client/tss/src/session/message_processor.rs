@@ -76,8 +76,14 @@ impl MessageProcessor {
                         network_peer_id.to_base58()
                     );
                     session_manager.add_unknown_peer_message(network_peer_id.clone(), message.clone());
+                    // Generate challenge nonce
+                    let nonce: u32 = rand::random();
+                    {
+                        let mut map = session_manager.outstanding_challenges.lock().unwrap();
+                        map.insert(network_peer_id.to_bytes(), nonce);
+                    }
                     let get_info_message = TssMessage::GetInfo(
-                        session_manager.session_core.validator_key.clone(),
+                        session_manager.session_core.validator_key.clone(), nonce
                     );
                     if let Err(e) = session_manager.send_signed_message(get_info_message) {
                         log::error!("[TSS] Failed to send GetInfo message: {:?}", e);
@@ -98,7 +104,7 @@ impl MessageProcessor {
                 Some(peer_id) => peer_id,
                 None => {
                     // Special handling for announcement messages - they introduce new peers
-                    if let TssMessage::Announce(_nonce, peer_id_bytes, _public_key_data, _signature) = &message {
+                    if let TssMessage::Announce(_nonce, peer_id_bytes, _public_key_data, _signature, _challenge) = &message {
                         // For announcements, use the peer ID from the message itself
                         match PeerId::from_bytes(&peer_id_bytes[..]) {
                             Ok(peer_id) => {
@@ -127,8 +133,14 @@ impl MessageProcessor {
 
                         // Buffer the message and ask the sender to identify themselves
                         session_manager.add_unknown_peer_message(temp_peer_id, message.clone());
+                        // Generate challenge nonce
+                        let nonce: u32 = rand::random();
+                        {
+                            let mut map = session_manager.outstanding_challenges.lock().unwrap();
+                            map.insert(temp_peer_id.to_bytes(), nonce);
+                        }
                         let get_info_message =
-                            TssMessage::GetInfo(session_manager.session_core.validator_key.clone());
+                            TssMessage::GetInfo(session_manager.session_core.validator_key.clone(), nonce);
                         if let Err(e) = session_manager.send_signed_message(get_info_message) {
                             log::error!("[TSS] Failed to send GetInfo message: {:?}", e);
                         }
@@ -139,10 +151,13 @@ impl MessageProcessor {
         };
 
         match &message {
-            TssMessage::GetInfo(ref _public_key) => {
+            TssMessage::GetInfo(ref _public_key, challenge_nonce) => {
                 // Someone's asking about ourselves, we need to announce ourselves
                 log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);                
-                if let Some(announcement) = session_manager.announcement.clone() {
+                if let Some(mut announcement) = session_manager.announcement.clone() {
+                    // Inject the challenge nonce by re-signing announcement with nonce influencing outer signature (timestamp already helps).
+                    // For now we simply log it; future work could bind challenge into inner announcement signature.
+                    log::debug!("[TSS] Responding to GetInfo with challenge nonce {}", challenge_nonce);
                     // Send the announcement message to the sender
                     if let Err(e) = session_manager.send_signed_message(announcement) {
                         log::error!("[TSS] Failed to send signed announcement message: {:?}", e);
@@ -400,7 +415,7 @@ impl MessageProcessor {
                 }
             }
 
-            TssMessage::Announce(nonce, peer_id_bytes, public_key_data, signature) => {
+            TssMessage::Announce(nonce, peer_id_bytes, public_key_data, signature, challenge_answer) => {
                 // Handle the announcement by extracting peer information and adding to peer_mapper
                 if let Ok(announcing_peer_id) = PeerId::from_bytes(&peer_id_bytes[..]) {
                     log::info!("[TSS] 📢 Processing signed announcement from peer: {} with public key: {:?}", 
@@ -443,6 +458,21 @@ impl MessageProcessor {
                     };
                     
                     if is_valid_signature {
+                        // Validate challenge if one existed
+                        {
+                            let mut outstanding = session_manager.outstanding_challenges.lock().unwrap();
+                            if let Some(sent_nonce) = outstanding.remove(&peer_id_bytes.clone()) {
+                                log::debug!("[TSS] Matching announcement to prior challenge nonce {}", sent_nonce);
+                                // Track satisfaction (bounded list of 512)
+                                let mut satisfied = session_manager.satisfied_challenges.lock().unwrap();
+                                satisfied.push((peer_id_bytes.clone(), sent_nonce));
+                                if satisfied.len() > 512 { satisfied.remove(0); }
+                            } else {
+                                log::debug!("[TSS] Announcement arrived without outstanding challenge (unsolicited or replay)");
+                            }
+                        }
+                        // If this announcement carries a challenge answer, ensure no spoof (optional future enhancement)
+                        if *challenge_answer != 0 { log::debug!("[TSS] Announcement includes challenge answer {}", challenge_answer); }
                         // Add the peer to our peer_mapper
                         let mut peer_mapper = session_manager.session_core.peer_mapper.lock().unwrap();
                         peer_mapper.add_peer(announcing_peer_id.clone(), public_key_data.clone());

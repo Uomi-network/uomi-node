@@ -393,7 +393,7 @@ impl TestNode {
             runtime_to_sm_rx,
             sm_to_gossip_tx,
             peer_id.to_bytes(),
-            Some(TssMessage::Announce(Default::default(), Vec::new(), Vec::new(), Vec::new())),
+            Some(TssMessage::Announce(Default::default(), Vec::new(), Vec::new(), Vec::new(), 0)),
             TestClientManager::new(),
             false, // retry_enabled
         );
