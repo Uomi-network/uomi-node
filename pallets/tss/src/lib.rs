@@ -373,6 +373,12 @@ pub mod pallet {
     pub type ProposedPublicKeys<T: Config> =
     StorageDoubleMap<_, Blake2_128Concat, NftId, Blake2_128Concat, u32, PublicKey, OptionQuery>;
 
+    // A storage to temporarily store proposed aggregated signatures for a signing session
+    #[pallet::storage]
+    #[pallet::getter(fn proposed_signatures)]
+    pub type ProposedSignatures<T: Config> =
+    StorageDoubleMap<_, Blake2_128Concat, SessionId, Blake2_128Concat, u32, Signature, OptionQuery>;
+
     /// Storage for tracking multi-chain transaction status
     /// Maps (chain_id, tx_hash) -> transaction_status
     #[pallet::storage]
@@ -426,6 +432,7 @@ pub mod pallet {
     SigningSessionCreated(SessionId, SessionId), // Signing session ID, DKG session ID
     DKGCompleted(SessionId, PublicKey),          // Aggregated public key
     SigningCompleted(SessionId, Signature),      // Final aggregated signature
+    SignatureResultSubmitted(SessionId, Signature), // Emitted when threshold reached for signature voting
     SignatureSubmitted(SessionId),               // When signature is stored
     ValidatorIdAssigned(T::AccountId, u32),      // Validator account, ID
     DKGFailed(SessionId),                        // DKG session failed
@@ -697,6 +704,54 @@ pub mod pallet {
 
             // Emit event
             Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+        }
+        Ok(())
+    }
+
+    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::call_index(15)]
+    pub fn submit_signature_result(
+        origin: OriginFor<T>,
+        payload: crate::payloads::SubmitSignatureResultPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+
+        let who = payload.public().into_account();
+        let session_id = payload.session_id;
+        let signature = payload.signature.clone();
+
+        // Fetch signing session
+        let mut session = SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
+
+        // Only allow while signing is in progress
+        ensure!(matches!(session.state, SessionState::SigningInProgress), Error::<T>::InvalidSessionState);
+
+        // Retrieve corresponding DKG session for participants and nft id
+        let dkg_session = DkgSessions::<T>::get(session.dkg_session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
+        // Ensure signer participated
+        ensure!(dkg_session.participants.contains(&who), Error::<T>::UnauthorizedParticipation);
+        let validator_id = ValidatorIds::<T>::get(who).ok_or(Error::<T>::UnauthorizedParticipation)?;
+
+        // Insert vote
+        ProposedSignatures::<T>::insert(session_id, validator_id, signature.clone());
+
+        // Count votes for this signature
+        let threshold_pct = T::MinimumValidatorThreshold::get();
+        let mut votes = 0u32;
+        for (_validator_id, sig) in ProposedSignatures::<T>::iter_prefix(session_id) {
+            if sig == signature { votes += 1; }
+        }
+        let total = dkg_session.participants.len() as u32;
+        let required = (total * threshold_pct) / 100;
+
+        if votes >= required {
+            // Finalize
+            session.aggregated_sig = Some(signature.clone());
+            session.state = SessionState::SigningComplete;
+            SigningSessions::<T>::insert(session_id, session);
+            Self::deposit_event(Event::SignatureResultSubmitted(session_id, signature));
         }
         Ok(())
     }
@@ -1098,6 +1153,14 @@ pub mod pallet {
                     .build();
             }
             Call::submit_dkg_result { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX)
+                    .and_provides(call.encode())
+                    .longevity(64)
+                    .propagate(true)
+                    .build();
+            }
+            Call::submit_signature_result { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
                     .priority(TransactionPriority::MAX)
                     .and_provides(call.encode())

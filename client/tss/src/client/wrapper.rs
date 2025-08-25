@@ -175,6 +175,28 @@ where
         });
         self.submit_unsigned(call)
     }
+
+    fn submit_signature_result(
+        &self,
+        _hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        signature: Vec<u8>,
+    ) -> Result<(), String> {
+    use frame_support::BoundedVec;
+        // Pallet-specific signature type (bounded vec) lives under pallet_tss::types size constant
+        type PalletSignature = BoundedVec<u8, uomi_runtime::pallet_tss::types::MaxSignatureSize>;
+        let sig_bounded: PalletSignature = BoundedVec::try_from(signature.clone())
+            .map_err(|_| format!("Signature length {} exceeds MaxSignatureSize", signature.len()))?;
+        let first = self.first_authority_key()?;
+        let payload = uomi_runtime::pallet_tss::SubmitSignatureResultPayload::<uomi_runtime::Runtime> {
+            session_id,
+            signature: sig_bounded,
+            public: sp_runtime::MultiSigner::from(first.clone()),
+        };
+        let signature_signed = self.sign_payload(&first, &payload)?;
+        let call = RuntimeCall::Tss(uomi_runtime::pallet_tss::Call::submit_signature_result { payload, signature: signature_signed });
+        self.submit_unsigned(call)
+    }
 }
 
 impl<B: BlockT, C, TP> ClientWrapper<B, C, TP>

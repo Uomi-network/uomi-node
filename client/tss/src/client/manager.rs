@@ -32,4 +32,14 @@ pub trait ClientManager<B: BlockT> {
         offence_type: TssOffenceType,
         offenders: Vec<[u8; 32]>,
     ) -> Result<(), String>;
+
+    fn submit_signature_result(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+        signature: Vec<u8>,
+    ) -> Result<(), String> {
+        let _ = (hash, session_id, signature); // default noop implementation
+        Err("submit_signature_result not implemented".into())
+    }
 }

@@ -42,6 +42,13 @@ pub struct SubmitDKGResultPayload<T: crate::Config> {
     pub public: T::Public,
 }
 
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub struct SubmitSignatureResultPayload<T: crate::Config> {
+    pub session_id: SessionId,
+    pub signature: crate::types::Signature,
+    pub public: T::Public,
+}
+
 impl<T: crate::Config> ReportParticipantsPayload<T> {
     pub fn new(
         session_id: SessionId,
@@ -75,6 +82,12 @@ impl<T: SigningTypes + crate::Config> SignedPayload<T> for ReportParticipantsCou
 }
 
 impl<T: SigningTypes + crate::Config> SignedPayload<T> for SubmitDKGResultPayload<T> {
+    fn public(&self) -> T::Public {
+        self.public.clone()
+    }
+}
+
+impl<T: SigningTypes + crate::Config> SignedPayload<T> for SubmitSignatureResultPayload<T> {
     fn public(&self) -> T::Public {
         self.public.clone()
     }
