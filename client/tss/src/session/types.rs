@@ -25,6 +25,7 @@ pub enum TSSRuntimeEvent {
     DKGReshareSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>, Vec<TSSParticipant>), // Session info from runtime is now available
     SigningSessionInfoReady(
         SessionId,
+        SessionId,
         u16,
         u16,
         Vec<TSSParticipant>,

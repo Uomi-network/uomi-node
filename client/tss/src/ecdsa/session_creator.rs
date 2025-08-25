@@ -182,12 +182,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
     pub fn ecdsa_create_sign_phase(
         &self,
-        id: SessionId,
+        signing_session_id: SessionId,
+        dkg_session_id: SessionId,
         participants: Vec<TSSParticipant>,
         message: Vec<u8>,
     ) {
         // Use PeerMapper-provided index for this session
-        let my_id = match self.get_my_index(id) {
+        let my_id = match self.get_my_index(dkg_session_id) {
             Some(idx) => idx,
             None => {
                 log::info!("[TSS] We are not allowed to participate");
@@ -199,8 +200,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let mut handler = self.ecdsa_manager.lock().unwrap();
         let storage = self.storage_manager.key_storage.lock().unwrap();
 
-        let offline_result =
-            storage.read_data(id, StorageType::EcdsaOfflineOutput, Some(&identifier.serialize()));
+        let offline_result = storage.read_data(
+            dkg_session_id,
+            StorageType::EcdsaOfflineOutput,
+            Some(&identifier.serialize()),
+        );
 
         if let Err(error) = offline_result {
             log::error!("[TSS] Error fetching keys {:?}", error);
@@ -210,7 +214,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         drop(storage);
 
         let sign_online = handler.add_sign_online(
-            id,
+            signing_session_id,
             &String::from_utf8(offline_result.unwrap()).unwrap(),
             message,
         );
@@ -221,7 +225,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         if let Some(_) = sign_online {
             let msg = {
-                let mut sign_online_handle = handler.get_sign_online(id).unwrap();
+                let mut sign_online_handle = handler.get_sign_online(signing_session_id).unwrap();
                 sign_online_handle.process_begin()
             };
 
@@ -231,7 +235,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             }
 
             self.handle_ecdsa_sending_messages(
-                id,
+                signing_session_id,
                 msg.unwrap(),
                 &mut handler,
                 ECDSAPhase::SignOnline,

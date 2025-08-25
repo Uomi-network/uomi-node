@@ -334,9 +334,9 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     log::error!("[TSS] Failed to process DKG session {}: {:?}", id, e);
                 }
             }
-            TSSRuntimeEvent::SigningSessionInfoReady(id, t, n, participants, coordinator, message) => {
-                if let Err(e) = self.add_and_initialize_signing_session(id, t, n, participants, coordinator, message) {
-                    log::error!("[TSS] Failed to process signing session {}: {:?}", id, e);
+            TSSRuntimeEvent::SigningSessionInfoReady(signing_id, dkg_id, t, n, participants, coordinator, message) => {
+                if let Err(e) = self.add_and_initialize_signing_session(signing_id, dkg_id, t, n, participants, coordinator, message) {
+                    log::error!("[TSS] Failed to process signing session {}: {:?}", signing_id, e);
                 }
             }
             TSSRuntimeEvent::ValidatorIdAssigned(account_id, id) => {
@@ -384,18 +384,25 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         Ok(())
     }
 
-    fn add_and_initialize_signing_session(&self, id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, coordinator: [u8; 32], message: Vec<u8>) -> Result<(), String> {
-        self.add_session_data(id, t, n, coordinator, participants.clone(), message.clone())
+    fn add_and_initialize_signing_session(&self, signing_id: SessionId, dkg_id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, coordinator: [u8; 32], message: Vec<u8>) -> Result<(), String> {
+        self.add_session_data(signing_id, t, n, coordinator, participants.clone(), message.clone())
             .map_err(|e| format!("Failed to add data: {:?}", e))?;
-        
-        log::info!("[TSS] Successfully added data for signing session {}", id);
 
-        self.signing_handle_session_created(id, participants.clone(), coordinator.clone());
+        // Check if the session dkg_id exists, if it does not create it:
+        if !self.session_exists(&dkg_id) {
+            log::warn!("[TSS] DKG session {} does not exist, creating it", dkg_id);
+            self.add_session_data(dkg_id, t.into(), n.into(), coordinator, participants.clone(), message.clone())
+                .map_err(|e| format!("Failed to add data for missing DKG session: {:?}", e))?;
+        }
+
+        log::info!("[TSS] Successfully added data for signing session {} (dkg source {})", signing_id, dkg_id);
+
+        self.signing_handle_session_created(signing_id, participants.clone(), coordinator.clone());
     
-        log::info!("[TSS] Successfully initialized FROST Signing session {}", id);
+        log::info!("[TSS] Successfully initialized FROST Signing session {}", signing_id);
 
-        
-        self.ecdsa_create_sign_phase(id, participants, message);
+        // Use DKG session id for ECDSA offline material lookup while associating the signing logic with signing_id
+        self.ecdsa_create_sign_phase(signing_id, dkg_id, participants, message);
         
         Ok(())
     }

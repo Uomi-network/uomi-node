@@ -149,10 +149,11 @@ where
             .unwrap_or_else(|_| Vec::new())
     }
 
-    fn get_dkg_session_message(&self, hash: B::Hash, id: u64) -> Vec<u8> {
+    // Retrieve the message to be signed for a signing session
+    fn get_signing_session_message(&self, hash: B::Hash, signing_session_id: u64) -> Vec<u8> {
         self.client
             .runtime_api()
-            .get_signing_session_message(hash, id)
+            .get_signing_session_message(hash, signing_session_id)
             .unwrap_or_else(|_| Vec::new())
     }
 
@@ -184,33 +185,39 @@ where
 
     /// Handle signing session creation event
     async fn handle_signing_session_created(&self, hash: B::Hash, signing_session_id: u64, dkg_session_id: u64) {
-        log::debug!("[TSS] Starting signing session {:?} using DKG session {:?}", signing_session_id, dkg_session_id);
+        log::debug!(
+            "[TSS] Starting signing session {:?} (backed by DKG session {:?})",
+            signing_session_id, dkg_session_id
+        );
 
+        // Retrieve participants & threshold parameters from the (already finished) DKG session.
         let n = self.get_dkg_session_participants_count(hash, dkg_session_id);
-        let t = self.get_dkg_session_threshold(hash, dkg_session_id);
-            
-        // t is a percentage value, convert it to the actual threshold value
-        let t = (t as f64 * n as f64 / 100.0) as u16;
+        let t_percent = self.get_dkg_session_threshold(hash, dkg_session_id);
+        // Convert percentage threshold to absolute.
+        let t_abs = (t_percent as f64 * n as f64 / 100.0) as u16;
 
         let participants = self.get_dkg_session_participants(hash, dkg_session_id);
+        if participants.is_empty() {
+            log::error!("[TSS] No participants found for DKG session {} while initializing signing session {}", dkg_session_id, signing_session_id);
+            return;
+        }
 
-        let message = self.get_dkg_session_message(hash, dkg_session_id);
+        // Message to sign is identified by the signing session id (not the DKG session id).
+        let message = self.get_signing_session_message(hash, signing_session_id);
 
-        // TODO: add the function in the pallet for these three:
+        // For now select the first participant as coordinator (TODO: fetch from runtime once exposed)
         let coordinator = participants[0];
-        let id = dkg_session_id;
 
-        // Notify the session manager about the new Signing Session
-        if let Err(e) = self.sender.unbounded_send(
-            TSSRuntimeEvent::SigningSessionInfoReady(
-                id,
-                u16::try_from(t).unwrap_or(u16::MAX),
-                n,
-                participants,
-                coordinator,
-                message
-            ),
-        ) {
+        // Use the signing_session_id as the unique identifier for the signing session.
+        if let Err(e) = self.sender.unbounded_send(TSSRuntimeEvent::SigningSessionInfoReady(
+            signing_session_id,
+            dkg_session_id,
+            u16::try_from(t_abs).unwrap_or(u16::MAX),
+            n,
+            participants,
+            coordinator,
+            message,
+        )) {
             log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);
         }
     }

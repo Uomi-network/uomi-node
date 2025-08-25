@@ -893,7 +893,8 @@ mod tests {
 
         for (_, node) in network.nodes_mut() {
             let event = TSSRuntimeEvent::SigningSessionInfoReady(
-                signing_session_id,
+                signing_session_id, // signing id
+                dkg_session_id,     // source dkg id
                 t,
                 n,
                 participants.clone(),
@@ -1128,6 +1129,7 @@ mod tests {
         for (_, node) in network.nodes_mut() {
             let event = TSSRuntimeEvent::SigningSessionInfoReady(
                 signing_session_id,
+                dkg_session_id,
                 t,
                 n,
                 participants.clone(),
