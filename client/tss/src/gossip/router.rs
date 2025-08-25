@@ -3,7 +3,7 @@ use sc_utils::mpsc::{TracingUnboundedSender, TracingUnboundedReceiver, TrySendEr
 use sp_keystore::{KeystorePtr};
 use sc_network::{PeerId};
 use std::{
-    collections::btree_map::Keys,
+    collections::{btree_map::Keys, VecDeque, HashSet},
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -45,6 +45,9 @@ pub struct GossipHandler<B: BlockT> {
     session_manager_to_gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
     gossip_handler_message_receiver: Receiver<TopicNotification>,
     signing_service: SigningService,
+    // LRU-style replay cache for (peer_id_bytes, nonce)
+    announce_replay_cache: VecDeque<(Vec<u8>, u16)>,
+    announce_replay_set: HashSet<(Vec<u8>, u16)>,
 }
 
 impl<B: BlockT> GossipHandler<B> {
@@ -64,6 +67,8 @@ impl<B: BlockT> GossipHandler<B> {
             session_manager_to_gossip_rx,
             gossip_handler_message_receiver,
             signing_service: SigningService::new(keystore, validator_public_key),
+            announce_replay_cache: VecDeque::with_capacity(512),
+            announce_replay_set: HashSet::with_capacity(512),
         }
     }
 
@@ -97,46 +102,210 @@ impl<B:BlockT> TssMessageHandler for GossipHandler<B> {
     }
 
     fn handle_announcment(&mut self, _peer_id: PeerId, data: TssMessage) {
-        if let TssMessage::Announce(_nonce, peer_id, public_key_data, signature) = data {
-            info!(
-                "[TSS] Handling peer_id {:?} with pubkey {:?}",
-                peer_id, public_key_data
-            );
-            let public_key = &sr25519::Public::from_slice(&&public_key_data[..]).unwrap();
-            if sr25519_verify(
-                &signature[..].try_into().unwrap(),
-                &[&public_key_data[..], &peer_id[..]].concat(),
-                public_key,
-            ) {
-                match PeerId::from_bytes(&peer_id[..]) {
-                    Ok(pid) => {
-                        self.peer_mapper
-                            .lock()
-                            .unwrap()
-                            .add_peer(pid, public_key_data);
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "[TSS] Invalid peer ID bytes in Announce message: {:?}",
-                            e
-                        );
-                        return;
-                    }
-                }
-                // info!(
-                //     "[TSS] Handling peer_id {:?} with pubkey {:?} SIGN CHECK OK",
-                //     peer_id, public_key_data
-                // );
-            } else {
-                // info!(
-                //     "[TSS] Handling peer_id {:?} with pubkey {:?} SIGN CHECK KO",
-                //     peer_id, public_key_data
-                // );
-            }
-        }
+        process_announcement(
+            &self.peer_mapper,
+            &mut self.announce_replay_cache,
+            &mut self.announce_replay_set,
+            data,
+        );
     }
     fn forward_to_session_manager(&self, signed_message: SignedTssMessage, sender: Option<PeerId>) -> Result<(), TrySendError<(SignedTssMessage, Option<PeerId>)>> {
         self.gossip_to_session_manager_tx.unbounded_send((signed_message, sender))
+    }
+}
+
+/// Process an announcement message: verify signature, apply replay protection, and register peer.
+/// Returns true if the announcement was accepted and added; false otherwise.
+pub fn process_announcement(
+    peer_mapper: &Arc<Mutex<PeerMapper>>,
+    replay_cache: &mut VecDeque<(Vec<u8>, u16)>,
+    replay_set: &mut HashSet<(Vec<u8>, u16)>,
+    data: TssMessage,
+) -> bool {
+    if let TssMessage::Announce(nonce, peer_id, public_key_data, signature) = data {
+        info!(
+            "[TSS] Handling peer_id {:?} with pubkey {:?}",
+            peer_id, public_key_data
+        );
+
+        // Replay protection
+        let key = (peer_id.clone(), nonce);
+        if replay_set.contains(&key) {
+            log::warn!("[TSS] Ignoring replayed announcement for peer {:?} nonce {}", peer_id, nonce);
+            return false;
+        }
+
+        let public_key = match sr25519::Public::from_slice(&public_key_data[..]) {
+            Ok(pk) => pk,
+            Err(_) => {
+                log::warn!("[TSS] Invalid public key length in announcement");
+                return false;
+            }
+        };
+        // Reconstruct payload (public_key || peer_id || nonce_le)
+        let mut payload = Vec::with_capacity(public_key_data.len() + peer_id.len() + 2);
+        payload.extend_from_slice(&public_key_data[..]);
+        payload.extend_from_slice(&peer_id[..]);
+        payload.extend_from_slice(&nonce.to_le_bytes());
+
+        let Ok(sig_bytes): Result<[u8;64], _> = signature.clone().try_into() else {
+            log::warn!("[TSS] Invalid signature length in announcement");
+            return false;
+        };
+        let sig = sr25519::Signature::from_raw(sig_bytes);
+
+        if sr25519_verify(&sig, &payload, &public_key) {
+            match PeerId::from_bytes(&peer_id[..]) {
+                Ok(pid) => {
+                    peer_mapper.lock().unwrap().add_peer(pid, public_key_data);
+                    const MAX_CACHE: usize = 512;
+                    replay_cache.push_back(key.clone());
+                    replay_set.insert(key);
+                    if replay_cache.len() > MAX_CACHE {
+                        if let Some(old) = replay_cache.pop_front() { replay_set.remove(&old); }
+                    }
+                    return true;
+                }
+                Err(e) => {
+                    log::error!("[TSS] Invalid peer ID bytes in Announce message: {:?}", e);
+                    return false;
+                }
+            }
+        } else {
+            log::warn!("[TSS] Announcement signature verification failed for peer_id {:?}", peer_id);
+            return false;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sp_core::Pair;
+    use rand::RngCore; // kept for potential randomness in future tests
+    use proptest::prelude::*;
+
+    fn make_signed_announce(nonce: u16, pair: &sr25519::Pair, peer_id: &PeerId) -> TssMessage {
+        let pubkey = pair.public().0.to_vec();
+        let peer_bytes = peer_id.to_bytes();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&pubkey);
+        payload.extend_from_slice(&peer_bytes);
+        payload.extend_from_slice(&nonce.to_le_bytes());
+        let signature = pair.sign(&payload).0.to_vec();
+        TssMessage::Announce(nonce, peer_bytes, pubkey, signature)
+    }
+
+    #[test]
+    fn test_announce_replay_same_nonce_rejected() {
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+
+        let pair = sr25519::Pair::from_seed(&[1u8;32]);
+        let peer_id = PeerId::random();
+        let msg = make_signed_announce(10, &pair, &peer_id);
+
+        let first = process_announcement(&peer_mapper, &mut cache, &mut set, msg.clone());
+        assert!(first, "First announcement should be accepted");
+        let second = process_announcement(&peer_mapper, &mut cache, &mut set, msg.clone());
+        assert!(!second, "Replay announcement should be rejected");
+    }
+
+    #[test]
+    fn test_announce_modified_nonce_with_old_signature_fails() {
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+
+        let pair = sr25519::Pair::from_seed(&[2u8;32]);
+        let peer_id = PeerId::random();
+        let valid = make_signed_announce(42, &pair, &peer_id);
+        assert!(process_announcement(&peer_mapper, &mut cache, &mut set, valid.clone()));
+
+        // Craft tampered message: change nonce but reuse signature (invalid signature)
+        if let TssMessage::Announce(_, peer_bytes, pubkey, signature) = valid {
+            let tampered = TssMessage::Announce(43, peer_bytes, pubkey, signature); // signature does not match new nonce
+            let accepted = process_announcement(&peer_mapper, &mut cache, &mut set, tampered);
+            assert!(!accepted, "Tampered nonce with old signature must be rejected");
+        } else { panic!("Unexpected variant"); }
+    }
+
+    #[test]
+    fn test_announce_different_nonce_new_signature_accepted() {
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+
+        let pair = sr25519::Pair::from_seed(&[3u8;32]);
+        let peer_id = PeerId::random();
+        let first = make_signed_announce(5, &pair, &peer_id);
+        assert!(process_announcement(&peer_mapper, &mut cache, &mut set, first));
+        let second = make_signed_announce(6, &pair, &peer_id);
+        assert!(process_announcement(&peer_mapper, &mut cache, &mut set, second), "Different nonce with correct signature should be accepted");
+    }
+
+    #[test]
+    fn test_lru_eviction_allows_old_nonce_again() {
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+        let pair = sr25519::Pair::from_seed(&[4u8;32]);
+        let peer_id = PeerId::random();
+
+        // Insert 513 unique nonces (0..=512). MAX_CACHE=512 so nonce 0 should be evicted.
+        for nonce in 0u16..=512u16 { // inclusive range gives 513 entries
+            let msg = make_signed_announce(nonce, &pair, &peer_id);
+            let accepted = process_announcement(&peer_mapper, &mut cache, &mut set, msg);
+            assert!(accepted, "Unique nonce {} should be accepted", nonce);
+        }
+
+        // Replay of first nonce (0) should now be accepted again due to eviction.
+        let msg_again = make_signed_announce(0, &pair, &peer_id);
+        let accepted_again = process_announcement(&peer_mapper, &mut cache, &mut set, msg_again);
+        assert!(accepted_again, "Evicted old nonce should be accepted again after LRU eviction");
+    }
+
+    #[test]
+    fn test_duplicate_does_not_create_additional_peer_entries() {
+        let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+        let mut cache = VecDeque::new();
+        let mut set = HashSet::new();
+        let pair = sr25519::Pair::from_seed(&[5u8;32]);
+        let peer_id = PeerId::random();
+        let msg = make_signed_announce(77, &pair, &peer_id);
+        assert!(process_announcement(&peer_mapper, &mut cache, &mut set, msg.clone()));
+        // Duplicate
+        assert!(!process_announcement(&peer_mapper, &mut cache, &mut set, msg.clone()));
+        let map = peer_mapper.lock().unwrap();
+        assert_eq!(map.peers().lock().unwrap().len(), 1, "Peer map should contain exactly one entry");
+    }
+
+    proptest! {
+        // Property: Without exceeding LRU capacity (keep sequence length <= 200),
+        // an announcement is accepted iff its (peer, nonce) pair has not appeared before.
+        #[test]
+        fn prop_unique_nonce_acceptance(seq in proptest::collection::vec(0u16..500u16, 1..200usize)) {
+            let sessions_participants = Arc::new(Mutex::new(std::collections::HashMap::new()));
+            let peer_mapper = Arc::new(Mutex::new(PeerMapper::new(sessions_participants)));
+            let mut cache = VecDeque::new();
+            let mut set = HashSet::new();
+            let pair = sr25519::Pair::from_seed(&[6u8;32]);
+            let peer_id = PeerId::random();
+            let mut seen = std::collections::HashSet::new();
+            for nonce in seq {                
+                let msg = make_signed_announce(nonce, &pair, &peer_id);
+                let accepted = process_announcement(&peer_mapper, &mut cache, &mut set, msg);
+                let expected = seen.insert(nonce); // true if newly inserted
+                prop_assert_eq!(accepted, expected, "Acceptance mismatch for nonce {}", nonce);
+            }
+        }
     }
 }
 

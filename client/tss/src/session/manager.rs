@@ -433,9 +433,9 @@ impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> 
     fn handle_announcment(&mut self, sender: PeerId, message: TssMessage) {
         // Handle announcement messages - typically used for peer discovery
         if let TssMessage::Announce(nonce, peer_id, public_key_data, signature) = message {
-            log::info!("[TSS] Handling announcement from peer: {}", sender.to_base58());
-            // Delegate to the authentication manager or handle directly
-            // This is typically used to register new peers
+            log::info!("[TSS] Handling announcement from peer: {} with nonce {}", sender.to_base58(), nonce);
+            // Signature has already been verified at gossip layer; here we could add replay protection using nonce cache if desired.
+            // TODO: Maintain a bounded LRU of recent (peer_id, nonce) to prevent replays within signature validity window.
         }
     }
 

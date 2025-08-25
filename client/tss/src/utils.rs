@@ -23,12 +23,18 @@ pub fn sign_announcment(
     keystore_container: &KeystoreContainer,
     validator_key: &[u8],
     peer_id: &[u8],
+    nonce: u16,
 ) -> Option<Vec<u8>> {
+    // Sign (validator_key || peer_id || nonce_le) to bind nonce to signature and prevent trivial replay
+    let mut payload = Vec::with_capacity(validator_key.len() + peer_id.len() + 2);
+    payload.extend_from_slice(validator_key);
+    payload.extend_from_slice(peer_id);
+    payload.extend_from_slice(&nonce.to_le_bytes());
     let result = keystore_container.keystore().sign_with(
         UOMI,
         sr25519::CRYPTO_ID,
         validator_key,
-        &[validator_key, peer_id].concat(),
+        &payload,
     );
     match result {
         Ok(signature) => match signature {

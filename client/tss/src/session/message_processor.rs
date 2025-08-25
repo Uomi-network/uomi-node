@@ -400,7 +400,7 @@ impl MessageProcessor {
                 }
             }
 
-            TssMessage::Announce(_nonce, peer_id_bytes, public_key_data, signature) => {
+            TssMessage::Announce(nonce, peer_id_bytes, public_key_data, signature) => {
                 // Handle the announcement by extracting peer information and adding to peer_mapper
                 if let Ok(announcing_peer_id) = PeerId::from_bytes(&peer_id_bytes[..]) {
                     log::info!("[TSS] 📢 Processing signed announcement from peer: {} with public key: {:?}", 
@@ -416,18 +416,27 @@ impl MessageProcessor {
                             if signature == &vec![0u8; 64] {
                                 true
                             } else {
+                                // sign(public_key || peer_id || nonce_le)
+                                let mut payload = Vec::new();
+                                payload.extend_from_slice(&public_key_data[..]);
+                                payload.extend_from_slice(&peer_id_bytes[..]);
+                                payload.extend_from_slice(&nonce.to_le_bytes());
                                 sr25519_verify(
                                     &signature[..].try_into().unwrap(),
-                                    &[&public_key_data[..], &peer_id_bytes[..]].concat(),
+                                    &payload,
                                     public_key,
                                 )
                             }
                         }
                         #[cfg(not(test))]
                         {
+                            let mut payload = Vec::new();
+                            payload.extend_from_slice(&public_key_data[..]);
+                            payload.extend_from_slice(&peer_id_bytes[..]);
+                            payload.extend_from_slice(&nonce.to_le_bytes());
                             sr25519_verify(
                                 &signature[..].try_into().unwrap(),
-                                &[&public_key_data[..], &peer_id_bytes[..]].concat(),
+                                &payload,
                                 public_key,
                             )
                         }

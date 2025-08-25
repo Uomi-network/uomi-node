@@ -75,13 +75,16 @@ fn create_announcement_message(
     local_peer_id: &PeerId,
     rng: &mut ThreadRng,
 ) -> Option<TssMessage> {
+    // Generate nonce first so it can be included in the signature payload
+    let nonce: u16 = rng.gen();
     if let Some(signature) = sign_announcment(
         keystore_container,
         validator_key,
         &local_peer_id.to_bytes()[..],
+        nonce,
     ) {
         let announcement = TssMessage::Announce(
-            rng.gen::<u16>(),
+            nonce,
             local_peer_id.to_bytes(),
             validator_key.to_vec(),
             signature,
