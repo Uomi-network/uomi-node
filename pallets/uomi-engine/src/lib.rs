@@ -252,19 +252,21 @@ pub mod pallet {
         ValueQuery
 	>;
 
-	// Outputs storage is used to store the outputs of the requests received by the run_request function.
-	#[pallet::storage]
-	pub type Outputs<T: Config> = StorageMap<
-		_,
-		Blake2_128Concat,
-		RequestId, // request_id
-		(
-			Data, // output_data
-			u32, // total executions
-			u32, // total conseusus
-		),
-		ValueQuery
-	>;
+    // Outputs storage is used to store the outputs of the requests received by the run_request function.
+    // Added nft_id to securely link the output to the agent without relying on user-provided payload data.
+    #[pallet::storage]
+    pub type Outputs<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        (
+            Data, // output_data
+            u32, // total executions
+            u32, // total consensus
+            U256, // nft_id (agent id)
+        ),
+        ValueQuery
+    >;
 
 	// OpocBlacklist storage is used to store the blacklist of validators
 	#[pallet::storage]
@@ -432,13 +434,13 @@ pub mod pallet {
 		#[pallet::weight((500_000, DispatchClass::Mandatory))]
 		pub fn set_inherent_data(
 			origin: OriginFor<T>,
-			opoc_operations: (
+            opoc_operations: (
                 BTreeMap<T::AccountId, bool>,
                 BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
                 BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
                 BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
                 BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
-                BTreeMap<RequestId, (Data, u32, u32)>
+                BTreeMap<RequestId, (Data, u32, u32, U256)>
             ),
             aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
 		) -> DispatchResultWithPostInfo {
@@ -606,8 +608,8 @@ pub mod pallet {
                             return Err(InherentError::InvalidInherentValue);
                         },
                     };
-                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, opoc_timeouts_operations, outputs_operations, opoc_errors_operations) = opoc_operations;
-                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_opoc_timeouts_operations, expected_outputs_operations, expected_opoc_errors_operations) = expected_opoc_operations;
+                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, opoc_timeouts_operations, opoc_errors_operations, outputs_operations) = opoc_operations;
+                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_opoc_timeouts_operations, expected_opoc_errors_operations, expected_outputs_operations) = expected_opoc_operations;
                     
                     if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
                         log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);

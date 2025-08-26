@@ -18,7 +18,7 @@ impl<T: Config> Pallet<T> {
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
             BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
             BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
-            BTreeMap<RequestId, (Data, u32, u32)>, // outputs_operations
+            BTreeMap<RequestId, (Data, u32, u32, U256)>, // outputs_operations (added nft_id)
         ),
         DispatchError
     > {
@@ -30,7 +30,7 @@ impl<T: Config> Pallet<T> {
         let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<RequestId, bool>>::new();
         let mut opoc_timeouts_operations = BTreeMap::<RequestId, BTreeMap<T::AccountId, bool>>::new();
         let mut opoc_errors_operations = BTreeMap::<RequestId, BTreeMap<T::AccountId, bool>>::new();
-        let mut outputs_operations = BTreeMap::<RequestId, (Data, u32, u32)>::new();
+    let mut outputs_operations = BTreeMap::<RequestId, (Data, u32, u32, U256)>::new();
 
         let ipfs_min_expire_duration = U256::from(MinExpireDuration::get());
 
@@ -40,7 +40,7 @@ impl<T: Config> Pallet<T> {
             (
                 block_number,
                 _address,
-                _nft_id,
+                nft_id,
                 nft_required_consensus,
                 _nft_execution_max_time,
                 nft_file_cid,
@@ -244,7 +244,8 @@ impl<T: Config> Pallet<T> {
                                     &request_id,
                                     &final_output,
                                     &executions,
-                                    &executions
+                                    &executions,
+                                    &nft_id
                                 )
                             {
                                 Err(error) => {
@@ -354,7 +355,8 @@ impl<T: Config> Pallet<T> {
                                 &request_id,
                                 &final_output,
                                 &executions,
-                                &executions
+                                &executions,
+                                &nft_id
                             )
                         {
                             Err(error) => {
@@ -484,7 +486,8 @@ impl<T: Config> Pallet<T> {
                                     &request_id,
                                     &Data::default(),
                                     &executions,
-                                    &executions
+                                    &executions,
+                                    &nft_id
                                 )
                             {
                                 Err(error) => {
@@ -579,7 +582,8 @@ impl<T: Config> Pallet<T> {
                                 &request_id,
                                 &first_output,
                                 &output_values_len,
-                                &output_values_len
+                                &output_values_len,
+                                &nft_id
                             )
                         {
                             Err(error) => {
@@ -766,7 +770,8 @@ impl<T: Config> Pallet<T> {
                             &request_id,
                             &consensus_output,
                             &output_values_len,
-                            &output_consensus_len
+                            &output_consensus_len,
+                            &nft_id
                         )
                     {
                         Err(error) => {
@@ -864,7 +869,7 @@ impl<T: Config> Pallet<T> {
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
             BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
             BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
-            BTreeMap<U256, (Data, u32, u32)>, // outputs_operations
+            BTreeMap<U256, (Data, u32, u32, U256)>, // outputs_operations with nft_id
         )
     ) -> Result<(), DispatchError> {
         // get operations to do
@@ -946,13 +951,14 @@ impl<T: Config> Pallet<T> {
         // NOTE: For every output, we need to clear other storages from data associated with the request_id
         for (
             request_id,
-            (output_data, total_executions, total_consensus),
+            (output_data, total_executions, total_consensus, nft_id),
         ) in outputs_operations.iter() {
             // insert in Outputs
             Outputs::<T>::insert(request_id, (
                 output_data.clone(),
                 total_executions.clone(),
                 total_consensus.clone(),
+                *nft_id,
             ));
             Self::deposit_event(Event::RequestCompleted {
                 request_id: request_id.clone(),
@@ -1422,16 +1428,18 @@ impl<T: Config> Pallet<T> {
     }
 
     fn opoc_complete(
-        outputs_operations: &mut BTreeMap<RequestId, (Data, u32, u32)>,
+    outputs_operations: &mut BTreeMap<RequestId, (Data, u32, u32, U256)>,
         request_id: &RequestId,
         output: &Data,
         total_executions: &u32,
-        total_consensus: &u32
+        total_consensus: &u32,
+        nft_id: &U256
     ) -> DispatchResult {
         outputs_operations.insert(request_id.clone(), (
             output.clone(),
             *total_executions,
             *total_consensus,
+            *nft_id,
         ));
         Ok(())
     }

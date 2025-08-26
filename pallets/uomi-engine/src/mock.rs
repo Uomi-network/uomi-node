@@ -136,7 +136,7 @@ impl MockInherentDataProvider {
         BTreeMap<AccountId, BTreeMap<RequestId, bool>>,
         BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
         BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
-        BTreeMap<RequestId, (Data, u32, u32)>
+        BTreeMap<RequestId, (Data, u32, u32, U256)>
     ), DispatchError> {
         Ok((
             BTreeMap::new(),

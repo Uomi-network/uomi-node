@@ -941,7 +941,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
 
         // storage Outputs should contain the output of the request
         let outputs = Outputs::<Test>::get(request_id);
-        assert_eq!(outputs, (not_empty_bounded_vec.clone(), 1, 1));
+        assert_eq!(outputs, (not_empty_bounded_vec.clone(), 1, 1, U256::zero()));
 
         //check that storage_opoc_assignment is empty
         let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -1229,7 +1229,7 @@ fn test_inherent_opoc_level_1_completed_valid() {
         
         // storage Outputs should contain the output of the request
         let outputs = Outputs::<Test>::get(request_id);
-        assert_eq!(outputs, (bounded_vec.clone(), 5, 5));
+        assert_eq!(outputs, (bounded_vec.clone(), 5, 5, U256::zero()));
 
         //check that storage_opoc_assignment is empty
         let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -1434,7 +1434,7 @@ fn test_inherent_opoc_level_2_completed() {
 
     // storage Outputs should contain the output of the request generated from the majority of validators
     let outputs = Outputs::<Test>::get(request_id);
-    assert_eq!(outputs, (bounded_vec.clone(), 10, 7));
+    assert_eq!(outputs, (bounded_vec.clone(), 10, 7, U256::zero()));
 
     //check that storage_opoc_assignment is empty
     let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();

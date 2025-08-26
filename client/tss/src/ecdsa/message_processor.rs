@@ -680,30 +680,45 @@ pub(crate) fn extract_agg_key(msg: &str) -> Result<Vec<u8>, String> {
 // Attempt to extract a signature from various message formats
 fn parse_signature_bytes(msg: &str) -> Option<Vec<u8>> {
     let trimmed = msg.trim();
-    if trimmed.starts_with("0x") && trimmed.len() > 4 {
-        return hex::decode(&trimmed[2..]).ok();
-    }
-    if trimmed.chars().all(|c| c.is_ascii_hexdigit()) && trimmed.len() % 2 == 0 {
-        return hex::decode(trimmed).ok();
-    }
+    // if trimmed.starts_with("0x") && trimmed.len() > 4 {
+    //     return hex::decode(&trimmed[2..]).ok();
+    // }
+    // if trimmed.chars().all(|c| c.is_ascii_hexdigit()) && trimmed.len() % 2 == 0 {
+    //     return hex::decode(trimmed).ok();
+    // }
     if trimmed.starts_with('{') {
         #[derive(serde::Deserialize)]
         struct SigWrapper { 
-            #[serde(default)] signature: Option<String>,
+            // #[serde(default)] signature: Option<String>,
             #[serde(default)] r: Option<String>,
             #[serde(default)] s: Option<String>,
             #[serde(default)] recid: Option<u8>,
         }
         if let Ok(sw) = serde_json::from_str::<SigWrapper>(trimmed) {
             // Case 1: Nested single hex string (existing behaviour)
-            if let Some(sig_hex) = sw.signature {
-                return parse_signature_bytes(&sig_hex);
-            }
+            // if let Some(sig_hex) = sw.signature {
+            //     return parse_signature_bytes(&sig_hex);
+            // }
             // Case 2: r + s (+ recid) JSON like {"s":"..","r":"..","recid":0}
             if let (Some(r_hex), Some(s_hex)) = (sw.r, sw.s) {
                 let norm = |h: String| h.trim_start_matches("0x").to_string();
                 let r_clean = norm(r_hex);
                 let s_clean = norm(s_hex);
+
+                // If r_clean.len() == 63 we add a leading zero
+                let r_clean = if r_clean.len() == 63 {
+                    format!("0{r_clean}")
+                } else {
+                    r_clean
+                };
+
+                // If s_clean.len() == 63 we add a leading zero
+                let s_clean = if s_clean.len() == 63 {
+                    format!("0{s_clean}")
+                } else {
+                    s_clean
+                };
+
                 // Require even length and hexadecimal
                 if r_clean.len() % 2 == 0 && s_clean.len() % 2 == 0 &&
                     r_clean.chars().all(|c| c.is_ascii_hexdigit()) &&
@@ -718,7 +733,7 @@ fn parse_signature_bytes(msg: &str) -> Option<Vec<u8>> {
                             // Fallback: concatenate even if not 32 each, still ensure bounded <=65
                             r_bytes.append(&mut s_bytes);
                             r_bytes.push(recid);
-                            if r_bytes.len() <= 65 { return Some(r_bytes); }
+                            if r_bytes.len() <= 128 { return Some(r_bytes); }
                         }
                     }
                 }
@@ -741,11 +756,11 @@ mod tests {
 
     #[test]
     fn test_parse_signature_r_s_recid() {
-        let json = r#"{"s":"11f5fea0f50d607fd7520d606ff2923b319a0c64a8dbcac8d7549919447dadb1","r":"d28b86d99a02933cc3b471751c431b06fd2e45129e405a6f208ff8ca79d4a1a8","recid":0}"#;
+        let json = "{\"s\":\"816998f4a60aff70bfdfcdfe1f538f17998fc9b90819c474d6ce8103997396f\",\"r\":\"a70edf582a3b5cfeb90c49c80a46a3fb0152b97bb2684570d18cdace30b6b279\",\"recid\":0}";
         let sig = super::parse_signature_bytes(json).expect("should parse r,s,recid");
         assert_eq!(sig.len(), 65);
-        assert_eq!(&hex::encode(&sig[0..32]), "d28b86d99a02933cc3b471751c431b06fd2e45129e405a6f208ff8ca79d4a1a8");
-        assert_eq!(&hex::encode(&sig[32..64]), "11f5fea0f50d607fd7520d606ff2923b319a0c64a8dbcac8d7549919447dadb1");
+        assert_eq!(&hex::encode(&sig[0..32]), "a70edf582a3b5cfeb90c49c80a46a3fb0152b97bb2684570d18cdace30b6b279");
+        assert_eq!(&hex::encode(&sig[32..64]), "0816998f4a60aff70bfdfcdfe1f538f17998fc9b90819c474d6ce8103997396f");
         assert_eq!(sig[64], 0u8);
     }
 }

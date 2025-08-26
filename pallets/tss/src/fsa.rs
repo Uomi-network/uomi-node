@@ -39,20 +39,27 @@ impl ProcessingError {
 #[derive(Deserialize, Debug)]
 pub struct Action {
     pub action_type: String,
-    pub _trigger_policy: String,
-    pub data: Vec<u8>,
+    pub _trigger_policy: Option<String>,
+    /// Hex string representing call data (e.g. "0x", "0xdeadbeef").
+    /// For consistency we ALWAYS expect a string now (not a JSON array of bytes).
+    pub data: String,
     pub chain_id: u32,
     // Additional fields for enhanced transaction support
     pub to: Option<String>,
     pub value: Option<String>,
     pub gas_limit: Option<String>,
     pub gas_price: Option<String>,
+    // Extended optional fields for richer tx construction
+    pub nonce: Option<String>,
+    pub tx_type: Option<String>,                 // "legacy" (default) or "eip1559"
+    pub max_fee_per_gas: Option<String>,         // For EIP-1559
+    pub max_priority_fee_per_gas: Option<String>,// For EIP-1559
 }
 
 #[derive(Deserialize, Debug)]
 pub struct Output {
     pub actions: Vec<Action>,
-    pub _response: String,
+    // pub _response: String,
 }   
 
 
@@ -60,10 +67,11 @@ impl<T: Config> crate::pallet::Pallet<T> {
     /// Process OPOC (Off-chain Processing Output Consumer) requests
     /// Fetches and processes outputs from pallet_uomi_engine starting from the last processed request ID
     /// Returns a tuple of (requests_to_sign, last_processed_request_id) for on-chain processing
-    pub fn process_opoc_requests() -> Result<(BTreeMap<sp_core::U256, (u32, Vec<u8>)>, u32), &'static str> {
+    pub fn process_opoc_requests() -> Result<(BTreeMap<sp_core::U256, (sp_core::U256, u32, Vec<u8>)>, u32), &'static str> {
         // Get the last opoc request id we handled in the previous block
         let last_opoc_request_id = LastOpocRequestId::<T>::get();
-        let mut requests_to_sign = BTreeMap::<sp_core::U256, (u32, Vec<u8>)>::new();
+    // Map request_id -> (nft_id, chain_id, tx_data)
+    let mut requests_to_sign = BTreeMap::<sp_core::U256, (sp_core::U256, u32, Vec<u8>)>::new();
         let mut last_processed_id = last_opoc_request_id;
 
         // Only process if we have a valid starting point
@@ -77,8 +85,8 @@ impl<T: Config> crate::pallet::Pallet<T> {
 
         for request_id in start_request_id..=max_request_id {
             match Self::process_single_request(request_id) {
-                Ok(Some(data)) => {
-                    requests_to_sign.insert(sp_core::U256::from(request_id), data);
+                Ok(Some((nft_id, data))) => {
+                    requests_to_sign.insert(sp_core::U256::from(request_id), (nft_id, data.0, data.1));
                     last_processed_id = request_id;
                 }
                 Ok(None) => {
@@ -104,9 +112,9 @@ impl<T: Config> crate::pallet::Pallet<T> {
     }
 
     /// Process a single OPOC request
-    pub fn process_single_request(request_id: u32) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
+    pub fn process_single_request(request_id: u32) -> Result<Option<(sp_core::U256, (u32, Vec<u8>))>, ProcessingError> {
         // Fetch the output for this request ID
-        let (output, _, _) = pallet_uomi_engine::Outputs::<T>::get(sp_core::U256::from(request_id));
+    let (output, _, _, nft_id) = pallet_uomi_engine::Outputs::<T>::get(sp_core::U256::from(request_id));
         
         log::info!("Processing output for request ID {}", request_id);
 
@@ -125,8 +133,8 @@ impl<T: Config> crate::pallet::Pallet<T> {
         for action in parsed_output.actions {
             log::info!("Processing action: {:?}", action);
 
-            if let Some(data) = handle_action_type(&action.action_type, action.data, action.chain_id)? {
-                return Ok(Some(data));
+            if let Some(data) = handle_action(&action)? {
+                return Ok(Some((nft_id, data)));
             }
         }
 
@@ -135,15 +143,10 @@ impl<T: Config> crate::pallet::Pallet<T> {
 }
 
 
-/// Handle different action types
-fn handle_action_type(
-    action_type: &str,
-    data: Vec<u8>,
-    chain_id: u32,
-) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
-    match action_type {
-        "transaction" => handle_transaction_action(data, chain_id),
-        "multi_chain_transaction" => handle_multi_chain_transaction(data, chain_id),
+/// Handle an action, potentially constructing a transaction preimage from structured fields.
+fn handle_action(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
+    match action.action_type.as_str() {
+        "transaction" | "multi_chain_transaction" => build_or_passthrough(action),
         unsupported => {
             log::warn!("Unsupported action type: {}", unsupported);
             Err(ProcessingError::UnsupportedActionType("Unsupported action type"))
@@ -151,62 +154,92 @@ fn handle_action_type(
     }
 }
 
-/// Handle transaction actions
-fn handle_transaction_action(data: Vec<u8>, chain_id: u32) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
-    log::info!(
-        "Handling transaction action with {} bytes of data on chain ID: {}",
-        data.len(),
-        chain_id
-    );
-
-    // Validate chain configuration
-    let chain_config = MultiChainRpcClient::get_chain_config(chain_id)
-        .map_err(|e| ProcessingError::ChainConfigError(e))?;
-    
-    MultiChainRpcClient::validate_chain_config(&chain_config)
-        .map_err(|e| ProcessingError::ChainConfigError(e))?;
-
-    log::info!(
-        "Transaction will be processed on chain: {} (ID: {})",
-        String::from_utf8_lossy(&chain_config.name),
-        chain_config.chain_id
-    );
-
-    // For now, the transaction action means we need to trigger the TSS signature
-    // for this agent and the given data. We prepare the data to submit from the
-    // offchain worker, with the NFT id and the data needed by create_signing_session
-    
-    Ok(Some((chain_id, data)))
+fn parse_num_u64(label: &str, v: &str) -> Option<u64> {
+    let s = v.trim();
+    if s.is_empty() { return None; }
+    let parsed = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).ok()
+    } else { s.parse::<u64>().ok() };
+    if parsed.is_none() { log::warn!("Failed to parse {} value '{}'", label, v); }
+    parsed
 }
 
-/// Handle multi-chain transaction actions with enhanced functionality
-fn handle_multi_chain_transaction(data: Vec<u8>, chain_id: u32) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
-    log::info!(
-        "Handling multi-chain transaction with {} bytes of data on chain ID: {}",
-        data.len(),
-        chain_id
-    );
-
-    // Get chain configuration
-    let chain_config = MultiChainRpcClient::get_chain_config(chain_id)
+fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
+    // Always validate chain config first
+    let chain_config = MultiChainRpcClient::get_chain_config(action.chain_id)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
-    
-    // Validate chain configuration
     MultiChainRpcClient::validate_chain_config(&chain_config)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
 
-    // Parse transaction data if it's in a structured format
-    // For now, we'll assume the data contains the raw transaction bytes
-    let processed_data = process_transaction_data(&data, &chain_config)?;
+    // Decode hex string data -> bytes (tolerate missing 0x prefix). On error use empty vec.
+    fn decode_hex(s: &str) -> Result<Vec<u8>, ()> {
+        let clean = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+        if clean.is_empty() { return Ok(Vec::new()); }
+        if clean.len() % 2 != 0 { return Err(()); }
+        let mut out = Vec::with_capacity(clean.len()/2);
+        let bytes = clean.as_bytes();
+        let hex_val = |c: u8| -> Option<u8> {
+            match c { b'0'..=b'9' => Some(c - b'0'), b'a'..=b'f' => Some(10 + c - b'a'), b'A'..=b'F' => Some(10 + c - b'A'), _ => None }
+        };
+        let mut i = 0;
+        while i < bytes.len() { 
+            let hi = hex_val(bytes[i]).ok_or(())?; 
+            let lo = hex_val(bytes[i+1]).ok_or(())?; 
+            out.push((hi<<4) | lo); 
+            i += 2; 
+        }
+        Ok(out)
+    }
+    let data_bytes = match decode_hex(&action.data) { Ok(v) => v, Err(_) => { log::warn!("Invalid hex in action.data '{}', using empty bytes", action.data); Vec::new() } };
 
-    log::info!(
-        "Multi-chain transaction prepared for chain: {} (ID: {}), data size: {} bytes",
-        String::from_utf8_lossy(&chain_config.name),
-        chain_config.chain_id,
-        processed_data.len()
-    );
+    // If we have structured fields, attempt to construct a preimage; otherwise fallback to raw data
+    if let Some(ref to) = action.to {
+        use crate::multichain::TransactionBuilder;
+        let value = action.value.as_ref().and_then(|v| parse_num_u64("value", v)).unwrap_or(0);
+        let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).unwrap_or(21_000);
+        let gas_price = action.gas_price.as_ref().and_then(|v| parse_num_u64("gas_price", v)).unwrap_or(1_000_000_000); // 1 gwei default
+        let nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v)).unwrap_or(0);
+        let tx_type = action.tx_type.as_deref().unwrap_or("eip1559");
 
-    Ok(Some((chain_id, processed_data)))
+        let build_res = if tx_type.eq_ignore_ascii_case("eip1559") {
+            let max_fee = action.max_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_fee_per_gas", v)).unwrap_or(gas_price);
+            let max_priority = action.max_priority_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_priority_fee_per_gas", v)).unwrap_or(1_000_000_000);
+            TransactionBuilder::build_eip1559_transaction(
+                to,
+                value,
+                &data_bytes,
+                gas_limit,
+                max_fee,
+                max_priority,
+                nonce,
+                action.chain_id,
+            )
+        } else {
+            TransactionBuilder::build_ethereum_transaction(
+                to,
+                value,
+                &data_bytes,
+                gas_limit,
+                gas_price,
+                nonce,
+                action.chain_id,
+            )
+        };
+
+        match build_res {
+            Ok(preimage) => {
+                log::info!("Constructed {} transaction preimage ({} bytes) for chain {}", tx_type, preimage.len(), action.chain_id);
+                return Ok(Some((action.chain_id, preimage)));
+            }
+            Err(e) => {
+                log::warn!("Failed to build structured transaction ({}). Falling back to raw data ({} bytes)", e, data_bytes.len());
+                return Ok(Some((action.chain_id, data_bytes)));
+            }
+        }
+    }
+
+    // No structured fields; treat provided data as preimage bytes directly
+    Ok(Some((action.chain_id, data_bytes)))
 }
 
 /// Process transaction data for specific chain requirements

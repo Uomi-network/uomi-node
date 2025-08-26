@@ -536,36 +536,18 @@ impl TransactionBuilder {
         nonce: u64,
         chain_id: u32,
     ) -> Result<Vec<u8>, &'static str> {
-        log::info!(
-            "Building transaction: to={}, value={}, gas_limit={}, chain_id={}",
-            to, value, gas_limit, chain_id
-        );
-        
-        // Parse the 'to' address
+        // NOTE: This function historically returned the EIP-155 PREIMAGE (with chainId,0,0) – not a broadcastable raw tx.
+        // For clarity and future compatibility we delegate to `legacy_preimage_rlp` while keeping the old signature.
         let to_address = Self::parse_ethereum_address(to)?;
-        
-        // Create transaction fields
-        let nonce_u256 = U256::from(nonce);
-        let gas_price_u256 = U256::from(gas_price);
-        let gas_limit_u256 = U256::from(gas_limit);
-        let value_u256 = U256::from(value);
-        let data_vec = data.to_vec();
-        let chain_id_u256 = U256::from(chain_id);
-        
-        // Build RLP-encoded transaction (EIP-155)
-        let mut rlp_stream = RlpStream::new();
-        rlp_stream.begin_list(9);
-        rlp_stream.append(&nonce_u256);
-        rlp_stream.append(&gas_price_u256);
-        rlp_stream.append(&gas_limit_u256);
-        rlp_stream.append(&to_address);
-        rlp_stream.append(&value_u256);
-        rlp_stream.append(&data_vec);
-        rlp_stream.append(&chain_id_u256); // For EIP-155 replay protection
-        rlp_stream.append(&0u8); // Empty r
-        rlp_stream.append(&0u8); // Empty s
-        
-        Ok(rlp_stream.out().to_vec())
+        Ok(Self::legacy_preimage_rlp(
+            to_address,
+            U256::from(value),
+            data,
+            U256::from(gas_limit),
+            U256::from(gas_price),
+            U256::from(nonce),
+            chain_id as u64,
+        ))
     }
     
     /// Build an EIP-1559 transaction (Type 2)
@@ -579,44 +561,134 @@ impl TransactionBuilder {
         nonce: u64,
         chain_id: u32,
     ) -> Result<Vec<u8>, &'static str> {
-        log::info!(
-            "Building EIP-1559 transaction: to={}, value={}, gas_limit={}, chain_id={}",
-            to, value, gas_limit, chain_id
-        );
-        
-        // Parse the 'to' address
+        // Provide ONLY the preimage bytes (type byte + 9-field list) for signing.
         let to_address = Self::parse_ethereum_address(to)?;
-        
-        // Create transaction fields
-        let chain_id_u256 = U256::from(chain_id);
-        let nonce_u256 = U256::from(nonce);
-        let max_priority_fee_u256 = U256::from(max_priority_fee_per_gas);
-        let max_fee_u256 = U256::from(max_fee_per_gas);
-        let gas_limit_u256 = U256::from(gas_limit);
-        let value_u256 = U256::from(value);
-        let data_vec = data.to_vec();
-        
-        // Build RLP-encoded EIP-1559 transaction
-        let mut rlp_stream = RlpStream::new();
-        rlp_stream.begin_list(12);
-        rlp_stream.append(&chain_id_u256);
-        rlp_stream.append(&nonce_u256);
-        rlp_stream.append(&max_priority_fee_u256);
-        rlp_stream.append(&max_fee_u256);
-        rlp_stream.append(&gas_limit_u256);
-        rlp_stream.append(&to_address);
-        rlp_stream.append(&value_u256);
-        rlp_stream.append(&data_vec);
-        rlp_stream.append(&Vec::<u8>::new()); // access_list (empty)
-        rlp_stream.append(&0u8); // y_parity
-        rlp_stream.append(&H256::zero()); // r
-        rlp_stream.append(&H256::zero()); // s
-        
-        // Prepend transaction type (0x02 for EIP-1559)
-        let mut encoded = vec![0x02];
-        encoded.extend(rlp_stream.out());
-        
-        Ok(encoded)
+        Ok(Self::eip1559_preimage_bytes(
+            to_address,
+            U256::from(value),
+            data,
+            U256::from(gas_limit),
+            U256::from(max_fee_per_gas),
+            U256::from(max_priority_fee_per_gas),
+            U256::from(nonce),
+            chain_id as u64,
+        ))
+    }
+
+    /// Legacy (EIP-155) preimage RLP: RLP([nonce, gasPrice, gasLimit, to, value, data, chainId, 0, 0])
+    pub fn legacy_preimage_rlp(
+        to: H160,
+        value: U256,
+        data: &[u8],
+        gas_limit: U256,
+        gas_price: U256,
+        nonce: U256,
+        chain_id: u64,
+    ) -> Vec<u8> {
+        let mut s = RlpStream::new();
+        s.begin_list(9);
+        s.append(&nonce);
+        s.append(&gas_price);
+        s.append(&gas_limit);
+        s.append(&to);
+        s.append(&value);
+        s.append(&data);
+        s.append(&U256::from(chain_id));
+        s.append(&U256::zero());
+        s.append(&U256::zero());
+        s.out().to_vec()
+    }
+
+    /// Finalize legacy raw tx with signature (r,s,recid). Returns broadcastable raw tx bytes.
+    pub fn legacy_finalize_raw(
+        to: H160,
+        value: U256,
+        data: &[u8],
+        gas_limit: U256,
+        gas_price: U256,
+        nonce: U256,
+        chain_id: u64,
+        r: U256,
+        s: U256,
+        recid: u8,
+    ) -> Vec<u8> {
+        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 => recid, _ => panic!("invalid recid"), } as u64;
+        let v = U256::from(35 + 2 * chain_id + y_parity);
+        let mut srlp = RlpStream::new();
+        srlp.begin_list(9);
+        srlp.append(&nonce);
+        srlp.append(&gas_price);
+        srlp.append(&gas_limit);
+        srlp.append(&to);
+        srlp.append(&value);
+        srlp.append(&data);
+        srlp.append(&v);
+        srlp.append(&r);
+        srlp.append(&s);
+        srlp.out().to_vec()
+    }
+
+    /// EIP-1559 preimage bytes: 0x02 || RLP([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList])
+    pub fn eip1559_preimage_bytes(
+        to: H160,
+        value: U256,
+        data: &[u8],
+        gas_limit: U256,
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        nonce: U256,
+        chain_id: u64,
+    ) -> Vec<u8> {
+        let mut s = RlpStream::new();
+        s.begin_list(9);
+        s.append(&U256::from(chain_id));
+        s.append(&nonce);
+        s.append(&max_priority_fee_per_gas);
+        s.append(&max_fee_per_gas);
+        s.append(&gas_limit);
+        s.append(&to);
+        s.append(&value);
+        s.append(&data);
+    let empty_access: [Vec<u8>; 0] = [];
+    s.append_list::<Vec<u8>, Vec<u8>>(&empty_access); // empty access list -> 0xc0
+        let mut out = vec![0x02];
+        out.extend(s.out());
+        out
+    }
+
+    /// Finalize an EIP-1559 transaction: 0x02 || RLP(12-field list including y_parity, r, s)
+    pub fn eip1559_finalize_raw(
+        to: H160,
+        value: U256,
+        data: &[u8],
+        gas_limit: U256,
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        nonce: U256,
+        chain_id: u64,
+        r: U256,
+        s: U256,
+        recid: u8,
+    ) -> Vec<u8> {
+        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 => recid, _ => panic!("invalid recid"), } as u64;
+        let mut srlp = RlpStream::new();
+        srlp.begin_list(12);
+        srlp.append(&U256::from(chain_id));
+        srlp.append(&nonce);
+        srlp.append(&max_priority_fee_per_gas);
+        srlp.append(&max_fee_per_gas);
+        srlp.append(&gas_limit);
+        srlp.append(&to);
+        srlp.append(&value);
+        srlp.append(&data);
+    let empty_access: [Vec<u8>; 0] = [];
+    srlp.append_list::<Vec<u8>, Vec<u8>>(&empty_access); // access list
+        srlp.append(&U256::from(y_parity));
+        srlp.append(&r);
+        srlp.append(&s);
+        let mut raw = vec![0x02];
+        raw.extend(srlp.out());
+        raw
     }
     
     /// Parse Ethereum address from string

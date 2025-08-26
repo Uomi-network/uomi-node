@@ -1183,104 +1183,60 @@ pub mod pallet {
         // Check pending transactions every block for real-time monitoring
         Self::check_pending_transactions_offchain().ok();
 
-        // Check for new validators every 10 blocks
-        if n % 10u32.into() != 0u32.into() {
-            return;
-        }
-
-        // Get current validators from session pallet
-        let current_validators = pallet_session::Validators::<T>::get();
-        // Check if there are any new validators that need IDs
-        let mut new_validators = Vec::new();
-        for validator in current_validators.iter() {
-            if !ValidatorIds::<T>::contains_key(validator) {
-                new_validators.push(validator.clone());
+        // We still only run heavier logic every 10 blocks, but OPOC processing must not depend on validator changes.
+        if n % 10u32.into() == 0u32.into() {
+            // Update validators if there are new ones
+            let current_validators = pallet_session::Validators::<T>::get();
+            let mut new_validators = Vec::new();
+            for validator in current_validators.iter() {
+                if !ValidatorIds::<T>::contains_key(validator) {
+                    new_validators.push(validator.clone());
+                }
             }
-        }
-
-        if !new_validators.is_empty() {
-            let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
-
-            if !signer.can_sign() {
-                log::error!("TSS: No accounts available to sign update_validators");
-                return;
+            if !new_validators.is_empty() {
+                let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+                if signer.can_sign() {
+                    let all_validators = current_validators;
+                    let _ = signer.send_unsigned_transaction(
+                        |acct| UpdateValidatorsPayload::<T> { validators: all_validators.clone(), public: acct.public.clone() },
+                        |payload, signature| Call::update_validators { payload, signature },
+                    );
+                } else {
+                    log::error!("TSS: No accounts available to sign update_validators");
+                }
             }
 
-            // Include both existing and new validators in the update
-            let all_validators = current_validators;
-
-            // Send unsigned transaction with signed payload
-            let _ = signer.send_unsigned_transaction(
-                |acct| UpdateValidatorsPayload::<T> {
-                    validators: all_validators.clone(),
-                    public: acct.public.clone(),
-                },
-                |payload, signature| Call::update_validators { payload, signature },
-            );
-
-
-
-            // Process OPOC requests
+            // Always attempt to process OPOC requests on the cadence
             match Self::process_opoc_requests() {
-                Ok((requests, _last_request_id)) => {
-                    // loop the requests and invoke a transaction for each. THe function to call is create_signing_session
-                    for (request_id, request) in requests {
+                Ok((requests, last_id)) => {
+                    // Persist last processed request id to avoid re-processing
+                    LastOpocRequestId::<T>::put(last_id);
+                    for (request_id, (nft_id_u256, chain_id, tx_bytes)) in requests {
                         let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
                         if !signer.can_sign() {
                             log::error!("TSS: No accounts available to sign create_signing_session");
-                            return; 
+                            break; 
                         }
-
-                        // Store FSA transaction request data for later use
-                        // Convert U256 request_id to NftId for storage
-                        let nft_id_bytes: Vec<u8> = request_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+                        // Use the authoritative nft_id from Outputs, not derived from request_id
+                        let nft_id_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
                         if let Ok(nft_id) = BoundedVec::try_from(nft_id_bytes) {
-                            // Parse the request data to extract actual chain_id and transaction data
-                            // Try to use the FSA processing function to parse and extract chain_id and data
-                            match Self::process_single_request(request_id.saturated_into()) {
-                                Ok(Some((chain_id, tx_data))) => {
-                                    // Successfully parsed FSA request with proper chain_id and transaction data
-                                    if let Ok(bounded_data) = BoundedVec::try_from(tx_data) {
-                                        FsaTransactionRequests::<T>::insert(&nft_id, (chain_id, bounded_data));
-                                        log::info!("TSS: Stored parsed FSA transaction request for chain {} and NFT ID: {:?}", chain_id, nft_id);
-                                    }
-                                },
-                                _ => {
-                                    // Fallback: if parsing fails, treat the entire request.1 as transaction data with chain_id from request.0
-                                    if let Ok(bounded_data) = BoundedVec::try_from(request.1.clone()) {
-                                        FsaTransactionRequests::<T>::insert(&nft_id, (request.0, bounded_data));
-                                        log::info!("TSS: Stored raw FSA transaction request for chain {} and NFT ID: {:?}", request.0, nft_id);
-                                    }
-                                }
+                            if let Ok(bounded_data) = BoundedVec::try_from(tx_bytes.clone()) {
+                                FsaTransactionRequests::<T>::insert(&nft_id, (chain_id, bounded_data));
+                                log::info!("TSS: Stored FSA transaction request for chain {} and NFT ID: {:?}", chain_id, nft_id);
                             }
                         }
-
-                        // Convert Vec<u8> to BoundedVec<u8, MaxMessageSize>
-                        let message = match BoundedVec::try_from(request.1) {
-                            Ok(msg) => msg,
-                            Err(_) => {
-                                log::error!("TSS: Failed to convert message to BoundedVec");
-                                continue;
-                            }
-                        };
-
+                        let message = match BoundedVec::try_from(tx_bytes) { Ok(m) => m, Err(_) => { log::error!("TSS: Failed to convert tx bytes to BoundedVec"); continue; } };
                         let _ = signer.send_unsigned_transaction(
-                            |acct| CreateSigningSessionPayload::<T> {
-                                nft_id: request_id,
-                                message: message.clone(),
-                                public: acct.public.clone(),
-                            },
+                            |acct| CreateSigningSessionPayload::<T> { nft_id: nft_id_u256, message: message.clone(), public: acct.public.clone() },
                             |payload, signature| Call::create_signing_session_unsigned { payload, signature },
                         );
-
                     }
                 }
                 Err(e) => {
-                    log::error!("TSS: Failed to process OPOC requests: {:?}", e);
+                    // Still persist a zero update if appropriate to prevent tight looping on errors? We skip.
+                    log::debug!("TSS: No OPOC requests processed this interval: {:?}", e);
                 }
             }
-        
-
         }
 
         // Rest of your existing offchain worker logic
@@ -1469,7 +1425,7 @@ impl<T: Config> Pallet<T> {
         
         // For now, we support Ethereum-compatible chains
         match chain_id {
-            1 | 56 | 137 | 43114 | 42161 | 10 | 250 => {
+            1 | 56 | 137 | 43114 | 42161 | 10 | 250 | 4386 => {
                 TransactionBuilder::build_ethereum_transaction(
                     to, value, data, gas_limit, gas_price, nonce, chain_id
                 ).map_err(|_| "Failed to build transaction")
@@ -1695,11 +1651,84 @@ impl<T: Config> Pallet<T> {
         tx_data: &[u8],
         signature: &crate::types::Signature,
     ) -> Option<BoundedVec<u8, crate::types::MaxTxHashSize>> {
-        // Combine transaction data with signature to create final signed transaction
-        let mut signed_transaction = tx_data.to_vec();
-        signed_transaction.extend_from_slice(signature);
+        use crate::multichain::TransactionBuilder;
+        use ethereum_types::U256;
+        // Expect 65-byte secp256k1 signature: r(32)||s(32)||recid(1)
+        let sig_bytes = signature.as_slice();
+        if sig_bytes.len() != 65 { 
+            log::error!("[FSA] Invalid signature length {} for session {}", sig_bytes.len(), session_id);
+            return None; 
+        }
+        let r = &sig_bytes[0..32];
+        let s = &sig_bytes[32..64];
+        let recid = sig_bytes[64];
 
-        // Submit via FSA module
+        // Helper to convert big-endian 32 bytes into U256 minimal quantity
+        let be32_to_u256 = |bytes: &[u8]| -> U256 { U256::from_big_endian(bytes) };
+        let r_u = be32_to_u256(r);
+        let s_u = be32_to_u256(s);
+
+        // Detect transaction type (legacy preimage vs EIP-1559 preimage) and finalize
+        let signed_transaction: Vec<u8> = if tx_data.first() == Some(&0x02) {
+            // EIP-1559 preimage: 0x02 || RLP(9 items)
+            // We must decode fields to reconstruct finalize. Simpler: parse with rlp::Rlp
+            let rlp_slice = &tx_data[1..];
+            let rlp = rlp::Rlp::new(rlp_slice);
+            if !rlp.is_list() || rlp.item_count().unwrap_or(0) != 9 {
+                log::error!("[FSA] Invalid EIP-1559 preimage structure for session {}", session_id);
+                return None;
+            }
+            let chain_id_rlp: U256 = rlp.val_at(0).unwrap_or_else(|_| U256::from(chain_id));
+            let nonce: U256 = rlp.val_at(1).unwrap_or_else(|_| U256::zero());
+            let max_priority: U256 = rlp.val_at(2).unwrap_or_else(|_| U256::zero());
+            let max_fee: U256 = rlp.val_at(3).unwrap_or_else(|_| U256::zero());
+            let gas_limit: U256 = rlp.val_at(4).unwrap_or_else(|_| U256::zero());
+            let to: ethereum_types::H160 = rlp.val_at(5).unwrap_or_else(|_| ethereum_types::H160::zero());
+            let value: U256 = rlp.val_at(6).unwrap_or_else(|_| U256::zero());
+            let data_bytes: Vec<u8> = rlp.val_at(7).unwrap_or_default();
+            // access list at index 8 ignored (must be empty list per current builder)
+            TransactionBuilder::eip1559_finalize_raw(
+                to,
+                value,
+                &data_bytes,
+                gas_limit,
+                max_fee,
+                max_priority,
+                nonce,
+                chain_id_rlp.as_u64(),
+                r_u,
+                s_u,
+                recid,
+            )
+        } else {
+            // Legacy preimage RLP expected with 9 items where last two are zero
+            let rlp = rlp::Rlp::new(tx_data);
+            if !rlp.is_list() || rlp.item_count().unwrap_or(0) != 9 {
+                log::error!("[FSA] Invalid legacy preimage structure for session {}", session_id);
+                return None;
+            }
+            let nonce: U256 = rlp.val_at(0).unwrap_or_else(|_| U256::zero());
+            let gas_price: U256 = rlp.val_at(1).unwrap_or_else(|_| U256::zero());
+            let gas_limit: U256 = rlp.val_at(2).unwrap_or_else(|_| U256::zero());
+            let to: ethereum_types::H160 = rlp.val_at(3).unwrap_or_else(|_| ethereum_types::H160::zero());
+            let value: U256 = rlp.val_at(4).unwrap_or_else(|_| U256::zero());
+            let data_bytes: Vec<u8> = rlp.val_at(5).unwrap_or_default();
+            let chain_id_rlp: U256 = rlp.val_at(6).unwrap_or_else(|_| U256::from(chain_id));
+            TransactionBuilder::legacy_finalize_raw(
+                to,
+                value,
+                &data_bytes,
+                gas_limit,
+                gas_price,
+                nonce,
+                chain_id_rlp.as_u64(),
+                r_u,
+                s_u,
+                recid,
+            )
+        };
+
+        // Submit via FSA module using finalized raw tx
         match crate::fsa::submit_transaction_to_chain(chain_id, &signed_transaction) {
             Ok(response) => {
                 match response.tx_hash {

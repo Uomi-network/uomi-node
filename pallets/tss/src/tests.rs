@@ -1623,4 +1623,329 @@ mod tests {
             );
         });
     }
+
+    // --- Tests for build_chain_transaction ---
+
+    #[test]
+    fn build_chain_transaction_success() {
+        new_test_ext().execute_with(|| {
+            // Arrange
+            let chain_id = 1; // Ethereum
+            let to = "0x1111111111111111111111111111111111111111"; // 20 bytes
+            let value: u64 = 1000;
+            let data: [u8; 2] = [0x12, 0x34];
+            let gas_limit: u64 = 21_000;
+            let gas_price: u64 = 1_000_000_000; // 1 gwei
+            let nonce: u64 = 0;
+
+            // Act
+            let encoded = TestingPallet::build_chain_transaction(
+                chain_id,
+                to,
+                value,
+                &data,
+                gas_limit,
+                gas_price,
+                nonce,
+            )
+            .expect("should build tx");
+
+            // Assert basic properties via RLP decoding
+            let rlp = rlp::Rlp::new(&encoded);
+            assert!(rlp.is_list());
+            assert_eq!(rlp.item_count().unwrap(), 9, "EIP-155 legacy tx should have 9 fields");
+            // nonce
+            assert_eq!(rlp.val_at::<u64>(0).unwrap(), nonce);
+            assert_eq!(rlp.val_at::<u64>(1).unwrap(), gas_price);
+            assert_eq!(rlp.val_at::<u64>(2).unwrap(), gas_limit);
+            let to_bytes: Vec<u8> = rlp.val_at(3).unwrap();
+            assert_eq!(to_bytes.len(), 20);
+            assert_eq!(hex::encode(&to_bytes), &to[2..]);
+            assert_eq!(rlp.val_at::<u64>(4).unwrap(), value);
+            let data_bytes: Vec<u8> = rlp.val_at(5).unwrap();
+            assert_eq!(data_bytes, data);
+            assert_eq!(rlp.val_at::<u64>(6).unwrap(), chain_id as u64);
+            assert_eq!(rlp.val_at::<u8>(7).unwrap(), 0u8);
+            assert_eq!(rlp.val_at::<u8>(8).unwrap(), 0u8);
+        });
+    }
+
+    #[test]
+    fn build_chain_transaction_unsupported_chain() {
+        new_test_ext().execute_with(|| {
+            // Chain ID not recognized at all
+            let res = TestingPallet::build_chain_transaction(
+                999_999,
+                "0x1111111111111111111111111111111111111111",
+                0,
+                &[],
+                21_000,
+                1_000_000_000,
+                0,
+            );
+            assert_eq!(res, Err("Unsupported chain ID"));
+        });
+    }
+
+    #[test]
+    fn build_chain_transaction_invalid_address() {
+        new_test_ext().execute_with(|| {
+            // Invalid address (too short)
+            let res = TestingPallet::build_chain_transaction(
+                1,
+                "0x1234",
+                0,
+                &[],
+                21_000,
+                1_000_000_000,
+                0,
+            );
+            assert_eq!(res, Err("Failed to build transaction"));
+        });
+    }
+    #[test]
+    fn build_actual_chain_transaction() {
+        new_test_ext().execute_with(|| {
+            let res = TestingPallet::build_chain_transaction(
+                4386,
+                "0x000000000000000000000000000000000000dead",
+                10000000000000000,
+                &[],
+                21_000,
+                30_000_000_000,
+                0,
+            );
+            assert_eq!(res.is_ok(), true);
+        });
+    }
+
+    // --- Additional tests for legacy/eip1559 helpers ---
+    #[test]
+    fn legacy_preimage_and_finalize_roundtrip() {
+        use crate::multichain::TransactionBuilder;
+        use ethereum_types::{H160, U256};
+        let to = H160::from_low_u64_be(0xdeadbeefu64);
+        let value = U256::from(1234u64);
+        let data: Vec<u8> = vec![0x12, 0x34];
+        let gas_limit = U256::from(21_000u64);
+        let gas_price = U256::from(50_000_000_000u64);
+        let nonce = U256::from(7u64);
+        let chain_id = 1u64;
+        let preimage = TransactionBuilder::legacy_preimage_rlp(
+            to, value, &data, gas_limit, gas_price, nonce, chain_id,
+        );
+        // Ensure list length 9
+        let rlp_pre = rlp::Rlp::new(&preimage);
+        assert_eq!(rlp_pre.item_count().unwrap(), 9);
+        // Finalize
+        let r = U256::from(0x10u64);
+        let s = U256::from(0x20u64);
+        let recid = 1u8;
+        let raw = TransactionBuilder::legacy_finalize_raw(
+            to, value, &data, gas_limit, gas_price, nonce, chain_id, r, s, recid,
+        );
+        let rlp_raw = rlp::Rlp::new(&raw);
+        assert_eq!(rlp_raw.item_count().unwrap(), 9);
+        let v: U256 = rlp_raw.val_at(6).unwrap();
+        assert_eq!(v, U256::from(35 + 2 * chain_id + 1));
+        assert_ne!(preimage, raw, "preimage must differ from finalized raw tx");
+    }
+
+    #[test]
+    fn eip1559_preimage_and_finalize_roundtrip() {
+        use crate::multichain::TransactionBuilder;
+        use ethereum_types::{H160, U256};
+        let to = H160::from_low_u64_be(0xabcdefu64);
+        let value = U256::from(1_000_000u64);
+        let data: Vec<u8> = vec![];
+        let gas_limit = U256::from(21000u64);
+        let max_fee = U256::from(30_000_000_000u64);
+        let max_priority = U256::from(1_500_000_000u64);
+        let nonce = U256::from(5u64);
+        let chain_id = 1u64;
+        let preimage = TransactionBuilder::eip1559_preimage_bytes(
+            to, value, &data, gas_limit, max_fee, max_priority, nonce, chain_id,
+        );
+        assert_eq!(preimage[0], 0x02); // type prefix
+        let rlp_pre = rlp::Rlp::new(&preimage[1..]);
+        assert_eq!(rlp_pre.item_count().unwrap(), 9);
+        // Finalize
+        let r = U256::from(0x55u64);
+        let s = U256::from(0x66u64);
+        let recid = 0u8;
+        let raw = TransactionBuilder::eip1559_finalize_raw(
+            to, value, &data, gas_limit, max_fee, max_priority, nonce, chain_id, r, s, recid,
+        );
+        assert_eq!(raw[0], 0x02);
+        let rlp_raw = rlp::Rlp::new(&raw[1..]);
+        assert_eq!(rlp_raw.item_count().unwrap(), 12);
+        let y_parity: U256 = rlp_raw.val_at(9).unwrap();
+        assert_eq!(y_parity, U256::zero());
+        assert_ne!(preimage, raw, "preimage must differ from finalized raw tx");
+    }
+
+    // --- Structured action -> preimage construction tests ---
+
+    #[test]
+    fn structured_legacy_action_builds_expected_preimage() {
+        use pallet_uomi_engine::Outputs as EngineOutputs; // storage alias
+        use crate::multichain::TransactionBuilder;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let request_id = U256::from(1u8);
+            let nft_id = U256::from(9u8);
+            let chain_id = 1u32;
+            let to = "0x1111111111111111111111111111111111111111";
+            // Build JSON output with structured action (legacy)
+            let json = format!(
+                "{{\"actions\":[{{\"action_type\":\"transaction\",\"_trigger_policy\":\"\",\"data\":\"0x\",\"chain_id\":{},\"to\":\"{}\",\"value\":\"0x3e8\",\"gas_limit\":\"21000\",\"gas_price\":\"0x3b9aca00\",\"nonce\":\"0x0\",\"tx_type\":\"legacy\"}}],\"_response\":\"ok\"}}",
+                chain_id, to
+            );
+            let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
+            EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
+
+            // Process single request
+            let res = TestingPallet::process_single_request(1).expect("processing ok");
+            let (_nft, maybe) = res.unwrap();
+            assert_eq!(maybe.0, chain_id);
+            let produced = maybe.1;
+
+            // Build expected preimage directly
+            let expected = TransactionBuilder::build_ethereum_transaction(
+                to,
+                1000u64,
+                &[],
+                21_000u64,
+                1_000_000_000u64,
+                0u64,
+                chain_id,
+            ).unwrap();
+            assert_eq!(produced, expected, "constructed preimage should match builder output");
+        });
+    }
+
+    #[test]
+    fn structured_eip1559_action_builds_expected_preimage() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use crate::multichain::TransactionBuilder;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let request_id = U256::from(2u8);
+            let nft_id = U256::from(10u8);
+            let chain_id = 1u32;
+            let to = "0x2222222222222222222222222222222222222222";
+            let json = format!(
+                "{{\"actions\":[{{\"action_type\":\"multi_chain_transaction\",\"_trigger_policy\":\"\",\"data\":\"0x\",\"chain_id\":{},\"to\":\"{}\",\"value\":\"0x0\",\"gas_limit\":\"21000\",\"tx_type\":\"eip1559\",\"max_fee_per_gas\":\"0x77359400\",\"max_priority_fee_per_gas\":\"0x3b9aca00\",\"nonce\":\"0x1\"}}],\"_response\":\"ok\"}}",
+                chain_id, to
+            );
+            let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
+            EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
+
+            let res = TestingPallet::process_single_request(2).expect("processing ok");
+            let (_nft, maybe) = res.unwrap();
+            assert_eq!(maybe.0, chain_id);
+            let produced = maybe.1;
+
+            let expected = TransactionBuilder::build_eip1559_transaction(
+                to,
+                0u64,
+                &[],
+                21_000u64,
+                2_000_000_000u64,      // 0x77359400 = 2 gwei
+                1_000_000_000u64,      // priority fee 1 gwei
+                1u64,
+                chain_id,
+            ).unwrap();
+            assert_eq!(produced, expected, "EIP-1559 preimage mismatch");
+            assert_eq!(produced[0], 0x02, "must have type prefix 0x02");
+        });
+    }
+
+    #[test]
+    fn structured_action_fallback_on_invalid_address() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let request_id = U256::from(3u8);
+            let nft_id = U256::from(11u8);
+            let chain_id = 1u32;
+            // Invalid 'to' (too short) should trigger fallback to raw data bytes (empty in this case)
+            let json = format!(
+                "{{\"actions\":[{{\"action_type\":\"transaction\",\"_trigger_policy\":\"\",\"data\":\"0x010203\",\"chain_id\":{},\"to\":\"0x1234\",\"value\":\"0x0\",\"gas_limit\":\"21000\",\"gas_price\":\"0x3b9aca00\",\"nonce\":\"0x0\"}}],\"_response\":\"ok\"}}",
+                chain_id
+            );
+            let raw_vec = vec![1u8,2u8,3u8];
+            let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
+            EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
+            let res = TestingPallet::process_single_request(3).expect("processing ok");
+            let (_nft, maybe) = res.unwrap();
+            assert_eq!(maybe.0, chain_id);
+            assert_eq!(maybe.1, raw_vec, "Should fallback to provided raw data when address invalid");
+        });
+    }
+
+    #[test]
+    fn structured_eip1559_default_data_action_builds_expected_preimage() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use crate::multichain::TransactionBuilder;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let request_id = U256::from(2u8);
+            let nft_id = U256::from(10u8);
+            let chain_id = 4386u32;
+            let to = "0x000000000000000000000000000000000000dead";
+            let json = format!(
+                "{{\"actions\":[{{\"action_type\":\"multi_chain_transaction\",\"data\":\"0x\",\"chain_id\":{},\"to\":\"{}\",\"value\":\"0x0\"}}],\"response\":\"ok\"}}",
+                chain_id, to
+            );
+
+
+            println!("json: {}", json);
+
+            let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
+            EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
+
+            let res = TestingPallet::process_single_request(2).expect("processing ok");
+            let (_nft, maybe) = res.unwrap();
+            assert_eq!(maybe.0, chain_id);
+            let produced = maybe.1;
+
+            let expected = TransactionBuilder::build_eip1559_transaction(
+                to,
+                0u64,
+                &[],
+                21_000u64,
+                1_000_000_000,      // 0x77359400 = 2 gwei
+                1_000_000_000u64,      // priority fee 1 gwei
+                0u64,
+                chain_id,
+            ).unwrap();
+            assert_eq!(produced, expected, "EIP-1559 preimage mismatch");
+            assert_eq!(produced[0], 0x02, "must have type prefix 0x02");
+        });
+    }
+
+    #[test]
+    fn structured_action_malformed_hex_data_graceful_fallback() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let request_id = U256::from(50u8);
+            let nft_id = U256::from(77u8);
+            let chain_id = 1u32;
+            // Malformed hex: odd length + invalid 'g' character
+            let json = format!(
+                "{{\"actions\":[{{\"action_type\":\"transaction\",\"data\":\"0x1g2\",\"chain_id\":{},\"to\":\"0x1111111111111111111111111111111111111111\",\"value\":\"0x0\"}}]}}",
+                chain_id
+            );
+            let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
+            EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
+            let res = TestingPallet::process_single_request(50).expect("processing ok");
+            let (_nft, maybe) = res.unwrap();
+            assert_eq!(maybe.0, chain_id);
+            // Malformed hex should decode to empty vec (log warning) then used as raw data or for tx build failure fallback.
+            // Address is valid so builder tries; since data empty allowed, preimage should not be empty length 0 but a valid preimage (legacy default)
+            assert!(!maybe.1.is_empty(), "Should have produced a preimage despite malformed data hex (decoded to empty)");
+        });
+    }
 }
