@@ -577,6 +577,14 @@ pub mod pallet {
         nft_id: NftId,
         message: BoundedVec<u8, MaxMessageSize>,
     ) -> DispatchResult {
+        // Prevent duplicate signing sessions for same nft_id + message while one is still in progress
+        for (_sid, existing) in SigningSessions::<T>::iter() {
+            if existing.nft_id == nft_id && existing.message == message && matches!(existing.state, SessionState::SigningInProgress) {
+                // Simply return Ok without creating a new session
+                log::debug!("[TSS] Skipping duplicate signing session request (already in progress)");
+                return Ok(());
+            }
+        }
         // Find the DKG session with this NFT ID
         let mut dkg_session_id = None;
         for (id, session) in DkgSessions::<T>::iter() {
@@ -630,6 +638,12 @@ pub mod pallet {
         let nft_id_bytes: Vec<u8> = payload.nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
         let nft_id = BoundedVec::try_from(nft_id_bytes)
             .map_err(|_| Error::<T>::DecodingError)?;
+
+        // Store FSA transaction request (chain_id + message bytes) if not already stored or to refresh
+        if !FsaTransactionRequests::<T>::contains_key(&nft_id) {
+            FsaTransactionRequests::<T>::insert(&nft_id, (payload.chain_id, payload.message.clone()));
+            log::info!("[TSS] Stored FSA transaction request in unsigned call for chain {}", payload.chain_id);
+        }
 
         Self::create_signing_session(
             frame_system::RawOrigin::None.into(),
@@ -1218,16 +1232,22 @@ pub mod pallet {
                             break; 
                         }
                         // Use the authoritative nft_id from Outputs, not derived from request_id
-                        let nft_id_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
-                        if let Ok(nft_id) = BoundedVec::try_from(nft_id_bytes) {
-                            if let Ok(bounded_data) = BoundedVec::try_from(tx_bytes.clone()) {
-                                FsaTransactionRequests::<T>::insert(&nft_id, (chain_id, bounded_data));
-                                log::info!("TSS: Stored FSA transaction request for chain {} and NFT ID: {:?}", chain_id, nft_id);
+                        let message = match BoundedVec::try_from(tx_bytes) { Ok(m) => m, Err(_) => { log::error!("TSS: Failed to convert tx bytes to BoundedVec"); continue; } };
+                        // Before submitting unsigned tx, check if a signing session already exists for this nft/message combo
+                        let mut duplicate = false;
+                        if let Ok(nft_id_check_bytes) = NftId::try_from(nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect::<Vec<u8>>()) {
+                            for (_sid, existing) in SigningSessions::<T>::iter() {
+                                if existing.nft_id == nft_id_check_bytes && existing.message == message && matches!(existing.state, SessionState::SigningInProgress) {
+                                    duplicate = true; break;
+                                }
                             }
                         }
-                        let message = match BoundedVec::try_from(tx_bytes) { Ok(m) => m, Err(_) => { log::error!("TSS: Failed to convert tx bytes to BoundedVec"); continue; } };
+                        if duplicate { 
+                            log::debug!("[TSS] Skipping unsigned create_signing_session because one already exists for this nft/message");
+                            continue; 
+                        }
                         let _ = signer.send_unsigned_transaction(
-                            |acct| CreateSigningSessionPayload::<T> { nft_id: nft_id_u256, message: message.clone(), public: acct.public.clone() },
+                            |acct| CreateSigningSessionPayload::<T> { nft_id: nft_id_u256, chain_id, message: message.clone(), public: acct.public.clone() },
                             |payload, signature| Call::create_signing_session_unsigned { payload, signature },
                         );
                     }

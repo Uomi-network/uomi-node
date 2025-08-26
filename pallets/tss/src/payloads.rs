@@ -25,6 +25,8 @@ pub struct ReportParticipantsPayload<T: crate::Config> {
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct CreateSigningSessionPayload<T: crate::Config> {
     pub nft_id: sp_core::U256,
+    // Target chain for which the signing (transaction) is requested
+    pub chain_id: u32,
     pub message: BoundedVec<u8, MaxMessageSize>,
     pub public: T::Public,
 }
