@@ -126,11 +126,17 @@ impl<T: Config> crate::pallet::Pallet<T> {
             .collect::<String>();
 
         // Parse the output using miniserde
-        let parsed_output = miniserde::json::from_str::<Output>(&output_string)
-            .map_err(|_| ProcessingError::ParseError(request_id))?;
+        let output = match miniserde::json::from_str::<Output>(&output_string) {
+            Ok(o) => o,
+            Err(_) => {
+                // Parsing failures are non-fatal for an individual request; we just skip it.
+                log::warn!("Failed to parse output for request ID {}", request_id);
+                return Ok(None);
+            }
+        };
 
-        // Process all actions in the output
-        for action in parsed_output.actions {
+        // Process all actions in the successfully parsed output
+        for action in output.actions {
             log::info!("Processing action: {:?}", action);
 
             if let Some(data) = handle_action(&action)? {
@@ -157,11 +163,16 @@ fn handle_action(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingEr
 fn parse_num_u64(label: &str, v: &str) -> Option<u64> {
     let s = v.trim();
     if s.is_empty() { return None; }
-    let parsed = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).ok()
-    } else { s.parse::<u64>().ok() };
-    if parsed.is_none() { log::warn!("Failed to parse {} value '{}'", label, v); }
-    parsed
+    let (radix, digits) = if let Some(stripped) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (16, stripped)
+    } else { (10, s) };
+    match u64::from_str_radix(digits, radix) {
+        Ok(n) => Some(n),
+        Err(_) => {
+            log::warn!("Failed to parse {} value '{}'", label, v);
+            None
+        }
+    }
 }
 
 fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
