@@ -388,7 +388,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     }
 
     fn add_and_initialize_signing_session(&self, signing_id: SessionId, dkg_id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, coordinator: [u8; 32], message: Vec<u8>) -> Result<(), String> {
-        if !self.session_exists(signing_id) {
+        if !self.session_exists(&signing_id) {
             self.add_session_data(signing_id, t, n, coordinator, participants.clone(), message.clone())
                 .map_err(|e| format!("Failed to add data: {:?}", e))?;
         }
