@@ -408,7 +408,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             map.insert(signing_id, dkg_id);
         }
 
-        self.signing_handle_session_created(signing_id, participants.clone(), coordinator.clone());
+        // self.signing_handle_session_created(signing_id, participants.clone(), coordinator.clone());
     
         log::info!("[TSS] Successfully initialized FROST Signing session {}", signing_id);
 
