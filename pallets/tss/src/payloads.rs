@@ -32,6 +32,12 @@ pub struct CreateSigningSessionPayload<T: crate::Config> {
 }
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub struct UpdateLastOpocRequestIdPayload<T: crate::Config> {
+    pub last_request_id: sp_core::U256,
+    pub public: T::Public,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct ReportParticipantsCountPayload<T: crate::Config> {
     pub session_id: SessionId,
     pub public: T::Public,
@@ -99,4 +105,8 @@ impl<T: SigningTypes + crate::Config> SignedPayload<T> for CreateSigningSessionP
     fn public(&self) -> T::Public {
         self.public.clone()
     }
+}
+
+impl<T: SigningTypes + crate::Config> SignedPayload<T> for UpdateLastOpocRequestIdPayload<T> {
+    fn public(&self) -> T::Public { self.public.clone() }
 }

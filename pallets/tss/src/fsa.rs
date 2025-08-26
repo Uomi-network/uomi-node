@@ -1,6 +1,7 @@
 use sp_std::collections::btree_map::BTreeMap;
 use sp_std::prelude::*;
 use sp_std::vec::Vec;
+use sp_core::U256;
 use scale_info::prelude::string::String;
 use crate::{Config, LastOpocRequestId};
 use crate::multichain::MultiChainRpcClient;
@@ -14,7 +15,7 @@ pub enum ProcessingError {
     /// No requests to sign were found
     NoRequestsFound,
     /// Failed to parse output for a specific request ID
-    ParseError(u32),
+    ParseError(U256),
     /// Invalid action type
     UnsupportedActionType(&'static str),
     /// Multi-chain transaction error
@@ -66,57 +67,42 @@ pub struct Output {
 impl<T: Config> crate::pallet::Pallet<T> {
     /// Process OPOC (Off-chain Processing Output Consumer) requests
     /// Fetches and processes outputs from pallet_uomi_engine starting from the last processed request ID
-    /// Returns a tuple of (requests_to_sign, last_processed_request_id) for on-chain processing
-    pub fn process_opoc_requests() -> Result<(BTreeMap<sp_core::U256, (sp_core::U256, u32, Vec<u8>)>, u32), &'static str> {
-        // Get the last opoc request id we handled in the previous block
+    /// Returns a tuple of (requests_to_sign, last_processed_request_id as U256) for offchain processing
+    pub fn process_opoc_requests() -> Result<(BTreeMap<U256, (U256, u32, Vec<u8>)>, U256), &'static str> {
         let last_opoc_request_id = LastOpocRequestId::<T>::get();
-    // Map request_id -> (nft_id, chain_id, tx_data)
-    let mut requests_to_sign = BTreeMap::<sp_core::U256, (sp_core::U256, u32, Vec<u8>)>::new();
-        let mut last_processed_id = last_opoc_request_id;
+        let mut requests_to_sign = BTreeMap::<U256, (U256, u32, Vec<u8>)>::new();
+        let mut current = last_opoc_request_id.saturating_add(U256::one());
+        let mut last_processed = last_opoc_request_id;
 
-        // Only process if we have a valid starting point
-        if last_opoc_request_id == 0 {
-            log::info!("No previous OPOC request ID found, starting from ID 1");
-        }
+        if last_opoc_request_id.is_zero() { log::info!("No previous OPOC request ID found, starting from ID 1"); }
 
-        // Process up to 10 requests per block to avoid overwhelming the system
-        let start_request_id = last_opoc_request_id + 1;
-        let max_request_id = start_request_id + 9; // Process 10 requests max
-
-        for request_id in start_request_id..=max_request_id {
-            match Self::process_single_request(request_id) {
+        for _ in 0..10u8 { // process at most 10 per cycle
+            match Self::process_single_request(current) {
                 Ok(Some((nft_id, data))) => {
-                    requests_to_sign.insert(sp_core::U256::from(request_id), (nft_id, data.0, data.1));
-                    last_processed_id = request_id;
+                    requests_to_sign.insert(current, (nft_id, data.0, data.1));
+                    last_processed = current;
                 }
                 Ok(None) => {
-                    // No action needed for this request, but still track the processed ID
-                    last_processed_id = request_id;
+                    // Treat as processed even if no actionable action
+                    last_processed = current;
                 }
                 Err(e) => {
-                    log::warn!("Failed to process request ID {}: {:?}", request_id, e);
-                    // Stop processing on error, don't update the processed ID
-                    break;
+                    log::warn!("Failed to process request ID {:?}: {:?}", current, e);
+                    break; // stop on hard error
                 }
             }
+            current = current.saturating_add(U256::one());
         }
-
-        if requests_to_sign.is_empty() {
-            log::info!("No requests to sign found, last processed ID: {}", last_processed_id);
-            return Err("No requests to sign found");
-        }
-
-        log::info!("Successfully processed {} requests to sign, last processed ID: {}", 
-                  requests_to_sign.len(), last_processed_id);
-        Ok((requests_to_sign, last_processed_id))
+        if requests_to_sign.is_empty() { return Err("No requests to sign found"); }
+        Ok((requests_to_sign, last_processed))
     }
 
     /// Process a single OPOC request
-    pub fn process_single_request(request_id: u32) -> Result<Option<(sp_core::U256, (u32, Vec<u8>))>, ProcessingError> {
-        // Fetch the output for this request ID
-    let (output, _, _, nft_id) = pallet_uomi_engine::Outputs::<T>::get(sp_core::U256::from(request_id));
-        
-        log::info!("Processing output for request ID {}", request_id);
+    pub fn process_single_request(request_id: U256) -> Result<Option<(U256, (u32, Vec<u8>))>, ProcessingError> {
+        // Fetch the output for this request ID directly using U256
+        let (output, _, _, nft_id) = pallet_uomi_engine::Outputs::<T>::get(request_id);
+
+        log::info!("Processing output for request ID {:?}", request_id);
 
         // Convert output from a bounded vec to a string
         let output_string = output
@@ -130,14 +116,14 @@ impl<T: Config> crate::pallet::Pallet<T> {
             Ok(o) => o,
             Err(_) => {
                 // Parsing failures are non-fatal for an individual request; we just skip it.
-                log::warn!("Failed to parse output for request ID {}", request_id);
+                log::warn!("Failed to parse output for request ID {:?}", request_id);
                 return Ok(None);
             }
         };
 
         // Process all actions in the successfully parsed output
         for action in output.actions {
-            log::info!("Processing action: {:?}", action);
+            log::info!("Processing action for request {:?}: {:?}", request_id, action);
 
             if let Some(data) = handle_action(&action)? {
                 return Ok(Some((nft_id, data)));

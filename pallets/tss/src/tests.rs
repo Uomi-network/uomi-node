@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    mock::*, pallet, types::{MaxNumberOfShares, NftId}, ActiveValidators, DkgSessions, Event as TssEvent, NextValidatorId, ParticipantReportCount, SessionState, SubmitDKGResultPayload, UpdateValidatorsPayload, CRYPTO_KEY_TYPE
+    mock::*, pallet, types::{MaxNumberOfShares, NftId}, ActiveValidators, DkgSessions, Event as TssEvent, LastOpocRequestId, NextValidatorId, ParticipantReportCount, SessionState, SubmitDKGResultPayload, UpdateValidatorsPayload, CRYPTO_KEY_TYPE
 };
 use frame_support::{assert_noop, assert_ok, traits::OffchainWorker};
 use sp_core::{
@@ -1805,7 +1805,7 @@ mod tests {
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
             // Process single request
-            let res = TestingPallet::process_single_request(1).expect("processing ok");
+            let res = TestingPallet::process_single_request(sp_core::U256::from(1u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             let produced = maybe.1;
@@ -1841,7 +1841,7 @@ mod tests {
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
-            let res = TestingPallet::process_single_request(2).expect("processing ok");
+            let res = TestingPallet::process_single_request(sp_core::U256::from(2u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             let produced = maybe.1;
@@ -1877,7 +1877,7 @@ mod tests {
             let raw_vec = vec![1u8,2u8,3u8];
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
-            let res = TestingPallet::process_single_request(3).expect("processing ok");
+            let res = TestingPallet::process_single_request(sp_core::U256::from(3u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             assert_eq!(maybe.1, raw_vec, "Should fallback to provided raw data when address invalid");
@@ -1905,7 +1905,7 @@ mod tests {
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
-            let res = TestingPallet::process_single_request(2).expect("processing ok");
+            let res = TestingPallet::process_single_request(sp_core::U256::from(2u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             let produced = maybe.1;
@@ -1940,12 +1940,51 @@ mod tests {
             );
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
-            let res = TestingPallet::process_single_request(50).expect("processing ok");
+            let res = TestingPallet::process_single_request(sp_core::U256::from(50u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             // Malformed hex should decode to empty vec (log warning) then used as raw data or for tx build failure fallback.
             // Address is valid so builder tries; since data empty allowed, preimage should not be empty length 0 but a valid preimage (legacy default)
             assert!(!maybe.1.is_empty(), "Should have produced a preimage despite malformed data hex (decoded to empty)");
+        });
+    }
+    #[test]
+    fn opoc_iteration_from_zero_u256() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Ensure starting point
+            LastOpocRequestId::<Test>::put(U256::zero());
+            for id in 1u8..=5u8 { 
+                let req_id = U256::from(id);
+                let nft_id = U256::from(100u64 + id as u64);
+                let json = format!("{{\"actions\":[{{\"action_type\":\"multi_chain_transaction\",\"data\":\"0x\",\"chain_id\":1}}]}}" );
+                let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.into_bytes()).unwrap();
+                EngineOutputs::<Test>::insert(req_id, (data_bv, 1u32, 1u32, nft_id));
+            }
+            let (map, last) = TestingPallet::process_opoc_requests().expect("should process");
+            assert_eq!(map.len(), 5, "Should collect five requests");
+            assert_eq!(last, U256::from(5u8));
+        });
+    }
+
+    #[test]
+    fn opoc_iteration_large_u256_boundary() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Set last id near 2^40 boundary to ensure we don't truncate
+            let start = U256::from(1u128 << 40); // large value
+            LastOpocRequestId::<Test>::put(start);
+            let next = start + U256::one();
+            let nft_id = U256::from(999u64);
+            let json = "{\"actions\":[{\"action_type\":\"multi_chain_transaction\",\"data\":\"0x\",\"chain_id\":4386}] }".to_string();
+            let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.into_bytes()).unwrap();
+            EngineOutputs::<Test>::insert(next, (data_bv, 1u32, 1u32, nft_id));
+            let (map, last) = TestingPallet::process_opoc_requests().expect("should process");
+            assert_eq!(map.len(), 1, "Should process exactly one large-id request");
+            assert!(map.contains_key(&next));
+            assert_eq!(last, next);
         });
     }
 }

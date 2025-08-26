@@ -327,7 +327,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn last_opoc_request_id)]
-    pub type LastOpocRequestId<T: Config> = StorageValue<_, u32, ValueQuery>;
+    pub type LastOpocRequestId<T: Config> = StorageValue<_, sp_core::U256, ValueQuery>;
 
     // Add storage for tracking previous validator set to detect changes
     #[pallet::storage]
@@ -645,11 +645,23 @@ pub mod pallet {
             log::info!("[TSS] Stored FSA transaction request in unsigned call for chain {}", payload.chain_id);
         }
 
-        Self::create_signing_session(
+    Self::create_signing_session(
             frame_system::RawOrigin::None.into(),
             nft_id,
             payload.message,
         )
+    }
+
+    #[pallet::weight(10_000)]
+    #[pallet::call_index(16)]
+    pub fn update_last_opoc_request_id_unsigned(
+        origin: OriginFor<T>,
+        payload: UpdateLastOpocRequestIdPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        LastOpocRequestId::<T>::put(payload.last_request_id);
+        Ok(())
     }
 
     #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
@@ -1182,6 +1194,14 @@ pub mod pallet {
                     .propagate(true)
                     .build();
             }
+            Call::update_last_opoc_request_id_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX)
+                    .and_provides(call.encode())
+                    .longevity(64)
+                    .propagate(true)
+                    .build();
+            }
 
             // Reject all other unsigned calls
             _ => {
@@ -1222,10 +1242,9 @@ pub mod pallet {
 
             // Always attempt to process OPOC requests on the cadence
             match Self::process_opoc_requests() {
-                Ok((requests, last_id)) => {
-                    // Persist last processed request id to avoid re-processing
-                    LastOpocRequestId::<T>::put(last_id);
-                    for (request_id, (nft_id_u256, chain_id, tx_bytes)) in requests {
+                Ok((requests, last_id_u256)) => {
+                    let mut max_request_id = sp_core::U256::zero();
+                    for (request_id, (nft_id_u256, chain_id, tx_bytes)) in requests.clone() {
                         let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
                         if !signer.can_sign() {
                             log::error!("TSS: No accounts available to sign create_signing_session");
@@ -1250,6 +1269,17 @@ pub mod pallet {
                             |acct| CreateSigningSessionPayload::<T> { nft_id: nft_id_u256, chain_id, message: message.clone(), public: acct.public.clone() },
                             |payload, signature| Call::create_signing_session_unsigned { payload, signature },
                         );
+                        if request_id > max_request_id { max_request_id = request_id; }
+                    }
+                    // After submitting all signing session creation extrinsics, submit a single extrinsic updating LastOpocRequestId to the highest processed id
+                    if max_request_id > sp_core::U256::zero() {
+                        let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+                        if signer.can_sign() {
+                            let _ = signer.send_unsigned_transaction(
+                                |acct| UpdateLastOpocRequestIdPayload::<T> { last_request_id: last_id_u256.max(max_request_id), public: acct.public.clone() },
+                                |payload, signature| Call::update_last_opoc_request_id_unsigned { payload, signature },
+                            );
+                        }
                     }
                 }
                 Err(e) => {
