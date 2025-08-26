@@ -6,20 +6,25 @@ This implementation adds multi-chain transaction support to the TSS (Threshold S
 ## Key Features Implemented
 
 ### 1. Multi-Chain Support
-- **Supported Networks**: Ethereum, Binance Smart Chain, Polygon, Avalanche, Arbitrum, Optimism, Fantom
-- **Ankr RPC Integration**: Pre-configured RPC endpoints for all supported chains
+- **Supported Networks**: Ethereum, Binance Smart Chain, Polygon, Avalanche, Arbitrum, Optimism, Fantom, Uomi (local chain_id 4386)
+- **Ankr RPC Integration**: Pre-configured RPC endpoints for major public chains
 - **Chain Configuration Management**: Storage and validation of chain configurations
 
 ### 2. Transaction Management
-- **Transaction Building**: Ethereum-compatible transaction construction
-- **Multi-Chain Signing**: TSS signature support across different blockchains
-- **Nonce Management**: Per-agent, per-chain nonce tracking
-- **Transaction Status Tracking**: Complete lifecycle monitoring
+- **Transaction Preimage Building**: Distinguishes clearly between the SIGNING PREIMAGE and the FINAL RAW transaction bytes.
+    - Legacy (EIP-155) preimage: RLP([nonce, gasPrice, gasLimit, to, value, data, chainId, 0, 0])
+    - EIP-1559 preimage: 0x02 || RLP([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList])
+- **Finalization**: Raw broadcastable tx is reconstructed on-chain after signature via finalize helpers (not stored in OPOC output).
+- **Structured Action Builder**: Automatically constructs the appropriate preimage (legacy or EIP-1559) from action fields.
+- **Fallback Handling**: If structured build fails (e.g. invalid address, malformed numbers) we fall back to the provided raw data bytes.
+- **Nonce Management**: Per-agent, per-chain nonce tracking (future improvement: dynamic retrieval via RPC already scaffolded).
+- **Transaction Status Tracking**: Lifecycle monitoring through `MultiChainTransactions`.
 
 ### 3. Storage Extensions
 - **MultiChainTransactions**: Maps (chain_id, tx_hash) -> transaction_status
 - **ChainConfigs**: Stores chain configurations (name, rpc_url, testnet_flag)
 - **AgentNonces**: Tracks nonces per agent per chain
+- **Outputs (engine pallet)**: Tuple expanded to `(Data, executions, consensus_round, nft_id)` to cryptographically bind produced actions to an authoritative NFT identity and prevent spoofing.
 
 ### 4. New Extrinsics (Dispatchable Functions)
 - `submit_multi_chain_transaction`: Submit signed transactions to specific chains
@@ -53,6 +58,7 @@ pub enum SupportedChain {
     Arbitrum,
     Optimism,
     Fantom,
+    Uomi,
 }
 ```
 
@@ -63,25 +69,88 @@ pub enum SupportedChain {
 - Block number retrieval
 
 #### 3. TransactionBuilder
-- Ethereum-compatible transaction construction
-- Gas limit and price handling
-- Nonce management
-- Chain-specific formatting
+Key helper functions:
+
+```rust
+// Legacy (EIP-155) preimage only
+build_ethereum_transaction(to, value, data: &[u8], gas_limit, gas_price, nonce, chain_id) -> Vec<u8>
+
+// EIP-1559 preimage only (type 0x02 + 9-field RLP list)
+build_eip1559_transaction(to, value, data: &[u8], gas_limit, max_fee, max_priority, nonce, chain_id) -> Vec<u8>
+
+// Finalization (performed after TSS signature collection)
+legacy_finalize_raw(..., r, s, recid) -> Vec<u8>
+eip1559_finalize_raw(..., r, s, recid) -> Vec<u8>
+```
+
+The builder intentionally returns PREIMAGE bytes (the exact digestable message) not a broadcastable raw tx. Finalization inserts signature components (v / y_parity, r, s) and re-encodes the transaction structure.
+
+EIP-1559 preimage includes the type byte (0x02) followed by the RLP payload to mirror metamask / ethers signing flows which hash `0x02 || rlp(list)`.
+
+## Structured Action Processing
+
+The OPOC → TSS pipeline now supports structured JSON actions that describe an EVM transaction. The pallet converts these into a signing preimage automatically.
+
+### Action Schema
+```jsonc
+{
+    "action_type": "transaction" | "multi_chain_transaction",
+    "chain_id": 1,
+    "data": "0xabcdef" ,            // Hex string (may be "0x" for empty)
+    "to": "0x........20bytes........",
+    "value": "0x3e8",               // Hex or decimal string (optional, default 0)
+    "gas_limit": "21000",           // Hex or decimal (default 21000)
+    "gas_price": "0x3b9aca00",      // Legacy only (default 1 gwei)
+    "tx_type": "legacy" | "eip1559", // Default: eip1559 if omitted
+    "max_fee_per_gas": "0x77359400", // EIP-1559 (default: legacy gas_price if absent)
+    "max_priority_fee_per_gas": "0x3b9aca00", // EIP-1559 (default 1 gwei)
+    "nonce": "0x0"                  // Optional (default 0)
+}
+```
+
+### Defaults & Fallbacks
+- Missing numeric fields → sensible defaults (gas_limit 21000, gas_price 1 gwei, priority 1 gwei, value 0, nonce 0).
+- `tx_type` omitted → treated as EIP-1559 (modern default).
+- Malformed hex in `data` (odd length or invalid chars) → logs a warning and treats data as empty.
+- Invalid `to` address or failed builder → fall back to raw decoded `data` bytes (still signed as provided).
+
+### Example (Legacy)
+```json
+{
+    "actions": [
+        {"action_type":"transaction","chain_id":1,"data":"0x","to":"0x1111111111111111111111111111111111111111","value":"0x3e8","gas_limit":"21000","gas_price":"0x3b9aca00","nonce":"0x0","tx_type":"legacy"}
+    ]
+}
+```
+
+### Example (EIP-1559)
+```json
+{
+    "actions": [
+        {"action_type":"multi_chain_transaction","chain_id":1,"data":"0x","to":"0x2222222222222222222222222222222222222222","value":"0x0","gas_limit":"21000","tx_type":"eip1559","max_fee_per_gas":"0x77359400","max_priority_fee_per_gas":"0x3b9aca00","nonce":"0x1"}
+    ]
+}
+```
+
+### Preimage vs Final Raw Tx
+1. Structured action → builder creates preimage bytes only.
+2. TSS signs keccak256(preimage) (implementation-dependent).
+3. Pallet reconstructs final raw transaction using finalize helper + signature parts before dispatching RPC submission.
 
 ## Usage Examples
 
 ### Submit a Multi-Chain Transaction
 ```rust
-// Build transaction for Ethereum (chain_id = 1)
-let tx_data = Pallet::<T>::build_chain_transaction(
+// Build LEGACY signing preimage (example only — usually produced automatically from a structured action)
+let preimage = Pallet::<T>::build_chain_transaction(
     1, // Ethereum chain ID
-    "0x742d35Cc6634C0532925a3b8D",
-    1000000000000000000, // 1 ETH in wei
+    "0x742d35Cc6634C0532925a3b8D742d35Cc6634C0532925a3b8D742d35Cc6634", // (example shortened / validate length in real usage)
+    1_000_000_000_000_000_000u64, // 1 ETH
     &[],
-    21000, // gas limit
-    20000000000, // gas price (20 gwei)
+    21_000,
+    20_000_000_000, // 20 gwei
     nonce,
-)?;
+)?; // Returns PREIMAGE bytes, not raw tx
 
 // Submit the signed transaction
 let result = Pallet::<T>::submit_multi_chain_transaction(
@@ -132,40 +201,45 @@ let chains = Pallet::<T>::get_supported_chains();
 
 ## Error Handling
 
-### New Error Types
+### Builder / Processing Errors
 - `UnsupportedChain`: Chain ID not supported
-- `TransactionSubmissionFailed`: Transaction submission failed
-- `InvalidChainConfig`: Invalid chain configuration
-- `ChainConnectionFailed`: Failed to connect to chain
-- `InvalidTransactionData`: Invalid transaction data format
-- `InsufficientGasLimit`: Gas limit too low
-- `InvalidNonce`: Nonce validation failed
+- `InvalidChainConfig`: Chain configuration invalid (id/name/url)
+- `InvalidEthereumAddress`: Address parsing failure (implicit via builder error)
+- `MalformedHexData`: Logged (not a hard error) → data treated as empty
+- `TransactionSubmissionFailed`: RPC error during broadcast
+- `InsufficientGasLimit` / `InvalidNonce`: Reserved for enhanced validation (future)
+
+### Fallback Strategy
+If any structured build step fails, we log the reason and fall back to signing the raw provided `data` bytes (post hex decoding). This ensures resilience and observability.
 
 ## Security Considerations
 
-1. **Chain Validation**: All chain IDs are validated before processing
-2. **Configuration Validation**: RPC URLs and chain names are validated
-3. **Nonce Management**: Proper nonce handling prevents replay attacks
-4. **Gas Limit Validation**: Prevents stuck transactions
-5. **Transaction Status Tracking**: Complete audit trail
+1. **NFT Binding**: Inclusion of `nft_id` in engine `Outputs` storage eliminates spoofing of agent identity in downstream TSS processing.
+2. **Chain Validation**: All chain IDs validated before any build/sign step.
+3. **Configuration Validation**: RPC URL format & presence enforced.
+4. **Preimage Integrity**: Separation of preimage vs raw tx ensures signatures cannot be misapplied to altered payloads.
+5. **Graceful Fallback**: Malformed structured fields do not stall pipeline; audit logs capture anomalies.
+6. **Replay Mitigation (Planned)**: Enhanced nonce fetching / caching & mismatch detection.
 
 ## Future Enhancements
 
-1. **Dynamic Chain Addition**: Support for adding new chains via governance
-2. **Gas Price Oracle**: Automatic gas price estimation
-3. **Transaction Retry Logic**: Automatic retry with higher gas prices
-4. **Batch Transactions**: Support for batching multiple transactions
-5. **Cross-Chain Bridges**: Integration with bridge protocols
-6. **Fee Estimation**: Dynamic fee calculation based on network conditions
+1. **Dynamic Chain Addition**: Governance-based registration & removal.
+2. **Gas Price / Fee Oracle**: Adaptive EIP-1559 fee suggestion & legacy gas price fallback.
+3. **Transaction Retry Logic**: Re-broadcast with escalated fees after timeout windows.
+4. **Batch Transactions**: Aggregate multiple structured actions into a single signing session.
+5. **Cross-Chain Bridges**: Proof / attestation support for bridging operations.
+6. **Advanced Access Lists**: Populate EIP-2930 / EIP-1559 access list dynamically.
+7. **Signature Caching**: Avoid recomputation for identical preimages across sessions.
 
 ## Testing
 
-The implementation includes:
-- Compilation tests
-- Chain configuration validation
-- Transaction building tests
-- RPC client simulation
-- Error handling verification
+Included test coverage now spans:
+1. Legacy & EIP-1559 preimage vs finalized raw differentiation.
+2. Structured action → expected preimage (legacy & EIP-1559).
+3. Fallback on invalid address (returns raw data bytes).
+4. Default-field inference for minimal structured actions.
+5. Malformed hex `data` handling (graceful empty decode + successful build).
+6. Storage tuple (with `nft_id`) propagation through pipeline.
 
 ## Deployment Notes
 
@@ -182,4 +256,4 @@ The implementation includes:
 - **Ethereum Compatibility**: Supports EIP-155 and EIP-1559 transactions
 - **Other Chains**: Supports Ethereum-compatible chains
 
-This implementation provides a solid foundation for multi-chain transaction support in the TSS pallet, with room for future enhancements and optimizations.
+This implementation provides a solid and extensible foundation for multi-chain transaction support in the TSS pallet, emphasizing clarity between signing preimages and broadcast raw transactions while enabling structured, human-readable action definitions.
