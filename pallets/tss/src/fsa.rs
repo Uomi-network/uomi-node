@@ -289,7 +289,7 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
             // if let Some(ref from_addr) = action.from {
             //     rpc_gas_limit = try_estimate_gas(action.chain_id, from_addr, to, action.value.as_ref().and_then(|v| parse_num_u64("value", v)), &data_bytes);
             // }
-            rpc_gas_limit = 25_000; // todo: fix.
+            rpc_gas_limit = Some(25_000); // todo: fix.
         }
         let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).or(rpc_gas_limit).unwrap_or(21_000);
 
