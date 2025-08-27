@@ -23,6 +23,8 @@ pub enum ProcessingError {
     MultiChainError(&'static str),
     /// Chain configuration error
     ChainConfigError(&'static str),
+    /// No output found for a specific request ID
+    NoOutputFound,
 }
 
 impl ProcessingError {
@@ -33,6 +35,7 @@ impl ProcessingError {
             ProcessingError::UnsupportedActionType(_) => "Unsupported action type",
             ProcessingError::MultiChainError(msg) => msg,
             ProcessingError::ChainConfigError(msg) => msg,
+            ProcessingError::NoOutputFound => "No output found for request ID",
         }
     }
 }
@@ -90,6 +93,9 @@ impl<T: Config> crate::pallet::Pallet<T> {
                     // Treat as processed even if no actionable action
                     last_processed = current;
                 }
+                Err(ProcessingError::NoOutputFound) => {
+                    log::warn!("No output found for request ID {:?}", current);
+                }
                 Err(e) => {
                     log::warn!("Failed to process request ID {:?}: {:?}", current, e);
                     break; // stop on hard error
@@ -105,6 +111,12 @@ impl<T: Config> crate::pallet::Pallet<T> {
     pub fn process_single_request(request_id: U256) -> Result<Option<(U256, (u32, Vec<u8>))>, ProcessingError> {
         // Fetch the output for this request ID directly using U256
         let (output, _, _, nft_id) = pallet_uomi_engine::Outputs::<T>::get(request_id);
+
+        // if Outputs does not contain the request_id, return None
+        if output.is_empty() {
+            log::warn!("No output found for request ID {:?}", request_id);
+            return Err(ProcessingError::NoOutputFound);
+        }
 
         log::info!("Processing output for request ID {:?}", request_id);
 

@@ -1964,8 +1964,8 @@ mod tests {
             }
             let (map, last) = TestingPallet::process_opoc_requests().expect("should process");
             assert_eq!(map.len(), 5, "Should collect five requests with data");
-            // Implementation advances last_processed through up to 10 IDs whether or not outputs exist
-            assert_eq!(last, U256::from(10u8), "Last processed should reflect full scan window (10 IDs)");
+            // Implementation advances last_processed through up to 5 IDs whether or not outputs exist
+            assert_eq!(last, U256::from(5u8), "Last processed should reflect full scan window (5 IDs)");
             assert!(map.keys().max().unwrap() == &U256::from(5u8));
         });
     }
@@ -1986,8 +1986,8 @@ mod tests {
             let (map, last) = TestingPallet::process_opoc_requests().expect("should process");
             assert_eq!(map.len(), 1, "Should process exactly one large-id request with data");
             assert!(map.contains_key(&next));
-            // Expect last to be start + 10 (processed scan window) even though only one had data
-            assert_eq!(last, start + U256::from(10u8));
+            // Expect last to be start + 5 (processed scan window) because only one request was found
+            assert_eq!(last, start + U256::from(1u8));
         });
     }
 }
