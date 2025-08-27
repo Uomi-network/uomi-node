@@ -198,6 +198,54 @@ impl MultiChainRpcClient {
         
         if let Some(error) = json_response.error {
             log::error!("[RPC] [eth_sendRawTransaction] RPC error: {} (code: {})", error.message, error.code);
+            
+            // Handle specific error cases
+            match error.code {
+                -32000 => {
+                    // Check for specific error messages
+                    if error.message.contains("already known") || error.message.contains("known transaction") {
+                        log::warn!("[RPC] Transaction already known - treating as submitted");
+                        // For "already known" transactions, we should still return success
+                        // but we might not have a tx_hash in the response
+                        return Ok(RpcResponse {
+                            tx_hash: None, // We don't have the hash from this response
+                            block_hash: None,
+                            status: TransactionStatus::Submitted,
+                        });
+                    } else if error.message.contains("insufficient funds") {
+                        log::error!("[RPC] Insufficient funds for transaction");
+                        return Ok(RpcResponse {
+                            tx_hash: None,
+                            block_hash: None,
+                            status: TransactionStatus::Failed,
+                        });
+                    } else if error.message.contains("nonce too low") {
+                        log::error!("[RPC] Nonce too low - transaction already processed");
+                        return Ok(RpcResponse {
+                            tx_hash: None,
+                            block_hash: None,
+                            status: TransactionStatus::Failed,
+                        });
+                    } else if error.message.contains("gas limit") || error.message.contains("gas required") {
+                        log::error!("[RPC] Gas limit issue: {}", error.message);
+                        return Ok(RpcResponse {
+                            tx_hash: None,
+                            block_hash: None,
+                            status: TransactionStatus::Failed,
+                        });
+                    }
+                }
+                -32603 => {
+                    log::error!("[RPC] Internal error: {}", error.message);
+                }
+                -32602 => {
+                    log::error!("[RPC] Invalid parameters: {}", error.message);
+                }
+                _ => {
+                    log::error!("[RPC] Unknown RPC error: {} (code: {})", error.message, error.code);
+                }
+            }
+            
             return Ok(RpcResponse {
                 tx_hash: None,
                 block_hash: None,
@@ -574,6 +622,52 @@ impl TransactionBuilder {
             U256::from(max_fee_per_gas),
             U256::from(max_priority_fee_per_gas),
             U256::from(nonce),
+            chain_id as u64,
+        ))
+    }
+
+    /// Build an Ethereum-compatible transaction using proper RLP encoding (U256 version)
+    pub fn build_ethereum_transaction_u256(
+        to: &str,
+        value: U256,
+        data: &[u8],
+        gas_limit: U256,
+        gas_price: U256,
+        nonce: U256,
+        chain_id: u32,
+    ) -> Result<Vec<u8>, &'static str> {
+        let to_address = Self::parse_ethereum_address(to)?;
+        Ok(Self::legacy_preimage_rlp(
+            to_address,
+            value,
+            data,
+            gas_limit,
+            gas_price,
+            nonce,
+            chain_id as u64,
+        ))
+    }
+    
+    /// Build an EIP-1559 transaction (Type 2) (U256 version)
+    pub fn build_eip1559_transaction_u256(
+        to: &str,
+        value: U256,
+        data: &[u8],
+        gas_limit: U256,
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        nonce: U256,
+        chain_id: u32,
+    ) -> Result<Vec<u8>, &'static str> {
+        let to_address = Self::parse_ethereum_address(to)?;
+        Ok(Self::eip1559_preimage_bytes(
+            to_address,
+            value,
+            data,
+            gas_limit,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            nonce,
             chain_id as u64,
         ))
     }

@@ -2,6 +2,7 @@ use sp_std::collections::btree_map::BTreeMap;
 use sp_std::prelude::*;
 use sp_std::vec::Vec;
 use sp_core::U256;
+use ethereum_types::U256 as EthU256;
 use scale_info::prelude::string::String;
 use crate::{Config, LastOpocRequestId, DkgSessions, AggregatedPublicKeys};
 use sp_io::hashing::keccak_256;
@@ -217,6 +218,42 @@ fn parse_num_u64(label: &str, v: &str) -> Option<u64> {
     }
 }
 
+fn parse_num_u256(label: &str, v: &str) -> Option<EthU256> {
+    let s = v.trim();
+    if s.is_empty() { return None; }
+    let (radix, digits) = if let Some(stripped) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (16, stripped)
+    } else { (10, s) };
+    
+    match radix {
+        16 => {
+            // For hex values, use EthU256::from_str_radix
+            match EthU256::from_str_radix(digits, 16) {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    log::warn!("Failed to parse {} hex value '{}'", label, v);
+                    None
+                }
+            }
+        }
+        10 => {
+            // For decimal values, try u64 first, then EthU256
+            if let Ok(n) = u64::from_str_radix(digits, 10) {
+                Some(EthU256::from(n))
+            } else {
+                match EthU256::from_dec_str(digits) {
+                    Ok(n) => Some(n),
+                    Err(_) => {
+                        log::warn!("Failed to parse {} decimal value '{}'", label, v);
+                        None
+                    }
+                }
+            }
+        }
+        _ => None
+    }
+}
+
 fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
     // Always validate chain config first
     let chain_config = MultiChainRpcClient::get_chain_config(action.chain_id)
@@ -270,67 +307,84 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
             MultiChainRpcClient::get_chain_config(chain_id).ok()
                 .and_then(|cfg| MultiChainRpcClient::get_account_nonce(&cfg, from).ok())
         }
-        let value = action.value.as_ref().and_then(|v| parse_num_u64("value", v)).unwrap_or(0);
+        let value_u256 = action.value.as_ref().and_then(|v| parse_num_u256("value", v)).unwrap_or(EthU256::zero());
+        let value = if value_u256 > EthU256::from(u64::MAX) {
+            log::warn!("Value {} exceeds u64::MAX, using EthU256", value_u256);
+            0u64 // For legacy compatibility, but we'll use value_u256 in transaction building
+        } else {
+            value_u256.low_u64()
+        };
 
         // Dynamic RPC-derived fields (with safe fallbacks if unavailable / errors)
         // gas_price / max fees
-        let mut rpc_gas_price: Option<u64> = None;
+        let mut rpc_gas_price: Option<EthU256> = None;
         if action.gas_price.is_none() || action.tx_type.as_deref().map(|t| t.eq_ignore_ascii_case("eip1559")).unwrap_or(true) {
-            rpc_gas_price = try_fetch_gas_price(action.chain_id);
-        }
-        let gas_price = action.gas_price.as_ref()
-            .and_then(|v| parse_num_u64("gas_price", v))
-            .or(rpc_gas_price)
-            .unwrap_or(1_000_000_000); // fallback 1 gwei
-
-        // gas_limit (estimate if not provided)
-        let mut rpc_gas_limit: Option<u64> = None;
-        if action.gas_limit.is_none() {
-            // if let Some(ref from_addr) = action.from {
-            //     rpc_gas_limit = try_estimate_gas(action.chain_id, from_addr, to, action.value.as_ref().and_then(|v| parse_num_u64("value", v)), &data_bytes);
-            // }
-            rpc_gas_limit = Some(25_000); // todo: fix.
-        }
-        let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).or(rpc_gas_limit).unwrap_or(21_000);
-
-        // nonce (query if not provided)
-        let mut rpc_nonce: Option<u64> = None;
-        if action.nonce.is_none() {
-            if let Some(ref from_addr) = action.from {
-                rpc_nonce = try_fetch_nonce(action.chain_id, from_addr);
+            if let Some(gas_price_u64) = try_fetch_gas_price(action.chain_id) {
+                rpc_gas_price = Some(EthU256::from(gas_price_u64));
             }
         }
-        let nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v)).or(rpc_nonce).unwrap_or(0);
+        let gas_price_u256 = action.gas_price.as_ref()
+            .and_then(|v| parse_num_u256("gas_price", v))
+            .or(rpc_gas_price)
+            .unwrap_or(EthU256::from(1_000_000_000u64)); // fallback 1 gwei
+
+        // gas_limit (estimate if not provided)
+        let mut rpc_gas_limit: Option<EthU256> = None;
+        if action.gas_limit.is_none() {
+            rpc_gas_limit = Some(EthU256::from(25_000u64)); // todo: fix.
+        }
+        let gas_limit_u256 = action.gas_limit.as_ref()
+            .and_then(|v| parse_num_u256("gas_limit", v))
+            .or(rpc_gas_limit)
+            .unwrap_or(EthU256::from(21_000u64));
+
+        // nonce (query if not provided)
+        let mut rpc_nonce: Option<EthU256> = None;
+        if action.nonce.is_none() {
+            if let Some(ref from_addr) = action.from {
+                if let Some(nonce_u64) = try_fetch_nonce(action.chain_id, from_addr) {
+                    rpc_nonce = Some(EthU256::from(nonce_u64));
+                }
+            }
+        }
+        let nonce_u256 = action.nonce.as_ref()
+            .and_then(|v| parse_num_u256("nonce", v))
+            .or(rpc_nonce)
+            .unwrap_or(EthU256::zero());
 
         let tx_type = action.tx_type.as_deref().unwrap_or("eip1559");
 
         log::info!("[tx build] chain={} to={} from={:?} nonce={} gas_limit={} gas_price={} (provided: gp? {} gl? {} n? {})", 
-            action.chain_id, to, action.from, nonce, gas_limit, gas_price,
+            action.chain_id, to, action.from, nonce_u256, gas_limit_u256, gas_price_u256,
             action.gas_price.is_some(), action.gas_limit.is_some(), action.nonce.is_some());
 
         let build_res = if tx_type.eq_ignore_ascii_case("eip1559") {
             // Derive max fees: prefer explicit fields; else use gas_price as both (simple heuristic)
-            let max_fee = action.max_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_fee_per_gas", v)).unwrap_or(gas_price);
-            let max_priority = action.max_priority_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_priority_fee_per_gas", v))
-                .unwrap_or_else(|| core::cmp::min(gas_price, 1_000_000_000));
-            TransactionBuilder::build_eip1559_transaction(
+            let max_fee_u256 = action.max_fee_per_gas.as_ref()
+                .and_then(|v| parse_num_u256("max_fee_per_gas", v))
+                .unwrap_or(gas_price_u256);
+            let max_priority_u256 = action.max_priority_fee_per_gas.as_ref()
+                .and_then(|v| parse_num_u256("max_priority_fee_per_gas", v))
+                .unwrap_or_else(|| core::cmp::min(gas_price_u256, EthU256::from(1_000_000_000u64)));
+            
+            TransactionBuilder::build_eip1559_transaction_u256(
                 to,
-                value,
+                value_u256,
                 &data_bytes,
-                gas_limit,
-                max_fee,
-                max_priority,
-                nonce,
+                gas_limit_u256,
+                max_fee_u256,
+                max_priority_u256,
+                nonce_u256,
                 action.chain_id,
             )
         } else {
-            TransactionBuilder::build_ethereum_transaction(
+            TransactionBuilder::build_ethereum_transaction_u256(
                 to,
-                value,
+                value_u256,
                 &data_bytes,
-                gas_limit,
-                gas_price,
-                nonce,
+                gas_limit_u256,
+                gas_price_u256,
+                nonce_u256,
                 action.chain_id,
             )
         };

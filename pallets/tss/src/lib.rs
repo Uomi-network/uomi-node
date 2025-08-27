@@ -37,6 +37,7 @@ use sp_runtime::transaction_validity::{
 };
 use sp_runtime::traits::{Saturating, SaturatedConversion};
 use frame_system::offchain::SigningTypes;
+use scale_info::prelude::format;
 
 pub use pallet::*;
 use sp_std::vec;
@@ -1842,8 +1843,8 @@ impl<T: Config> Pallet<T> {
         // Submit via FSA module using finalized raw tx
         match crate::fsa::submit_transaction_to_chain(chain_id, &signed_transaction) {
             Ok(response) => {
-                match response.tx_hash {
-                    Some(hash) => {
+                match (response.tx_hash, response.status) {
+                    (Some(hash), crate::types::TransactionStatus::Submitted) => {
                         log::info!("[FSA] Transaction submitted successfully for session {}", session_id);
                         // Convert string tx_hash to BoundedVec<u8>
                         let tx_hash_bytes = hash.as_bytes();
@@ -1855,8 +1856,25 @@ impl<T: Config> Pallet<T> {
                             }
                         }
                     },
-                    None => {
-                        log::error!("[FSA] Transaction submitted but no hash returned for session {}", session_id);
+                    (None, crate::types::TransactionStatus::Submitted) => {
+                        // Transaction was "already known" - this is actually success
+                        log::info!("[FSA] Transaction already known (duplicate) for session {} - treating as success", session_id);
+                        // Try to construct a default hash for tracking purposes
+                        let default_hash = format!("already_known_{}", session_id);
+                        match BoundedVec::try_from(default_hash.as_bytes().to_vec()) {
+                            Ok(bounded_hash) => Some(bounded_hash),
+                            Err(_) => {
+                                log::warn!("[FSA] Could not create tracking hash for already known transaction");
+                                None
+                            }
+                        }
+                    },
+                    (_, crate::types::TransactionStatus::Failed) => {
+                        log::error!("[FSA] Transaction failed for session {}", session_id);
+                        None
+                    },
+                    (hash_opt, status) => {
+                        log::warn!("[FSA] Unexpected transaction status {:?} with hash {:?} for session {}", status, hash_opt, session_id);
                         None
                     }
                 }
