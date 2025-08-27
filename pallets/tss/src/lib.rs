@@ -1591,7 +1591,9 @@ impl<T: Config> Pallet<T> {
                 Some(sig) => sig,
                 None => continue, // Should not happen due to filter, but safety check
             };
-            
+
+            log::info!("[RPC] Submitting transaction for session {}", session_id);
+
             // Get FSA transaction request data from the session's NFT ID
             if let Some((chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.nft_id) {
                 let tx_data = tx_data_bounded.into_inner();
