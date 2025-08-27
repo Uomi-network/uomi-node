@@ -87,6 +87,76 @@ The builder intentionally returns PREIMAGE bytes (the exact digestable message) 
 
 EIP-1559 preimage includes the type byte (0x02) followed by the RLP payload to mirror metamask / ethers signing flows which hash `0x02 || rlp(list)`.
 
+## Request ID Based Linking & Deduplication (Recent Update)
+
+Previously, pending FSA (follow‑up signing action) transaction data was keyed implicitly by `(nft_id, message)` when creating signing sessions. This created two limitations:
+
+1. An NFT (agent identity) could not have more than one concurrent signing request for different messages without risk of accidental deduplication.
+2. Duplicate detection required full message byte equality checks, which is more expensive and semantically weaker than using the authoritative engine-produced identifier.
+
+The pallet now uses the authoritative OPOC / Engine `request_id` (a `U256`) as the primary linkage and uniqueness handle across the whole pipeline.
+
+### Updated Storage Mapping
+
+```
+// lib.rs
+pub type FsaTransactionRequests<T: Config> = StorageMap<
+    _, Blake2_128Concat, U256, (NftId, u32 /* chain_id */, BoundedVec<u8, MaxMessageSize>)
+>;
+```
+
+`SigningSession` struct now includes a `request_id: U256` field. Multiple signing sessions may exist for the same `nft_id` so long as each has a distinct `request_id`.
+
+### Lifecycle Overview
+
+1. Off‑chain worker (or external submitter) derives / discovers actionable OPOC engine outputs and their `request_id`s.
+2. Unsigned extrinsic `create_signing_session_unsigned` is submitted with payload `{ request_id, nft_id (U256 form), chain_id, message, public }`.
+3. Pallet checks for existing in‑progress session with same `request_id`; if found, it skips creating a duplicate (idempotent behavior).
+4. If new, pallet inserts into `FsaTransactionRequests` and creates a `SigningSession` referencing the DKG session for the NFT (must already exist & be `DKGComplete`).
+5. Once enough partial signatures are aggregated, the session moves to `SigningComplete` and `process_completed_signatures` consumes the stored `(nft_id, chain_id, tx_bytes)` tuple, submits outbound transaction (mock / future RPC), then removes the `request_id` entry from storage.
+
+### Duplicate Detection Rule
+
+Only `request_id` is used for deduplication. Different messages for the same nft may coexist if their `request_id`s differ. This enables parallel / pipelined transaction flows per agent.
+
+### Advantages
+
+* O(1) uniqueness check keyed by a compact 32‑byte ID.
+* Eliminates accidental suppression of distinct actions sharing identical message bytes.
+* Clear audit trail: engine output ID is the canonical reference across pallets.
+* Simplifies potential future migrations / pruning logic (single key space ordered by `request_id`).
+
+### Test Coverage Added
+
+New unit tests (see `pallets/tss/src/tests.rs`) validate the behavior:
+
+* `request_id_deduplication_and_storage` – ensures duplicate unsigned submissions with identical `request_id` do not create additional sessions.
+* `request_id_cleanup_after_signature_processing` – verifies storage entry removal after signature finalization.
+* `multiple_distinct_request_ids_same_nft_create_multiple_sessions` – confirms multiple concurrent sessions for the same NFT with distinct IDs are allowed.
+
+### Migration Notes
+
+If an earlier on‑chain deployment stored pending signing requests keyed by `nft_id`, a runtime storage migration would be required to re‑encode those entries under unique `request_id`s. This codebase update does not include that migration (intentionally deferred). For a fresh deployment (or after clearing old state) no migration work is required. A future migration plan should:
+
+1. Iterate old map `(nft_id) -> (chain_id, message, ...)` producing deterministic synthetic `request_id`s (e.g., hash(nft_id || message) truncated into U256) when the original engine IDs are unavailable.
+2. Populate new `FsaTransactionRequests` with tuples `(nft_id, chain_id, message)` keyed by synthesized IDs.
+3. Backfill `SigningSessions` with the new `request_id` value.
+4. Bump pallet storage version & gate logic to avoid re‑migrating.
+
+Until that migration is implemented and executed, deploying this version onto a chain with legacy state will result in orphaned or inaccessible legacy entries. Plan a coordinated upgrade if necessary.
+
+### Observability
+
+Log lines now include `request_id` for duplicate suppression and storage insertion events:
+
+```
+[TSS] Stored FSA transaction request for request_id 0x... on chain <id>
+[TSS] Skipping duplicate signing session request for request_id 0x...
+```
+
+These aid in tracing idempotent submissions and cleanup timing.
+
+
 ## Structured Action Processing
 
 The OPOC → TSS pipeline now supports structured JSON actions that describe an EVM transaction. The pallet converts these into a signing preimage automatically.
