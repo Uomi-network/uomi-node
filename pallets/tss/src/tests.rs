@@ -216,7 +216,7 @@ fn test_create_signing_session() {
                 assert_ok!(TestingPallet::submit_dkg_result(
                     RuntimeOrigin::none(),
                     SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggregated_key.to_vec()), public: submitter.clone() },
-                    Signature::from_raw([0u8; 64])
+                    sr25519::Signature::from_raw([0u8; 64])
                 ));
             }
         }
@@ -379,7 +379,7 @@ fn test_submit_aggregated_signature_errors() {
                 assert_ok!(TestingPallet::submit_dkg_result(
                     RuntimeOrigin::none(),
                     SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggregated_key.to_vec()), public: submitter.clone() },
-                    Signature::from_raw([0u8; 64])
+                    sr25519::Signature::from_raw([0u8; 64])
                 ));
             }
         }
@@ -1906,8 +1906,6 @@ mod tests {
             );
 
 
-            println!("json: {}", json);
-
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
@@ -1994,6 +1992,158 @@ mod tests {
             assert!(map.contains_key(&next));
             // Expect last to be start + 10 (processed scan window) even though only one had data
             assert_eq!(last, start + U256::from(10u8));
+        });
+    }
+
+    // --- New tests for request_id based linking & dedup ---
+    #[test]
+    fn request_id_deduplication_and_storage() {
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Prepare validators & DKG session
+            let validators = vec![account(10), account(11), account(12)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(1u64);
+            let nft_id_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id_bytes.clone().try_into().unwrap(),
+                60
+            ));
+            // Complete DKG (submit enough identical results)
+            let agg_key = [2u8; 33];
+            for v in &validators { 
+                let session = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if session.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(agg_key.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8; 64])
+                    ));
+                }
+            }
+            // Build unsigned payload
+            let request_id = U256::from(555u64);
+            let nft_id_u256 = nft_id_u256; // same as used for DKG session
+            let chain_id = 99u32;
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![9,9,9]).unwrap();
+            let payload = crate::CreateSigningSessionPayload::<Test> { request_id, nft_id: nft_id_u256, chain_id, message: msg.clone(), public: account(10) };
+            // First unsigned call creates session & stores request
+            assert_ok!(TestingPallet::create_signing_session_unsigned(RuntimeOrigin::none(), payload.clone(), sr25519::Signature::from_raw([0u8;64])));
+            let sessions_after_first: Vec<_> = crate::SigningSessions::<Test>::iter().collect();
+            assert_eq!(sessions_after_first.len(), 1, "One signing session expected");
+            assert!(crate::FsaTransactionRequests::<Test>::contains_key(&request_id), "Storage keyed by request_id should exist");
+            // Second identical unsigned call should be idempotent (no new session)
+            assert_ok!(TestingPallet::create_signing_session_unsigned(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])));
+            let sessions_after_second: Vec<_> = crate::SigningSessions::<Test>::iter().collect();
+            assert_eq!(sessions_after_second.len(), 1, "No duplicate session should be created for same request_id");
+            // Ensure session carries request_id
+            let (_sid, sess) = sessions_after_second[0].clone();
+            assert_eq!(sess.request_id, request_id);
+            assert_eq!(sess.message, msg);
+        });
+    }
+
+    #[test]
+    fn request_id_cleanup_after_signature_processing() {
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Setup DKG complete for nft_id
+            let validators = vec![account(10), account(11), account(12)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(3u64);
+            let nft_id_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id_bytes.clone().try_into().unwrap(),
+                60
+            ));
+            let agg_key = [3u8; 33];
+            for v in &validators { 
+                let session = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if session.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(agg_key.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8; 64])
+                    ));
+                }
+            }
+            // Create unsigned signing session
+            let request_id = U256::from(777u64);
+            let nft_id_u256 = nft_id_u256; // reuse
+            let chain_id = 7u32;
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![7]).unwrap();
+            let payload = crate::CreateSigningSessionPayload::<Test> { request_id, nft_id: nft_id_u256, chain_id, message: msg.clone(), public: account(10) };
+            assert_ok!(TestingPallet::create_signing_session_unsigned(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])));
+            // Manually set aggregated signature to simulate completion
+            let (sid, mut session) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            session.aggregated_sig = Some(BoundedVec::truncate_from(vec![1u8; 65]));
+            crate::SigningSessions::<Test>::insert(sid, session.clone());
+            assert!(crate::FsaTransactionRequests::<Test>::contains_key(&request_id));
+            // Also ensure FsaTransactionRequests holds expected tuple shape
+            let stored = crate::FsaTransactionRequests::<Test>::get(&request_id).expect("entry exists");
+            assert_eq!(stored.1, chain_id);
+            assert_eq!(stored.2, msg);
+            // Process completed signatures, which should submit (mock) and remove storage
+            assert_ok!(TestingPallet::process_completed_signatures());
+            assert!(!crate::FsaTransactionRequests::<Test>::contains_key(&request_id), "Entry should be removed after processing");
+        });
+    }
+
+    #[test]
+    fn multiple_distinct_request_ids_same_nft_create_multiple_sessions() {
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Prepare validators & complete a single DKG for an nft_id
+            let validators = vec![account(10), account(11), account(12)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(42u64);
+            let nft_id_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let expected_nft: NftId = nft_id_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                expected_nft.clone(),
+                60
+            ));
+            let agg_key = [5u8; 33];
+            for v in &validators {
+                let session = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if session.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(agg_key.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8; 64])
+                    ));
+                }
+            }
+            // Prepare three distinct request_ids with same nft_id
+            let chain_id = 123u32;
+            let requests = vec![
+                (U256::from(1000u64), vec![1u8]),
+                (U256::from(1001u64), vec![2u8]),
+                (U256::from(1002u64), vec![3u8]),
+            ];
+            for (idx, (request_id, msg_vec)) in requests.iter().enumerate() {
+                let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(msg_vec.clone()).unwrap();
+                let payload = crate::CreateSigningSessionPayload::<Test> { request_id: *request_id, nft_id: nft_id_u256, chain_id, message: msg.clone(), public: account(10) };
+                assert_ok!(TestingPallet::create_signing_session_unsigned(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])));
+                let sessions_so_far: Vec<_> = crate::SigningSessions::<Test>::iter().collect();
+                assert_eq!(sessions_so_far.len(), idx + 1, "Expected {} sessions after inserting distinct request_ids", idx + 1);
+                assert!(crate::FsaTransactionRequests::<Test>::contains_key(request_id), "Storage should contain entry for new request_id");
+            }
+            // Final assertions
+            let all_sessions: Vec<_> = crate::SigningSessions::<Test>::iter().collect();
+            assert_eq!(all_sessions.len(), 3, "Exactly three signing sessions expected");
+            let mut seen = sp_std::collections::btree_set::BTreeSet::new();
+            for (_sid, sess) in &all_sessions { seen.insert(sess.request_id); assert_eq!(sess.nft_id, expected_nft); }
+            assert_eq!(seen.len(), 3, "All request_ids must be distinct");
         });
     }
 }
