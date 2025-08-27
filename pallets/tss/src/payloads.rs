@@ -6,6 +6,8 @@ use sp_runtime::RuntimeDebug;
 use sp_std::vec::Vec;
 
 use crate::types::{MaxMessageSize, PublicKey, SessionId};
+use crate::types::MaxTxHashSize;
+use crate::types::NftId;
 
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
@@ -57,6 +59,15 @@ pub struct SubmitSignatureResultPayload<T: crate::Config> {
     pub public: T::Public,
 }
 
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub struct SubmitFsaTransactionPayload<T: crate::Config> {
+    pub session_id: SessionId,
+    pub chain_id: u32,
+    pub tx_hash: BoundedVec<u8, MaxTxHashSize>,
+    pub nft_id: NftId,
+    pub public: T::Public,
+}
+
 impl<T: crate::Config> ReportParticipantsPayload<T> {
     pub fn new(
         session_id: SessionId,
@@ -99,6 +110,10 @@ impl<T: SigningTypes + crate::Config> SignedPayload<T> for SubmitSignatureResult
     fn public(&self) -> T::Public {
         self.public.clone()
     }
+}
+
+impl<T: SigningTypes + crate::Config> SignedPayload<T> for SubmitFsaTransactionPayload<T> {
+    fn public(&self) -> T::Public { self.public.clone() }
 }
 
 impl<T: SigningTypes + crate::Config> SignedPayload<T> for CreateSigningSessionPayload<T> {

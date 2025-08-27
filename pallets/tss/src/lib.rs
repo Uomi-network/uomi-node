@@ -1118,6 +1118,26 @@ pub mod pallet {
         Ok(())
     }
 
+    /// Record an FSA transaction submission (unsigned, produced by offchain worker)
+    #[pallet::weight(10_000)]
+    #[pallet::call_index(17)]
+    pub fn submit_fsa_transaction_unsigned(
+        origin: OriginFor<T>,
+        payload: crate::payloads::SubmitFsaTransactionPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        let chain_id = payload.chain_id;
+        let current_block = frame_system::Pallet::<T>::block_number();
+        let max_wait_blocks = 300u32; // keep consistent with previous logic
+        PendingTransactions::<T>::insert(chain_id, payload.tx_hash.clone(), (current_block, max_wait_blocks));
+        MultiChainTransactions::<T>::insert(chain_id, payload.tx_hash.clone(), crate::types::TransactionStatus::Submitted);
+        Self::deposit_event(Event::MultiChainTransactionSubmitted(chain_id, payload.tx_hash.to_vec()));
+        // Remove the request so it's not reprocessed
+        FsaTransactionRequests::<T>::remove(&payload.nft_id);
+        Ok(())
+    }
+
     }
 
 
@@ -1202,6 +1222,14 @@ pub mod pallet {
                     .propagate(true)
                     .build();
             }
+            Call::submit_fsa_transaction_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX)
+                    .and_provides(call.encode())
+                    .longevity(64)
+                    .propagate(true)
+                    .build();
+            }
 
             // Reject all other unsigned calls
             _ => {
@@ -1216,6 +1244,38 @@ pub mod pallet {
     fn offchain_worker(n: BlockNumberFor<T>) {
         // Check pending transactions every block for real-time monitoring
         Self::check_pending_transactions_offchain().ok();
+
+        // FSA offchain submission: detect signing sessions with aggregated signatures and
+        // outstanding FsaTransactionRequests, submit to chain RPC and then emit unsigned tx.
+        {
+            let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+            if signer.can_sign() {
+                for (session_id, session) in SigningSessions::<T>::iter() {
+                    if session.aggregated_sig.is_none() { continue; }
+                    if let Some((chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.nft_id) {
+                        if let Some(signature) = &session.aggregated_sig {
+                            let tx_bytes = tx_data_bounded.clone().into_inner();
+                            if let Some(tx_hash) = Self::submit_signed_transaction(session_id, chain_id, &tx_bytes, signature) {
+                                let _ = signer.send_unsigned_transaction(
+                                    |acct| crate::payloads::SubmitFsaTransactionPayload::<T> {
+                                        session_id,
+                                        chain_id,
+                                        tx_hash: tx_hash.clone(),
+                                        nft_id: session.nft_id.clone(),
+                                        public: acct.public.clone(),
+                                    },
+                                    |payload, signature| Call::submit_fsa_transaction_unsigned { payload, signature },
+                                );
+                            } else {
+                                log::error!("[FSA] Failed to submit signed tx for session {} offchain", session_id);
+                            }
+                        }
+                    }
+                }
+            } else {
+                log::debug!("[FSA] No signer available for FSA submission");
+            }
+        }
 
         // We still only run heavier logic every 10 blocks, but OPOC processing must not depend on validator changes.
         if n % 10u32.into() == 0u32.into() {
@@ -1310,8 +1370,7 @@ pub mod pallet {
         // Process any pending TSS offences
         Pallet::<T>::process_pending_tss_offences().ok();
 
-        // FSA: Process completed signatures and submit transactions
-        Pallet::<T>::process_completed_signatures().ok();
+    // FSA processing moved to offchain worker (unsigned extrinsics); no on-chain direct call
 
 
         // Report count reset
