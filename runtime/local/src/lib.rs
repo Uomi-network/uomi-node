@@ -1318,6 +1318,7 @@ impl pallet_tss::Config for Runtime {
     type AuthorityId = pallet_tss::crypto::AuthId;
     type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
     type OffenceReporter = pallet_offences::Pallet<Runtime>;
+    type TssWeightInfo = ();
 }
 
 parameter_types! {
@@ -1720,7 +1721,9 @@ pub type Executive = frame_executive::Executive<
     Migrations,
 >;
 
-pub type Migrations = ();
+pub type Migrations = (
+    pallet_tss::migrations::MigrateV0ToV1<Runtime>,
+);
 
 type EventRecord = frame_system::EventRecord<
     <Runtime as frame_system::Config>::RuntimeEvent,

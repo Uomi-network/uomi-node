@@ -177,6 +177,7 @@ impl crate::pallet::Config for Test {
     type AuthorityId = crate::crypto::AuthId;
     type MinimumValidatorThreshold = MinimumValidatorThreshold;
     type OffenceReporter = TestOffenceReporter;
+    type TssWeightInfo = (); // use default placeholder weights in tests
 }
 
 pub struct TestOffenceReporter;

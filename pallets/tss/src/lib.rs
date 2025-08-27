@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+extern crate alloc;
 use sp_runtime::KeyTypeId;
 
 #[cfg(test)]
@@ -46,6 +47,57 @@ use sp_core::U256;
 pub use payloads::*;
 pub use errors::*;
 pub use utils::*;
+
+// Storage version for pallet_tss. Start at 0; first real migration will bump to 1.
+// Do NOT change this constant directly when writing a migration; instead add a new migration
+// module (e.g. migrations::v1) and bump the constant there as part of that migration.
+pub const STORAGE_VERSION: frame_support::traits::StorageVersion = frame_support::traits::StorageVersion::new(0);
+
+// Migrations module following Polkadot SDK best practices (VersionedMigration + UncheckedOnRuntimeUpgrade).
+// Each version hop lives in its own submodule (v1, v2, ...). Add them under migrations/ if they grow large.
+// For now we include a skeleton v1 migration illustrating re-keying logic from the previous design
+// (legacy storage not present anymore in code, so this runs only on chains that still have old data on upgrade).
+// (Removed duplicate alloc::vec::Vec import; sp_std::vec::Vec already in scope)
+
+pub mod migrations; // external module with versioned migrations
+pub use migrations::*;
+
+// TssWeightInfo trait for benchmarked weights; fallback implementation provided for tests.
+pub trait TssWeightInfo {
+    fn create_dkg_session() -> frame_support::weights::Weight;
+    fn update_validators() -> frame_support::weights::Weight;
+    fn create_signing_session_unsigned() -> frame_support::weights::Weight;
+    fn update_last_opoc_request_id_unsigned() -> frame_support::weights::Weight;
+    fn submit_dkg_result() -> frame_support::weights::Weight;
+    fn submit_signature_result() -> frame_support::weights::Weight;
+    fn submit_aggregated_signature() -> frame_support::weights::Weight;
+    fn create_reshare_dkg_session() -> frame_support::weights::Weight;
+    fn report_participant() -> frame_support::weights::Weight;
+    fn report_tss_offence() -> frame_support::weights::Weight;
+    fn submit_multi_chain_transaction() -> frame_support::weights::Weight;
+    fn update_chain_config() -> frame_support::weights::Weight;
+    fn get_agent_nonce() -> frame_support::weights::Weight;
+    fn increment_agent_nonce() -> frame_support::weights::Weight;
+    fn get_transaction_status() -> frame_support::weights::Weight;
+}
+
+impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
+    fn create_dkg_session() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn update_validators() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn create_signing_session_unsigned() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn update_last_opoc_request_id_unsigned() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn submit_dkg_result() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn submit_signature_result() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn submit_aggregated_signature() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn create_reshare_dkg_session() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn report_participant() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn report_tss_offence() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn submit_multi_chain_transaction() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn update_chain_config() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn get_agent_nonce() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn increment_agent_nonce() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn get_transaction_status() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+}
 
 
 /// A struct for the payload of the ReportTssOffence call
@@ -165,7 +217,10 @@ pub mod pallet {
     // Re-export Verifier to make it accessible from pallet module
     pub use crate::utils::Verifier;
 
+    // Attach a storage version so future migrations can bump from 0 -> 1 etc.
+    // Initial version is 0 (implicit); we will migrate to 1 when re-keying legacy storage if needed.
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
 
     #[derive(RuntimeDebug, Clone)]
@@ -241,6 +296,8 @@ pub mod pallet {
         pallet_session::historical::IdentificationTuple<Self>,
         MaliciousBehaviourOffence<Self>
     >;
+    // Weight info specific to this pallet
+    type TssWeightInfo: TssWeightInfo;
     }
 
 
@@ -487,7 +544,7 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_dkg_session())]
     #[pallet::call_index(0)]
     pub fn create_dkg_session(
         _origin: OriginFor<T>,
@@ -551,7 +608,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::update_validators())]
     #[pallet::call_index(1)]
     pub fn update_validators(
         origin: OriginFor<T>,
@@ -572,7 +629,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_signing_session_unsigned())]
     #[pallet::call_index(2)]
     pub fn create_signing_session(
         _origin: OriginFor<T>,
@@ -628,7 +685,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_signing_session_unsigned())]
     #[pallet::call_index(7)]
     pub fn create_signing_session_unsigned(
         origin: OriginFor<T>,
@@ -656,7 +713,7 @@ pub mod pallet {
         )
     }
 
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::update_last_opoc_request_id_unsigned())]
     #[pallet::call_index(16)]
     pub fn update_last_opoc_request_id_unsigned(
         origin: OriginFor<T>,
@@ -668,7 +725,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::submit_dkg_result())]
     #[pallet::call_index(3)]
     pub fn submit_dkg_result(
         origin: OriginFor<T>,
@@ -738,7 +795,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::submit_signature_result())]
     #[pallet::call_index(15)]
     pub fn submit_signature_result(
         origin: OriginFor<T>,
@@ -786,7 +843,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::submit_dkg_result())]
     #[pallet::call_index(14)]
     pub fn finalize_dkg_session(
         origin: OriginFor<T>,
@@ -804,7 +861,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::submit_aggregated_signature())]
     #[pallet::call_index(4)]
     pub fn submit_aggregated_signature(
         origin: OriginFor<T>,
@@ -839,7 +896,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_reshare_dkg_session())]
     #[pallet::call_index(5)]
     pub fn create_reshare_dkg_session(
         origin: OriginFor<T>,
@@ -879,7 +936,7 @@ pub mod pallet {
         Ok(())
     }
 
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::report_participant())]
     #[pallet::call_index(6)]
     pub fn report_participant(
         origin: OriginFor<T>,
@@ -924,7 +981,7 @@ pub mod pallet {
     }
 
     /// Report TSS offence and slash validator
-    #[pallet::weight(frame_support::weights::Weight::from_parts(10_000, 0))]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::report_tss_offence())]
     #[pallet::call_index(8)]
     pub fn report_tss_offence(
         origin: OriginFor<T>,
@@ -962,7 +1019,7 @@ pub mod pallet {
     }
 
     /// Submit a signed transaction to a specific blockchain network
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::submit_multi_chain_transaction())]
     #[pallet::call_index(9)]
     pub fn submit_multi_chain_transaction(
         origin: OriginFor<T>,
@@ -1016,7 +1073,7 @@ pub mod pallet {
     }
 
     /// Update the configuration for a supported blockchain network
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::update_chain_config())]
     #[pallet::call_index(10)]
     pub fn update_chain_config(
         origin: OriginFor<T>,
@@ -1047,7 +1104,7 @@ pub mod pallet {
     }
 
     /// Get the current nonce for an agent on a specific chain
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::get_agent_nonce())]
     #[pallet::call_index(11)]
     pub fn get_agent_nonce(
         origin: OriginFor<T>,
@@ -1070,7 +1127,7 @@ pub mod pallet {
     }
 
     /// Increment the nonce for an agent on a specific chain
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::increment_agent_nonce())]
     #[pallet::call_index(12)]
     pub fn increment_agent_nonce(
         origin: OriginFor<T>,
@@ -1092,7 +1149,7 @@ pub mod pallet {
     }
 
     /// Get the status of a multi-chain transaction
-    #[pallet::weight(10_000)]
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::get_transaction_status())]
     #[pallet::call_index(13)]
     pub fn get_transaction_status(
         origin: OriginFor<T>,
