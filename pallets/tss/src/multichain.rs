@@ -184,7 +184,7 @@ impl MultiChainRpcClient {
         let request_body = miniserde::json::to_string(&request);
         
         log::info!(
-            "Sending transaction to chain {} (ID: {})", 
+            "[RPC] Sending transaction to chain {} (ID: {})", 
             String::from_utf8_lossy(&chain_config.name),
             chain_config.chain_id
         );
@@ -194,18 +194,21 @@ impl MultiChainRpcClient {
         
         // Parse the JSON-RPC response
         let json_response: JsonRpcResponse = miniserde::json::from_str(&response)
-            .map_err(|_| "Failed to parse JSON-RPC response")?;
+            .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
+            log::error!("[RPC] RPC error: {} (code: {})", error.message, error.code);
             return Ok(RpcResponse {
                 tx_hash: None,
                 block_hash: None,
                 status: TransactionStatus::Failed,
             });
         }
-        
-        let tx_hash = json_response.result.ok_or("No transaction hash in response")?;
+
+        log::info!("[RPC] Transaction submitted with result = {:?}", json_response.result);
+
+        let tx_hash = json_response.result.ok_or("[RPC] No transaction hash in response")?;
+
         
         Ok(RpcResponse {
             tx_hash: Some(tx_hash),
@@ -298,7 +301,7 @@ impl MultiChainRpcClient {
     ) -> Result<String, &'static str> {
         let rpc_url = String::from_utf8_lossy(&chain_config.rpc_url);
         
-        log::info!("Making RPC call to: {}", rpc_url);
+        log::info!("[RPC] Making RPC call to: {}", rpc_url);
         
         // Create HTTP request
         let deadline = Timestamp::from_unix_millis(
@@ -310,27 +313,27 @@ impl MultiChainRpcClient {
             .deadline(deadline); // 30 second timeout
         
         // Send the request
-        let pending = request.send().map_err(|_| "Failed to send HTTP request")?;
-        
+        let pending = request.send().map_err(|_| "[RPC] Failed to send HTTP request")?;
+
         // Wait for response
         let deadline_opt = Some(deadline);
         let response = pending
             .try_wait(deadline_opt)
-            .map_err(|_| "HTTP request timeout")?
-            .map_err(|_| "HTTP request failed")?;
+            .map_err(|_| "[RPC] HTTP request timeout")?
+            .map_err(|_| "[RPC] HTTP request failed")?;
         
         // Check response status
         if response.code != 200 {
-            log::error!("HTTP error: status code {}", response.code);
+            log::error!("[RPC] HTTP error: status code {}", response.code);
             return Err("HTTP request failed with non-200 status");
         }
         
         // Read response body
         let response_body = response.body().collect::<Vec<u8>>();
         let response_str = str::from_utf8(&response_body)
-            .map_err(|_| "Invalid UTF-8 in response")?;
+            .map_err(|_| "[RPC] Invalid UTF-8 in response")?;
         
-        log::debug!("RPC response: {}", response_str);
+        log::debug!("[RPC] RPC response: {}", response_str);
         
         Ok(String::from(response_str))
     }
@@ -364,7 +367,7 @@ impl MultiChainRpcClient {
         let request_body = miniserde::json::to_string(&request);
         
         log::info!(
-            "Getting gas price from chain {}", 
+            "[RPC] Getting gas price from chain {}", 
             String::from_utf8_lossy(&chain_config.name)
         );
         
@@ -373,19 +376,19 @@ impl MultiChainRpcClient {
         
         // Parse the JSON-RPC response
         let json_response: JsonRpcResponse = miniserde::json::from_str(&response)
-            .map_err(|_| "Failed to parse JSON-RPC response")?;
+            .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
-            return Err("RPC call failed");
+            log::error!("[RPC] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] RPC call failed");
         }
         
-        let result = json_response.result.ok_or("No result in response")?;
+        let result = json_response.result.ok_or("[RPC] No result in response")?;
         
         // Parse hex gas price
         let gas_price_str = result.strip_prefix("0x").unwrap_or(&result);
         let gas_price = u64::from_str_radix(gas_price_str, 16)
-            .map_err(|_| "Failed to parse gas price")?;
+            .map_err(|_| "[RPC] Failed to parse gas price")?;
         
         Ok(gas_price)
     }
@@ -402,7 +405,7 @@ impl MultiChainRpcClient {
         let request_body = miniserde::json::to_string(&request);
         
         log::info!(
-            "Getting nonce for address {} on chain {}", 
+            "[RPC] Getting nonce for address {} on chain {}", 
             address,
             String::from_utf8_lossy(&chain_config.name)
         );
@@ -412,19 +415,19 @@ impl MultiChainRpcClient {
         
         // Parse the JSON-RPC response
         let json_response: JsonRpcResponse = miniserde::json::from_str(&response)
-            .map_err(|_| "Failed to parse JSON-RPC response")?;
+            .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
-            return Err("RPC call failed");
+            log::error!("[RPC] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] RPC call failed");
         }
         
-        let result = json_response.result.ok_or("No result in response")?;
+        let result = json_response.result.ok_or("[RPC] No result in response")?;
         
         // Parse hex nonce
         let nonce_str = result.strip_prefix("0x").unwrap_or(&result);
         let nonce = u64::from_str_radix(nonce_str, 16)
-            .map_err(|_| "Failed to parse nonce")?;
+            .map_err(|_| "[RPC] Failed to parse nonce")?;
         
         Ok(nonce)
     }
@@ -456,7 +459,7 @@ impl MultiChainRpcClient {
         let request_body = miniserde::json::to_string(&request);
         
         log::info!(
-            "Estimating gas for transaction on chain {}", 
+            "[RPC] Estimating gas for transaction on chain {}", 
             String::from_utf8_lossy(&chain_config.name)
         );
         
@@ -465,7 +468,7 @@ impl MultiChainRpcClient {
         
         // Parse the JSON-RPC response
         let json_response: JsonRpcResponse = miniserde::json::from_str(&response)
-            .map_err(|_| "Failed to parse JSON-RPC response")?;
+            .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
             log::error!("RPC error: {} (code: {})", error.message, error.code);
