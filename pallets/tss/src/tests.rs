@@ -1990,4 +1990,20 @@ mod tests {
             assert_eq!(last, start + U256::from(1u8));
         });
     }
+
+    #[test]
+    fn opoc_iteration_no_requests() {
+        use pallet_uomi_engine::Outputs as EngineOutputs;
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Set last id near 2^40 boundary to ensure we don't truncate
+            let start = U256::from(1u128 << 40); // large value
+            LastOpocRequestId::<Test>::put(start);
+            let res = TestingPallet::process_opoc_requests();
+
+            assert!(res.is_err());
+            assert_eq!(res, Err("No requests to sign found"));
+
+        });
+    }
 }
