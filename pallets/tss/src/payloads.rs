@@ -26,6 +26,8 @@ pub struct ReportParticipantsPayload<T: crate::Config> {
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct CreateSigningSessionPayload<T: crate::Config> {
+    // Unique request identifier from OPOC Outputs
+    pub request_id: sp_core::U256,
     pub nft_id: sp_core::U256,
     // Target chain for which the signing (transaction) is requested
     pub chain_id: u32,

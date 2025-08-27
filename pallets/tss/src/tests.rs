@@ -12,6 +12,7 @@ use sp_core::{
 };
 use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
 use sp_runtime::{BoundedVec, Perbill};
+use sp_core::U256;
 
 // Helper function to create test account
 fn create_test_account(seed: Option<[u8; 32]>) -> AccountId {
@@ -224,6 +225,7 @@ fn test_create_signing_session() {
         let message = BoundedVec::<u8, _>::try_from(vec![1, 2, 3]).unwrap();
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
+            U256::from(1u8),
             vec![1].try_into().unwrap(),
             message.clone()
         ));
@@ -268,6 +270,7 @@ fn test_create_signing_session_errors() {
         assert_eq!(
             TestingPallet::create_signing_session(
                 RuntimeOrigin::signed(create_test_account(None)),
+                U256::from(2u8),
                 vec![2].try_into().unwrap(),
                 message.clone()
             ),
@@ -323,6 +326,7 @@ fn test_submit_aggregated_signature() {
         // Create a signing session
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
+            U256::from(3u8),
             vec![1].try_into().unwrap(),
             message.clone()
         ));
@@ -384,6 +388,7 @@ fn test_submit_aggregated_signature_errors() {
         let message = BoundedVec::<u8, _>::try_from(vec![1, 2, 3]).unwrap();
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
+            U256::from(4u8),
             vec![1].try_into().unwrap(),
             message.clone()
         ));
@@ -459,6 +464,7 @@ fn test_signing_session_lifecycle() {
         // Create a signing session
         assert_ok!(TestingPallet::create_signing_session(
             RuntimeOrigin::signed(create_test_account(None)),
+            U256::from(5u64),
             vec![1].try_into().unwrap(),
             message.clone()
         ));
