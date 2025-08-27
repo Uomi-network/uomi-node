@@ -3,7 +3,8 @@ use sp_std::prelude::*;
 use sp_std::vec::Vec;
 use sp_core::U256;
 use scale_info::prelude::string::String;
-use crate::{Config, LastOpocRequestId};
+use crate::{Config, LastOpocRequestId, DkgSessions, AggregatedPublicKeys};
+use sp_io::hashing::keccak_256;
 use crate::multichain::MultiChainRpcClient;
 use crate::types::RpcResponse;
 use miniserde::Deserialize;
@@ -46,7 +47,10 @@ pub struct Action {
     pub data: String,
     pub chain_id: u32,
     // Additional fields for enhanced transaction support
+    /// Destination address (hex, 0x-prefixed)
     pub to: Option<String>,
+    /// Sender address (hex, 0x-prefixed) – needed for nonce & gas estimation when nonce not supplied
+    pub from: Option<String>,
     pub value: Option<String>,
     pub gas_limit: Option<String>,
     pub gas_price: Option<String>,
@@ -122,7 +126,20 @@ impl<T: Config> crate::pallet::Pallet<T> {
         };
 
         // Process all actions in the successfully parsed output
-        for action in output.actions {
+        for mut action in output.actions {
+            // Attempt to auto-derive sender (from) if missing using aggregated public key associated with nft_id
+            if action.from.is_none() {
+                // Convert U256 nft_id -> bounded vec (same as elsewhere: little-endian limbs -> bytes)
+                if let Ok(nft_bv) = {
+                    let bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+                    crate::types::NftId::try_from(bytes)
+                } {
+                    if let Some(from_addr) = derive_from_address::<T>(nft_bv) {
+                        action.from = Some(from_addr);
+                    }
+                }
+            }
+
             log::info!("Processing action for request {:?}: {:?}", request_id, action);
 
             if let Some(data) = handle_action(&action)? {
@@ -132,6 +149,33 @@ impl<T: Config> crate::pallet::Pallet<T> {
 
         Ok(None)
     }
+}
+
+/// Derive an Ethereum address (hex 0x...) from the aggregated public key linked to an NFT id via DKG session.
+/// Steps:
+/// 1. Find DKG session whose `nft_id` matches.
+/// 2. Fetch aggregated public key bytes from `AggregatedPublicKeys` storage using session id.
+/// 3. Normalize key to 64-byte uncompressed form (strip 0x04 prefix if 65 bytes).
+/// 4. keccak256(pubkey[0..64]) and take last 20 bytes -> H160.
+/// 5. Return hex string 0x + lowercase.
+fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String> {
+    // Find session id with this nft_id (linear scan; could be optimized with reverse index later)
+    let mut found_session: Option<crate::types::SessionId> = None;
+    for (sid, sess) in DkgSessions::<T>::iter() { if sess.nft_id == nft_id { found_session = Some(sid); break; } }
+    let session_id = found_session?;
+    let pubkey = AggregatedPublicKeys::<T>::get(session_id)?; // BoundedVec<u8>
+    let key_bytes: Vec<u8> = pubkey.to_vec();
+    let slice = key_bytes.as_slice();
+    // Accept 64 (raw x||y) or 65 (0x04||x||y). Reject others.
+    let raw = if slice.len() == 65 && slice[0] == 0x04 { &slice[1..] } else { slice };
+    if raw.len() != 64 { return None; }
+    let hash = keccak_256(raw);
+    let addr_bytes = &hash[12..]; // last 20 bytes
+    // hex encode
+    let mut out = String::from("0x");
+    const HEX: &[u8;16] = b"0123456789abcdef";
+    for b in addr_bytes { out.push(HEX[(b>>4) as usize] as char); out.push(HEX[(b & 0x0f) as usize] as char); }
+    Some(out)
 }
 
 
@@ -192,15 +236,70 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
     // If we have structured fields, attempt to construct a preimage; otherwise fallback to raw data
     if let Some(ref to) = action.to {
         use crate::multichain::TransactionBuilder;
+        // Helper wrappers so unit tests (non-offchain context) don't invoke offchain RPC APIs and panic.
+        #[cfg(test)]
+        fn try_fetch_gas_price(_chain_id: u32) -> Option<u64> { None }
+        #[cfg(not(test))]
+        fn try_fetch_gas_price(chain_id: u32) -> Option<u64> {
+            MultiChainRpcClient::get_chain_config(chain_id).ok()
+                .and_then(|cfg| MultiChainRpcClient::get_gas_price(&cfg).ok())
+        }
+        #[cfg(test)]
+        fn try_estimate_gas(_chain_id: u32, _from: &str, _to: &str, _value: Option<u64>, _data: &[u8]) -> Option<u64> { None }
+        #[cfg(not(test))]
+        fn try_estimate_gas(chain_id: u32, from: &str, to: &str, value: Option<u64>, data: &[u8]) -> Option<u64> {
+            MultiChainRpcClient::get_chain_config(chain_id).ok()
+                .and_then(|cfg| MultiChainRpcClient::estimate_gas(&cfg, from, to, value, Some(data)).ok())
+        }
+        #[cfg(test)]
+        fn try_fetch_nonce(_chain_id: u32, _from: &str) -> Option<u64> { None }
+        #[cfg(not(test))]
+        fn try_fetch_nonce(chain_id: u32, from: &str) -> Option<u64> {
+            MultiChainRpcClient::get_chain_config(chain_id).ok()
+                .and_then(|cfg| MultiChainRpcClient::get_account_nonce(&cfg, from).ok())
+        }
         let value = action.value.as_ref().and_then(|v| parse_num_u64("value", v)).unwrap_or(0);
-        let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).unwrap_or(21_000);
-        let gas_price = action.gas_price.as_ref().and_then(|v| parse_num_u64("gas_price", v)).unwrap_or(1_000_000_000); // 1 gwei default
-        let nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v)).unwrap_or(0);
+
+        // Dynamic RPC-derived fields (with safe fallbacks if unavailable / errors)
+        // gas_price / max fees
+        let mut rpc_gas_price: Option<u64> = None;
+        if action.gas_price.is_none() || action.tx_type.as_deref().map(|t| t.eq_ignore_ascii_case("eip1559")).unwrap_or(true) {
+            rpc_gas_price = try_fetch_gas_price(action.chain_id);
+        }
+        let gas_price = action.gas_price.as_ref()
+            .and_then(|v| parse_num_u64("gas_price", v))
+            .or(rpc_gas_price)
+            .unwrap_or(1_000_000_000); // fallback 1 gwei
+
+        // gas_limit (estimate if not provided)
+        let mut rpc_gas_limit: Option<u64> = None;
+        if action.gas_limit.is_none() {
+            if let Some(ref from_addr) = action.from {
+                rpc_gas_limit = try_estimate_gas(action.chain_id, from_addr, to, action.value.as_ref().and_then(|v| parse_num_u64("value", v)), &data_bytes);
+            }
+        }
+        let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).or(rpc_gas_limit).unwrap_or(21_000);
+
+        // nonce (query if not provided)
+        let mut rpc_nonce: Option<u64> = None;
+        if action.nonce.is_none() {
+            if let Some(ref from_addr) = action.from {
+                rpc_nonce = try_fetch_nonce(action.chain_id, from_addr);
+            }
+        }
+        let nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v)).or(rpc_nonce).unwrap_or(0);
+
         let tx_type = action.tx_type.as_deref().unwrap_or("eip1559");
 
+        log::info!("[tx build] chain={} to={} from={:?} nonce={} gas_limit={} gas_price={} (provided: gp? {} gl? {} n? {})", 
+            action.chain_id, to, action.from, nonce, gas_limit, gas_price,
+            action.gas_price.is_some(), action.gas_limit.is_some(), action.nonce.is_some());
+
         let build_res = if tx_type.eq_ignore_ascii_case("eip1559") {
+            // Derive max fees: prefer explicit fields; else use gas_price as both (simple heuristic)
             let max_fee = action.max_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_fee_per_gas", v)).unwrap_or(gas_price);
-            let max_priority = action.max_priority_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_priority_fee_per_gas", v)).unwrap_or(1_000_000_000);
+            let max_priority = action.max_priority_fee_per_gas.as_ref().and_then(|v| parse_num_u64("max_priority_fee_per_gas", v))
+                .unwrap_or_else(|| core::cmp::min(gas_price, 1_000_000_000));
             TransactionBuilder::build_eip1559_transaction(
                 to,
                 value,
