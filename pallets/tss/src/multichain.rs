@@ -197,7 +197,7 @@ impl MultiChainRpcClient {
             .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("[RPC] RPC error: {} (code: {})", error.message, error.code);
+            log::error!("[RPC] [eth_sendRawTransaction] RPC error: {} (code: {})", error.message, error.code);
             return Ok(RpcResponse {
                 tx_hash: None,
                 block_hash: None,
@@ -239,7 +239,7 @@ impl MultiChainRpcClient {
             .map_err(|_| "Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
+            log::error!("[RPC] [eth_getTransactionReceipt] RPC error: {} (code: {})", error.message, error.code);
             return Ok(RpcResponse {
                 tx_hash: Some(String::from(tx_hash)),
                 block_hash: None,
@@ -280,12 +280,12 @@ impl MultiChainRpcClient {
             .map_err(|_| "Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
-            return Err("RPC call failed");
+            log::error!("[RPC] [eth_blockNumber] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] RPC call failed");
         }
-        
-        let result = json_response.result.ok_or("No result in response")?;
-        
+
+        let result = json_response.result.ok_or("[RPC] No result in response")?;
+
         // Parse hex block number (e.g., "0x11a5b20" -> 18500000)
         let block_num_str = result.strip_prefix("0x").unwrap_or(&result);
         let block_number = u64::from_str_radix(block_num_str, 16)
@@ -300,9 +300,9 @@ impl MultiChainRpcClient {
         chain_config: &ChainConfig,
     ) -> Result<String, &'static str> {
         let rpc_url = String::from_utf8_lossy(&chain_config.rpc_url);
-        
-        log::info!("[RPC] Making RPC call to: {}", rpc_url);
-        
+
+        log::info!("[RPC] Making RPC call to: {} with body {}", rpc_url, request_body);
+
         // Create HTTP request
         let deadline = Timestamp::from_unix_millis(
             sp_io::offchain::timestamp().add(Duration::from_millis(30000)).unix_millis()
@@ -333,7 +333,7 @@ impl MultiChainRpcClient {
         let response_str = str::from_utf8(&response_body)
             .map_err(|_| "[RPC] Invalid UTF-8 in response")?;
         
-        log::debug!("[RPC] RPC response: {}", response_str);
+        log::info!("[RPC] RPC response: {}", response_str);
         
         Ok(String::from(response_str))
     }
@@ -379,12 +379,12 @@ impl MultiChainRpcClient {
             .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("[RPC] RPC error: {} (code: {})", error.message, error.code);
-            return Err("[RPC] RPC call failed");
+            log::error!("[RPC] [eth_gasPrice] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] [eth_gasPrice] RPC call failed");
         }
-        
-        let result = json_response.result.ok_or("[RPC] No result in response")?;
-        
+
+        let result = json_response.result.ok_or("[RPC] [eth_gasPrice] No result in response")?;
+
         // Parse hex gas price
         let gas_price_str = result.strip_prefix("0x").unwrap_or(&result);
         let gas_price = u64::from_str_radix(gas_price_str, 16)
@@ -418,17 +418,17 @@ impl MultiChainRpcClient {
             .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("[RPC] RPC error: {} (code: {})", error.message, error.code);
-            return Err("[RPC] RPC call failed");
+            log::error!("[RPC] [eth_getTransactionCount] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] [eth_getTransactionCount] RPC call failed");
         }
-        
-        let result = json_response.result.ok_or("[RPC] No result in response")?;
-        
+
+        let result = json_response.result.ok_or("[RPC] [eth_getTransactionCount] No result in response")?;
+
         // Parse hex nonce
         let nonce_str = result.strip_prefix("0x").unwrap_or(&result);
         let nonce = u64::from_str_radix(nonce_str, 16)
-            .map_err(|_| "[RPC] Failed to parse nonce")?;
-        
+            .map_err(|_| "[RPC] [eth_getTransactionCount] Failed to parse nonce")?;
+
         Ok(nonce)
     }
     
@@ -471,17 +471,17 @@ impl MultiChainRpcClient {
             .map_err(|_| "[RPC] Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
-            return Err("Gas estimation failed");
+            log::error!("[RPC] [eth_estimateGas] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] Gas estimation failed");
         }
-        
-        let result = json_response.result.ok_or("No result in response")?;
-        
+
+        let result = json_response.result.ok_or("[RPC] No result in response")?;
+
         // Parse hex gas estimate
         let gas_str = result.strip_prefix("0x").unwrap_or(&result);
         let gas_estimate = u64::from_str_radix(gas_str, 16)
-            .map_err(|_| "Failed to parse gas estimate")?;
-        
+            .map_err(|_| "[RPC] Failed to parse gas estimate")?;
+
         Ok(gas_estimate)
     }
 
@@ -510,17 +510,17 @@ impl MultiChainRpcClient {
             .map_err(|_| "Failed to parse JSON-RPC response")?;
         
         if let Some(error) = json_response.error {
-            log::error!("RPC error: {} (code: {})", error.message, error.code);
-            return Err("RPC call failed");
+            log::error!("[RPC] [eth_getBalance] RPC error: {} (code: {})", error.message, error.code);
+            return Err("[RPC] RPC call failed");
         }
-        
-        let result = json_response.result.ok_or("No result in response")?;
-        
+
+        let result = json_response.result.ok_or("[RPC] No result in response")?;
+
         // Parse hex balance
         let balance_str = result.strip_prefix("0x").unwrap_or(&result);
         let balance = u64::from_str_radix(balance_str, 16)
-            .map_err(|_| "Failed to parse balance")?;
-        
+            .map_err(|_| "[RPC] Failed to parse balance")?;
+
         Ok(balance)
     }
 }
