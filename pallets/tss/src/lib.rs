@@ -42,6 +42,7 @@ pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
 use types::{SessionId, NftId};
+use sp_core::U256;
 pub use payloads::*;
 pub use errors::*;
 pub use utils::*;
@@ -269,6 +270,7 @@ pub mod pallet {
     #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo)]
     pub struct SigningSession {
     pub dkg_session_id: SessionId,
+        pub request_id: U256, // Link to OPOC Outputs request id
     pub nft_id: NftId,
     pub message: BoundedVec<u8, MaxMessageSize>, // Store message to sign
     pub state: SessionState,
@@ -401,12 +403,12 @@ pub mod pallet {
     pub type PendingTransactions<T: Config> =
     StorageDoubleMap<_, Blake2_128Concat, u32, Blake2_128Concat, BoundedVec<u8, crate::types::MaxTxHashSize>, (BlockNumberFor<T>, u32), OptionQuery>;
 
-    /// Storage for mapping NFT IDs to pending FSA transaction data
-    /// Maps nft_id -> (chain_id, transaction_data)
+    /// Storage for mapping request IDs (from OPOC Outputs) to pending FSA transaction data
+    /// Maps request_id -> (nft_id, chain_id, transaction_data)
     #[pallet::storage]
     #[pallet::getter(fn fsa_transaction_requests)]
     pub type FsaTransactionRequests<T: Config> =
-    StorageMap<_, Blake2_128Concat, NftId, (u32, BoundedVec<u8, crate::types::MaxMessageSize>), OptionQuery>;
+    StorageMap<_, Blake2_128Concat, U256, (NftId, u32, BoundedVec<u8, crate::types::MaxMessageSize>), OptionQuery>;
 
 
     /// Counter for generating unique request IDs
@@ -574,15 +576,15 @@ pub mod pallet {
     #[pallet::call_index(2)]
     pub fn create_signing_session(
         _origin: OriginFor<T>,
+        request_id: U256,
         nft_id: NftId,
         message: BoundedVec<u8, MaxMessageSize>,
     ) -> DispatchResult {
-        // Prevent duplicate signing sessions for same nft_id + message while one is still in progress
+        // Prevent duplicate signing sessions for same request_id while one is still in progress
         for (_sid, existing) in SigningSessions::<T>::iter() {
-            if existing.nft_id == nft_id && existing.message == message && matches!(existing.state, SessionState::SigningInProgress) {
-                // Simply return Ok without creating a new session
-                log::debug!("[TSS] Skipping duplicate signing session request (already in progress)");
-                return Ok(());
+            if existing.request_id == request_id && matches!(existing.state, SessionState::SigningInProgress) {
+                log::debug!("[TSS] Skipping duplicate signing session request for request_id {:?}", request_id);
+                return Ok(()); // idempotent
             }
         }
         // Find the DKG session with this NFT ID
@@ -607,6 +609,7 @@ pub mod pallet {
         // Create new Signing session
         let session = SigningSession {
             dkg_session_id,
+            request_id,
             nft_id,
             message,
             aggregated_sig: None,
@@ -639,14 +642,15 @@ pub mod pallet {
         let nft_id = BoundedVec::try_from(nft_id_bytes)
             .map_err(|_| Error::<T>::DecodingError)?;
 
-        // Store FSA transaction request (chain_id + message bytes) if not already stored or to refresh
-        if !FsaTransactionRequests::<T>::contains_key(&nft_id) {
-            FsaTransactionRequests::<T>::insert(&nft_id, (payload.chain_id, payload.message.clone()));
-            log::info!("[TSS] Stored FSA transaction request in unsigned call for chain {}", payload.chain_id);
+        // Store FSA transaction request (nft_id + chain_id + message bytes) if not already stored
+        if !FsaTransactionRequests::<T>::contains_key(&payload.request_id) {
+            FsaTransactionRequests::<T>::insert(&payload.request_id, (nft_id.clone(), payload.chain_id, payload.message.clone()));
+            log::info!("[TSS] Stored FSA transaction request for request_id {:?} on chain {}", payload.request_id, payload.chain_id);
         }
 
-    Self::create_signing_session(
+        Self::create_signing_session(
             frame_system::RawOrigin::None.into(),
+            payload.request_id,
             nft_id,
             payload.message,
         )
@@ -1250,23 +1254,18 @@ pub mod pallet {
                             log::error!("TSS: No accounts available to sign create_signing_session");
                             break; 
                         }
-                        // Use the authoritative nft_id from Outputs, not derived from request_id
                         let message = match BoundedVec::try_from(tx_bytes) { Ok(m) => m, Err(_) => { log::error!("TSS: Failed to convert tx bytes to BoundedVec"); continue; } };
-                        // Before submitting unsigned tx, check if a signing session already exists for this nft/message combo
+                        // Duplicate detection via request_id only
                         let mut duplicate = false;
-                        if let Ok(nft_id_check_bytes) = NftId::try_from(nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect::<Vec<u8>>()) {
-                            for (_sid, existing) in SigningSessions::<T>::iter() {
-                                if existing.nft_id == nft_id_check_bytes && existing.message == message && matches!(existing.state, SessionState::SigningInProgress) {
-                                    duplicate = true; break;
-                                }
-                            }
+                        for (_sid, existing) in SigningSessions::<T>::iter() {
+                            if existing.request_id == request_id && matches!(existing.state, SessionState::SigningInProgress) { duplicate = true; break; }
                         }
                         if duplicate { 
-                            log::debug!("[TSS] Skipping unsigned create_signing_session because one already exists for this nft/message");
+                            log::debug!("[TSS] Skipping unsigned create_signing_session because one already exists for request_id {:?}", request_id);
                             continue; 
                         }
                         let _ = signer.send_unsigned_transaction(
-                            |acct| CreateSigningSessionPayload::<T> { nft_id: nft_id_u256, chain_id, message: message.clone(), public: acct.public.clone() },
+                            |acct| CreateSigningSessionPayload::<T> { request_id, nft_id: nft_id_u256, chain_id, message: message.clone(), public: acct.public.clone() },
                             |payload, signature| Call::create_signing_session_unsigned { payload, signature },
                         );
                         if request_id > max_request_id { max_request_id = request_id; }
@@ -1507,10 +1506,10 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    /// Helper function to get pending transaction data for an NFT ID
-    pub fn get_pending_transaction_data(nft_id: &NftId) -> Option<(u32, Vec<u8>)> {
-        FsaTransactionRequests::<T>::get(nft_id).map(|(chain_id, bounded_data)| {
-            (chain_id, bounded_data.into_inner())
+    /// Helper function to get pending transaction data for a request ID
+    pub fn get_pending_transaction_data_by_request(request_id: &U256) -> Option<(NftId, u32, Vec<u8>)> {
+        FsaTransactionRequests::<T>::get(request_id).map(|(nft_id, chain_id, bounded_data)| {
+            (nft_id, chain_id, bounded_data.into_inner())
         })
     }
 
@@ -1533,8 +1532,8 @@ impl<T: Config> Pallet<T> {
                 None => continue, // Should not happen due to filter, but safety check
             };
             
-            // Get FSA transaction request data from the session's NFT ID
-            if let Some((chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.nft_id) {
+            // Get FSA transaction request data from the session's request_id
+            if let Some((_, chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.request_id) {
                 let tx_data = tx_data_bounded.into_inner();
                 if let Some(tx_hash) = Self::submit_signed_transaction(session_id, chain_id, &tx_data, &signature) {
                 
@@ -1556,7 +1555,7 @@ impl<T: Config> Pallet<T> {
                 }
                 
                 // Clear processed FSA transaction requests for this session
-                FsaTransactionRequests::<T>::remove(&session.nft_id);
+                FsaTransactionRequests::<T>::remove(&session.request_id);
             }
         }
 
