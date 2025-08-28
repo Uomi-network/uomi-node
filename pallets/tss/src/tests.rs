@@ -1918,9 +1918,9 @@ mod tests {
                 to,
                 0u64,
                 &[],
-                21_000u64,
-                1_000_000_000,      // 0x77359400 = 2 gwei
-                1_000_000_000u64,      // priority fee 1 gwei
+                25_000u64, // updated default gas limit from dynamic estimation placeholder
+                1_000_000_000,      // max fee 1 gwei
+                1_000_000_000u64,   // priority fee 1 gwei
                 0u64,
                 chain_id,
             ).unwrap();

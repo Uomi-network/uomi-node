@@ -64,6 +64,8 @@ pub struct SubmitSignatureResultPayload<T: crate::Config> {
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct SubmitFsaTransactionPayload<T: crate::Config> {
     pub session_id: SessionId,
+    /// Unique request id linking to FsaTransactionRequests storage entry (allows direct removal without session scan)
+    pub request_id: sp_core::U256,
     pub chain_id: u32,
     pub tx_hash: BoundedVec<u8, MaxTxHashSize>,
     pub nft_id: NftId,

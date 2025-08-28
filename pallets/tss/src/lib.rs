@@ -1194,8 +1194,8 @@ pub mod pallet {
         PendingTransactions::<T>::insert(chain_id, payload.tx_hash.clone(), (current_block, max_wait_blocks));
         MultiChainTransactions::<T>::insert(chain_id, payload.tx_hash.clone(), crate::types::TransactionStatus::Submitted);
         Self::deposit_event(Event::MultiChainTransactionSubmitted(chain_id, payload.tx_hash.to_vec()));
-        // Remove the request so it's not reprocessed
-        FsaTransactionRequests::<T>::remove(&payload.nft_id);
+    // Directly remove the FSA request by request_id now that it's included in the payload
+    FsaTransactionRequests::<T>::remove(&payload.request_id);
         Ok(())
     }
 
@@ -1313,13 +1313,14 @@ pub mod pallet {
             if signer.can_sign() {
                 for (session_id, session) in SigningSessions::<T>::iter() {
                     if session.aggregated_sig.is_none() { continue; }
-                    if let Some((chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.nft_id) {
+                    if let Some((_, chain_id, tx_data_bounded)) = FsaTransactionRequests::<T>::get(&session.request_id) {
                         if let Some(signature) = &session.aggregated_sig {
                             let tx_bytes = tx_data_bounded.clone().into_inner();
                             if let Some(tx_hash) = Self::submit_signed_transaction(session_id, chain_id, &tx_bytes, signature) {
                                 let _ = signer.send_unsigned_transaction(
                                     |acct| crate::payloads::SubmitFsaTransactionPayload::<T> {
                                         session_id,
+                                        request_id: session.request_id,
                                         chain_id,
                                         tx_hash: tx_hash.clone(),
                                         nft_id: session.nft_id.clone(),
