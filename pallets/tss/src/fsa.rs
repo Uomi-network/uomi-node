@@ -140,17 +140,17 @@ impl<T: Config> crate::pallet::Pallet<T> {
         // Process all actions in the successfully parsed output
         for mut action in output.actions {
             // Attempt to auto-derive sender (from) if missing using aggregated public key associated with nft_id
-            if action.from.is_none() {
-                // Convert U256 nft_id -> bounded vec (same as elsewhere: little-endian limbs -> bytes)
-                if let Ok(nft_bv) = {
-                    let bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
-                    crate::types::NftId::try_from(bytes)
-                } {
-                    if let Some(from_addr) = derive_from_address::<T>(nft_bv) {
-                        action.from = Some(from_addr);
-                    }
-                }
-            }
+            // if action.from.is_none() {
+            //     // Convert U256 nft_id -> bounded vec (same as elsewhere: little-endian limbs -> bytes)
+            //     if let Ok(nft_bv) = {
+            //         let bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            //         crate::types::NftId::try_from(bytes)
+            //     } {
+            //         if let Some(from_addr) = derive_from_address::<T>(nft_bv) {
+            //             action.from = Some(from_addr);
+            //         }
+            //     }
+            // }
 
             log::info!("Processing action for request {:?}: {:?}", request_id, action);
 
@@ -188,6 +188,69 @@ fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String>
     const HEX: &[u8;16] = b"0123456789abcdef";
     for b in addr_bytes { out.push(HEX[(b>>4) as usize] as char); out.push(HEX[(b & 0x0f) as usize] as char); }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::Test as RuntimeTest;
+    use crate::types::{PublicKey, NftId};
+    use frame_support::BoundedVec;
+    use sp_io::TestExternalities;
+    use crate::pallet::{DKGSession, SessionState};
+
+    // Helper: decode hex (0x...) -> Vec<u8>
+    fn hex_to_bytes(s: &str) -> Vec<u8> {
+        let clean = s.strip_prefix("0x").unwrap_or(s);
+        let mut out = Vec::with_capacity(clean.len()/2);
+        let bytes = clean.as_bytes();
+        let mut i = 0; 
+        while i < bytes.len() { 
+            let h = |c: u8| -> u8 { match c { b'0'..=b'9' => c-b'0', b'a'..=b'f' => 10 + c - b'a', b'A'..=b'F' => 10 + c - b'A', _ => panic!("bad hex") } }; 
+            out.push((h(bytes[i])<<4) | h(bytes[i+1]));
+            i += 2; 
+        }
+        out
+    }
+
+    #[test]
+    fn derive_from_address_basic() {
+        // Build test externalities
+        let mut ext: TestExternalities = crate::mock::new_test_ext();
+        ext.execute_with(|| {
+            // Given: session id 1, nft id 1 (single byte for simplicity) and provided aggregated pubkey
+            let session_id: u64 = 1;
+            let nft_id: NftId = BoundedVec::try_from(vec![1u8]).unwrap();
+            let pubkey_hex = "0x1c3f03c972f0c4d8f94e6e4f63c2abb5e40a24cbdf82b2234f3ffbee8d9bb7a2228121a5c3bb15c2e39ed2fca0e1a0618c08a510d999124e731f41d1647364ce"; // 64-byte uncompressed (no 0x04)
+            let pubkey_bytes = hex_to_bytes(pubkey_hex);
+            assert_eq!(pubkey_bytes.len(), 64, "public key must be 64 bytes");
+            let pubkey: PublicKey = BoundedVec::try_from(pubkey_bytes.clone()).expect("bounded");
+
+            // Insert DKG session referencing nft_id
+            let session = DKGSession::<RuntimeTest> {
+                participants: BoundedVec::default(),
+                nft_id: nft_id.clone(),
+                threshold: 0,
+                state: SessionState::DKGComplete,
+                old_participants: None,
+                deadline: 0u64,
+            };
+            DkgSessions::<RuntimeTest>::insert(session_id, session);
+            AggregatedPublicKeys::<RuntimeTest>::insert(session_id, pubkey);
+
+            // When: deriving address
+            let derived = super::derive_from_address::<RuntimeTest>(nft_id.clone()).expect("address");
+
+            // Expected: keccak256(pubkey)[12..] hex-lc with 0x prefix
+            let hash = keccak_256(&pubkey_bytes);
+            let addr_bytes = &hash[12..];
+            let mut expected = String::from("0x");
+            const HEX: &[u8;16] = b"0123456789abcdef";
+            for b in addr_bytes { expected.push(HEX[(b>>4) as usize] as char); expected.push(HEX[(b & 0x0f) as usize] as char); }
+            assert_eq!(derived, expected, "derived address mismatch");
+            assert_eq!(derived.len(), 42, "expected 0x + 40 hex chars");
+        });
+    }
 }
 
 

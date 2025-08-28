@@ -413,8 +413,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         log::info!("[TSS] Successfully initialized FROST Signing session {}", signing_id);
 
         // Use DKG session id for ECDSA offline material lookup while associating the signing logic with signing_id
-        self.ecdsa_create_sign_phase(signing_id, dkg_id, participants, message);
-        
+
+        // message needs to be hashed and use the keccak for the signing process
+        let message_hash = keccak_256(&message);
+        self.ecdsa_create_sign_phase(signing_id, dkg_id, participants, message_hash);
+
         Ok(())
     }
 
