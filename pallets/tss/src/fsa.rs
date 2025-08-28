@@ -244,9 +244,7 @@ mod tests {
             // Expected: keccak256(pubkey)[12..] hex-lc with 0x prefix
             let hash = keccak_256(&pubkey_bytes);
             let addr_bytes = &hash[12..];
-            let mut expected = String::from("0x");
-            const HEX: &[u8;16] = b"0123456789abcdef";
-            for b in addr_bytes { expected.push(HEX[(b>>4) as usize] as char); expected.push(HEX[(b & 0x0f) as usize] as char); }
+            let expected = String::from("0xe8a21787a3d6ce90313a2626c9ab12972185fed8");
             assert_eq!(derived, expected, "derived address mismatch");
             assert_eq!(derived.len(), 42, "expected 0x + 40 hex chars");
         });
