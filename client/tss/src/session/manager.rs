@@ -11,6 +11,7 @@ use frost_ed25519::Identifier;
 use futures::{select, StreamExt, FutureExt};
 use sc_network::utils::interval;
 use std::time::Duration;
+use sp_io::hashing::keccak_256;
 
 use crate::{
     client::ClientManager,
