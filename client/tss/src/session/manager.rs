@@ -417,7 +417,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         // message needs to be hashed and use the keccak for the signing process
         let message_hash = keccak_256(&message);
-        self.ecdsa_create_sign_phase(signing_id, dkg_id, participants, message_hash);
+        self.ecdsa_create_sign_phase(signing_id, dkg_id, participants, message_hash.to_vec());
 
         Ok(())
     }
