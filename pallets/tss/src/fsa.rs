@@ -374,7 +374,6 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
             action.chain_id, to, action.from, nonce, gas_limit, gas_price,
             action.gas_price.is_some(), action.gas_limit.is_some(), action.nonce.is_some());
 
-        action.from = None; // We hardcode action.from to None
 
         let build_res = if tx_type.eq_ignore_ascii_case("eip1559") {
             // Derive max fees: prefer explicit fields; else use gas_price as both (simple heuristic)
