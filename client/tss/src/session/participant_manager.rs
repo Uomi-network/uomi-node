@@ -11,10 +11,19 @@ use log::info;
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     // Add the participant as active, so that it doesn't get reported as bad actor
     pub fn add_active_participant(&self, session_id: &SessionId, peer_id: &PeerId) {
-        info!("[TSS] Adding Active Participant {:?}", peer_id);
         let mut active_participants = self.participant_manager.active_participants.lock().unwrap();
         let participants = active_participants.entry(*session_id).or_insert_with(Vec::new);
-        participants.push(peer_id.to_bytes());
+        let pid = peer_id.to_bytes();
+        if participants.contains(&pid) {
+            // Already recorded, skip noisy log
+            return;
+        }
+        participants.push(pid);
+        // Fetch n for progress (SessionData = (t,n,coordinator,msg))
+        let sessions_data = self.session_core.sessions_data.lock().unwrap();
+        let maybe_n = sessions_data.get(session_id).map(|d| d.1).unwrap_or(0);
+        drop(sessions_data);
+        info!("[TSS] Adding Active Participant {:?} (active_count={}/{})", peer_id, participants.len(), maybe_n);
         drop(active_participants);
     }
 

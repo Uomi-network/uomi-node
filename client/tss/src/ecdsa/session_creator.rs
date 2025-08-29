@@ -338,5 +338,15 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             "[TSS][DIAG][SignOnline] END create_sign_phase signing_session_id={}",
             signing_session_id
         );
+
+        // Attempt to drain any buffered sign_online messages now that the phase exists
+        {
+            let mut mgr = self.ecdsa_manager.lock().unwrap();
+            if let Err(e) = mgr.handle_sign_online_buffer(signing_session_id) {
+                log::warn!("[TSS][DIAG][SignOnline][BUFFER] Failed draining sign_online buffer for session {} err={:?}", signing_session_id, e);
+            } else {
+                log::info!("[TSS][DIAG][SignOnline][BUFFER] Drained sign_online buffer for session {}", signing_session_id);
+            }
+        }
     }
 }

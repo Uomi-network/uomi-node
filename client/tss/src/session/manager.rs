@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -62,6 +62,8 @@ pub struct SessionManager<B: BlockT, C: ClientManager<B>> {
     pub satisfied_challenges: Arc<Mutex<Vec<(TSSPeerId, u32)>>>,
     // Map signing session_id -> originating DKG session_id (for key material lookup)
     pub signing_to_dkg: Arc<Mutex<HashMap<SessionId, SessionId>>>,
+    // Deduplication: track signing runtime events we've already processed (signing_id,dkg_id)
+    pub seen_signing_events: Arc<Mutex<HashSet<(SessionId, SessionId)>>>,
     pub _phantom: PhantomData<B>,
 }
 
@@ -135,6 +137,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             outstanding_challenges: Arc::new(Mutex::new(HashMap::new())),
             satisfied_challenges: Arc::new(Mutex::new(Vec::new())),
             signing_to_dkg: Arc::new(Mutex::new(empty_hash_map())),
+            seen_signing_events: Arc::new(Mutex::new(HashSet::new())),
             _phantom: PhantomData,
         };
 
@@ -339,6 +342,14 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 }
             }
             TSSRuntimeEvent::SigningSessionInfoReady(signing_id, dkg_id, t, n, participants, coordinator, message) => {
+                // Deduplicate runtime signing events (can be emitted multiple times across forks/re-orgs / replay)
+                {
+                    let mut seen = self.seen_signing_events.lock().unwrap();
+                    if !seen.insert((signing_id, dkg_id)) {
+                        log::debug!("[TSS][DEDUP] Ignoring duplicate SigningSessionInfoReady signing_id={} dkg_id={}", signing_id, dkg_id);
+                        return;
+                    }
+                }
                 if let Err(e) = self.add_and_initialize_signing_session(signing_id, dkg_id, t, n, participants, coordinator, message) {
                     log::error!("[TSS] Failed to process signing session {}: {:?}", signing_id, e);
                 }
@@ -389,14 +400,19 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     }
 
     fn add_and_initialize_signing_session(&self, signing_id: SessionId, dkg_id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, coordinator: [u8; 32], message: Vec<u8>) -> Result<(), String> {
-        if !self.session_exists(&signing_id) {
-            self.add_session_data(signing_id, t, n, coordinator, participants.clone(), message.clone())
-                .map_err(|e| format!("Failed to add data: {:?}", e))?;
+        // Atomic-ish guard: if already exists, skip re-initialization entirely (avoid duplicate sign phase)
+        if self.session_exists(&signing_id) {
+            log::debug!("[TSS][DEDUP] Signing session {} already initialized; skipping re-init", signing_id);
+            return Ok(());
         }
 
-        // Check if the session dkg_id exists, if it does not create it:
+        // Insert signing session data
+        self.add_session_data(signing_id, t, n, coordinator, participants.clone(), message.clone())
+            .map_err(|e| format!("Failed to add data: {:?}", e))?;
+
+        // Ensure originating DKG exists (some chains may omit sending DKG event again)
         if !self.session_exists(&dkg_id) {
-            log::warn!("[TSS] DKG session {} does not exist, creating it", dkg_id);
+            log::warn!("[TSS] DKG session {} does not exist, creating placeholder for signing {}", dkg_id, signing_id);
             self.add_session_data(dkg_id, t.into(), n.into(), coordinator, participants.clone(), message.clone())
                 .map_err(|e| format!("Failed to add data for missing DKG session: {:?}", e))?;
         }
@@ -409,16 +425,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             map.insert(signing_id, dkg_id);
         }
 
-        // self.signing_handle_session_created(signing_id, participants.clone(), coordinator.clone());
-    
         log::info!("[TSS] Successfully initialized FROST Signing session {}", signing_id);
-
-        // Use DKG session id for ECDSA offline material lookup while associating the signing logic with signing_id
 
         // message needs to be hashed and use the keccak for the signing process
         let message_hash = keccak_256(&message);
         self.ecdsa_create_sign_phase(signing_id, dkg_id, participants, message_hash.to_vec());
-
         Ok(())
     }
 
