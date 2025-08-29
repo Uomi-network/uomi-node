@@ -140,17 +140,22 @@ impl<T: Config> crate::pallet::Pallet<T> {
         // Process all actions in the successfully parsed output
         for mut action in output.actions {
             // Attempt to auto-derive sender (from) if missing using aggregated public key associated with nft_id
-            // if action.from.is_none() {
-            //     // Convert U256 nft_id -> bounded vec (same as elsewhere: little-endian limbs -> bytes)
-            //     if let Ok(nft_bv) = {
-            //         let bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
-            //         crate::types::NftId::try_from(bytes)
-            //     } {
-            //         if let Some(from_addr) = derive_from_address::<T>(nft_bv) {
-            //             action.from = Some(from_addr);
-            //         }
-            //     }
-            // }
+            if action.from.is_none() {
+                if let Ok(nft_bv) = {
+                    // Convert U256 nft_id -> bounded vec (little-endian limbs -> bytes)
+                    let bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+                    crate::types::NftId::try_from(bytes)
+                } {
+                    if let Some(from_addr) = derive_from_address::<T>(nft_bv) {
+                        log::info!("Auto-derived 'from' address {} for request {:?}", from_addr, request_id);
+                        action.from = Some(from_addr);
+                    } else {
+                        log::debug!("Failed to derive 'from' address for request {:?}", request_id);
+                    }
+                } else {
+                    log::debug!("Could not convert nft_id to bounded vec for address derivation (request {:?})", request_id);
+                }
+            }
 
             log::info!("Processing action for request {:?}: {:?}", request_id, action);
 
@@ -368,6 +373,8 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
         log::info!("[tx build] chain={} to={} from={:?} nonce={} gas_limit={} gas_price={} (provided: gp? {} gl? {} n? {})", 
             action.chain_id, to, action.from, nonce, gas_limit, gas_price,
             action.gas_price.is_some(), action.gas_limit.is_some(), action.nonce.is_some());
+
+        action.from = None; // We hardcode action.from to None
 
         let build_res = if tx_type.eq_ignore_ascii_case("eip1559") {
             // Derive max fees: prefer explicit fields; else use gas_price as both (simple heuristic)
