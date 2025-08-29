@@ -1517,6 +1517,7 @@ impl<T: Config> Pallet<T> {
             (SupportedChain::Arbitrum.get_chain_id(), "Arbitrum"),
             (SupportedChain::Optimism.get_chain_id(), "Optimism"),
             (SupportedChain::Fantom.get_chain_id(), "Fantom"),
+            (SupportedChain::Base.get_chain_id(), "Base"),
         ]
     }
 

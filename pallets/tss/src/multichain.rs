@@ -38,6 +38,7 @@ pub enum SupportedChain {
     Optimism,
     Fantom,
     Uomi,
+    Base
     // Add more chains as needed
 }
 
