@@ -19,29 +19,73 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         t: u16,
         participants: Vec<TSSParticipant>,
     ) {
+        log::info!(
+            "[TSS][DIAG][Keygen] BEGIN create_keygen_phase session_id={} n={} t={} participants_len={}",
+            id, n, t, participants.len()
+        );
         let mut handler = self.ecdsa_manager.lock().unwrap();
 
         // Resolve our stable session index using PeerMapper (validator_id-backed), not array position
         let my_id: Option<u16> = {
             let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
-            peer_mapper.get_id_from_account_id(&id, &self.session_core.validator_key)
+            let mid = peer_mapper.get_id_from_account_id(&id, &self.session_core.validator_key);
+            log::info!(
+                "[TSS][DIAG][Keygen] resolved my_id={:?} for validator_key_prefix={:02x?}",
+                mid,
+                &self.session_core.validator_key[0..4]
+            );
+            mid
         };
 
         if my_id.is_none() {
-            log::info!("[TSS] We are not allowed to participate");
+            log::info!("[TSS][DIAG][Keygen] abort: we are not a participant (my_id is None)");
             return;
         }
 
         let my_id = my_id.unwrap();
-        log::info!("[TSS] My Id = {:?}", my_id);
+        log::info!("[TSS][DIAG][Keygen] My Id = {}", my_id);
 
-        let participant_indices: Vec<String> = {
+        // Collect validator IDs with detailed diagnostics (do not silently hide missing)
+        let (participant_indices, missing_positions): (Vec<String>, Vec<usize>) = {
             let mut pm = self.session_core.peer_mapper.lock().unwrap();
-            participants.iter()
-                .filter_map(|p| pm.get_validator_id(&p.to_vec()))
-                .map(|vid| vid.to_string())
-                .collect()
+            let mut collected = Vec::new();
+            let mut missing = Vec::new();
+            for (idx, p) in participants.iter().enumerate() {
+                let vid_opt = pm.get_validator_id(&p.to_vec());
+                log::info!(
+                    "[TSS][DIAG][Keygen] participant idx={} pubkey_prefix={:02x?} validator_id={:?}",
+                    idx,
+                    &p.to_vec()[0..std::cmp::min(4, p.len())],
+                    vid_opt
+                );
+                if let Some(vid) = vid_opt {
+                    collected.push(vid.to_string());
+                } else {
+                    missing.push(idx);
+                }
+            }
+            (collected, missing)
         };
+
+        if !missing_positions.is_empty() {
+            log::info!(
+                "[TSS][DIAG][Keygen][WARNING] Missing validator IDs for participant positions {:?}; collected_count={} original_count={}",
+                missing_positions,
+                participant_indices.len(),
+                participants.len()
+            );
+        } else {
+            log::info!(
+                "[TSS][DIAG][Keygen] All validator IDs present collected_count={} original_count={}",
+                participant_indices.len(),
+                participants.len()
+            );
+        }
+
+        log::info!(
+            "[TSS][DIAG][Keygen] participant_indices(list)={:?}",
+            participant_indices
+        );
 
         let keygen = handler.add_keygen(
             id,
@@ -54,17 +98,25 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         if let Some(_) = keygen {
             let msg = {
                 let mut keygen = handler.get_keygen(id).unwrap();
-                keygen.process_begin()
+                let r = keygen.process_begin();
+                if r.is_err() {
+                    log::info!("[TSS][DIAG][Keygen] process_begin error={:?}", r.as_ref().err());
+                } else {
+                    log::info!("[TSS][DIAG][Keygen] process_begin Ok");
+                }
+                r
             };
 
             match msg {
                 Err(error) => log::error!("[TSS] Error beginning process {:?}", error),
                 Ok(msg) => {
+                    log::info!("[TSS][DIAG][Keygen] Dispatching SendingMessages");
                     self.handle_ecdsa_sending_messages(id, msg, &mut handler, ECDSAPhase::Key)
                 }
             }
         }
         drop(handler);
+        log::info!("[TSS][DIAG][Keygen] END create_keygen_phase session_id={}", id);
     }
 
     pub fn ecdsa_create_reshare_phase(
@@ -131,9 +183,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     }
 
     fn create_participant_indices(&self, participants: &[TSSParticipant]) -> Vec<String> {
-        (1..=participants.len())
-            .map(|el| el.to_string())
-            .collect()
+        let v: Vec<String> = (1..=participants.len()).map(|el| el.to_string()).collect();
+        log::info!(
+            "[TSS][DIAG][Helper] create_participant_indices participants_len={} produced={:?}",
+            participants.len(),
+            v
+        );
+        v
     }
 
     pub fn ecdsa_create_sign_offline_phase(
@@ -145,13 +201,24 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         index: String,
         ecdsa_manager: &mut MutexGuard<'_, ECDSAManager>,
     ) {
+        log::info!(
+            "[TSS][DIAG][SignOffline] BEGIN create_sign_offline_phase session_id={} t={} n={} my_index={} keys_len={}",
+            id,
+            t,
+            n,
+            index,
+            keys.len()
+        );
+        let constructed_indices: Vec<String> = (1..=n).map(|el| el.to_string()).collect();
+        log::info!(
+            "[TSS][DIAG][SignOffline] constructed_indices={:?} (len={})",
+            constructed_indices,
+            constructed_indices.len()
+        );
         let sign_offline = ecdsa_manager.add_sign(
             id,
             index,
-            &(1..n+1)
-                .into_iter()
-                .map(|el| el.to_string())
-                .collect::<Vec<String>>(),
+            &constructed_indices,
             t.into(),
             n.into(),
             &keys,
@@ -161,9 +228,16 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             let msg = {
                 let sign_offline = ecdsa_manager.get_sign(id);
                 if let None = sign_offline {
+                    log::info!("[TSS][DIAG][SignOffline][ERROR] get_sign returned None after add_sign success");
                     return;
                 }
-                sign_offline.unwrap().process_begin()
+                let r = sign_offline.unwrap().process_begin();
+                if r.is_err() {
+                    log::info!("[TSS][DIAG][SignOffline] process_begin error={:?}", r.as_ref().err());
+                } else {
+                    log::info!("[TSS][DIAG][SignOffline] process_begin Ok");
+                }
+                r
             };
 
             if let Err(error) = msg {
@@ -176,8 +250,9 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             );
             self.handle_ecdsa_sending_messages(id, msg.unwrap(), ecdsa_manager, ECDSAPhase::Sign);
         } else {
-            log::info!("[TSS] There was an error generating the signing phase");
+            log::info!("[TSS][DIAG][SignOffline][ERROR] add_sign returned None");
         }
+        log::info!("[TSS][DIAG][SignOffline] END create_sign_offline_phase session_id={}", id);
     }
 
     pub fn ecdsa_create_sign_phase(
@@ -187,14 +262,22 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         participants: Vec<TSSParticipant>,
         message: Vec<u8>,
     ) {
+        log::info!(
+            "[TSS][DIAG][SignOnline] BEGIN create_sign_phase signing_session_id={} dkg_session_id={} participants_len={} message_len={}",
+            signing_session_id,
+            dkg_session_id,
+            participants.len(),
+            message.len()
+        );
         // Use PeerMapper-provided index for this session
         let my_id = match self.get_my_index(dkg_session_id) {
             Some(idx) => idx,
             None => {
-                log::info!("[TSS] We are not allowed to participate");
+                log::info!("[TSS][DIAG][SignOnline] abort: not a participant (get_my_index None)");
                 return;
             }
         };
+        log::info!("[TSS][DIAG][SignOnline] my_id={}", my_id);
         let identifier: Identifier = my_id.try_into().unwrap();
 
         let mut handler = self.ecdsa_manager.lock().unwrap();
@@ -213,20 +296,33 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         drop(storage);
 
-        let sign_online = handler.add_sign_online(
-            signing_session_id,
-            &String::from_utf8(offline_result.unwrap()).unwrap(),
-            message,
+        let offline_str = String::from_utf8(offline_result.unwrap());
+        if offline_str.is_err() {
+            log::info!("[TSS][DIAG][SignOnline][ERROR] offline_output utf8 decode failed err={:?}", offline_str.as_ref().err());
+            return;
+        }
+        let offline_str = offline_str.unwrap();
+        log::info!(
+            "[TSS][DIAG][SignOnline] offline_output_len={} prefix={:02x?}",
+            offline_str.len(),
+            &offline_str.as_bytes()[0..std::cmp::min(8, offline_str.len())]
         );
+        let sign_online = handler.add_sign_online(signing_session_id, &offline_str, message.clone());
 
         if let None = sign_online {
-            log::error!("[TSS] There was an error generating the signing phase");
+            log::error!("[TSS][DIAG][SignOnline][ERROR] add_sign_online returned None");
         }
 
         if let Some(_) = sign_online {
             let msg = {
                 let mut sign_online_handle = handler.get_sign_online(signing_session_id).unwrap();
-                sign_online_handle.process_begin()
+                let r = sign_online_handle.process_begin();
+                if r.is_err() {
+                    log::info!("[TSS][DIAG][SignOnline] process_begin error={:?}", r.as_ref().err());
+                } else {
+                    log::info!("[TSS][DIAG][SignOnline] process_begin Ok");
+                }
+                r
             };
 
             if let Err(error) = msg {
@@ -234,13 +330,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 return;
             }
 
-            self.handle_ecdsa_sending_messages(
-                signing_session_id,
-                msg.unwrap(),
-                &mut handler,
-                ECDSAPhase::SignOnline,
-            );
+            log::info!("[TSS][DIAG][SignOnline] Dispatching SendingMessages");
+            self.handle_ecdsa_sending_messages(signing_session_id, msg.unwrap(), &mut handler, ECDSAPhase::SignOnline);
         }
         drop(handler);
+        log::info!(
+            "[TSS][DIAG][SignOnline] END create_sign_phase signing_session_id={}",
+            signing_session_id
+        );
     }
 }
