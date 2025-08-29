@@ -45,7 +45,7 @@ impl SupportedChain {
     /// Get the default Ankr RPC URL for a given chain
     pub fn get_ankr_rpc_url(&self) -> &'static str {
         match self {
-            SupportedChain::Ethereum => "https://rpc.ankr.com/eth",
+            SupportedChain::Ethereum => "https://eth.llamarpc.com",
             SupportedChain::BinanceSmartChain => "https://rpc.ankr.com/bsc",
             SupportedChain::Polygon => "https://rpc.ankr.com/polygon",
             SupportedChain::Avalanche => "https://rpc.ankr.com/avalanche",
@@ -53,6 +53,7 @@ impl SupportedChain {
             SupportedChain::Optimism => "https://rpc.ankr.com/optimism",
             SupportedChain::Fantom => "https://rpc.ankr.com/fantom",
             SupportedChain::Uomi => "http://localhost:9944", // Local Uomi node RPC
+            SupportedChain::Base => "https://base.llamarpc.com",
         }
     }
 
@@ -67,6 +68,7 @@ impl SupportedChain {
             SupportedChain::Optimism => 10,
             SupportedChain::Fantom => 250,
             SupportedChain::Uomi => 4386,
+            SupportedChain::Base => 8453,
         }
     }
 
@@ -163,6 +165,7 @@ impl MultiChainRpcClient {
             10 => SupportedChain::Optimism,
             250 => SupportedChain::Fantom,
             4386 => SupportedChain::Uomi,
+            8453 => SupportedChain::Base,
             _ => return Err("Unsupported chain ID"),
         };
 

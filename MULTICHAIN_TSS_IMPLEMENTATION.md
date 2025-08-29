@@ -6,7 +6,7 @@ This implementation adds multi-chain transaction support to the TSS (Threshold S
 ## Key Features Implemented
 
 ### 1. Multi-Chain Support
-- **Supported Networks**: Ethereum, Binance Smart Chain, Polygon, Avalanche, Arbitrum, Optimism, Fantom, Uomi (local chain_id 4386)
+- **Supported Networks**: Ethereum, Binance Smart Chain, Polygon, Avalanche, Arbitrum, Optimism, Fantom, Uomi (local chain_id 4386), Base
 - **Ankr RPC Integration**: Pre-configured RPC endpoints for major public chains
 - **Chain Configuration Management**: Storage and validation of chain configurations
 
