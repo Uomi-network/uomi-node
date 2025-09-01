@@ -559,6 +559,8 @@ pub mod pallet {
     NonceWindowExceeded,
     NonceNotAllocated,
     PendingStorageFull,
+    /// Called a deprecated / removed extrinsic retained only for decoding legacy transactions
+    DeprecatedExtrinsic,
     }
 
     #[pallet::call]
@@ -1199,6 +1201,28 @@ pub mod pallet {
     }
 
     // Removed legacy get_agent_nonce / increment_agent_nonce extrinsics (indices 11,12) – internal nonce management only.
+    // Reintroduced as deprecated stubs so old in-flight transactions decode cleanly instead of panicking.
+    #[pallet::weight(0)]
+    #[pallet::call_index(11)]
+    pub fn get_agent_nonce(
+        origin: OriginFor<T>,
+        _nft_id: NftId,
+        _chain_id: u32,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        Err(Error::<T>::DeprecatedExtrinsic.into())
+    }
+
+    #[pallet::weight(0)]
+    #[pallet::call_index(12)]
+    pub fn increment_agent_nonce(
+        origin: OriginFor<T>,
+        _nft_id: NftId,
+        _chain_id: u32,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        Err(Error::<T>::DeprecatedExtrinsic.into())
+    }
 
     /// Get the status of a multi-chain transaction
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::get_transaction_status())]
