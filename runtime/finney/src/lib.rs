@@ -1352,6 +1352,7 @@ impl pallet_uomi_engine::Config for Runtime {
     type IpfsPallet = IpfsWrapper;
     type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
     type InherentDataType = u16;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
 }
 
 pub struct IpfsWrapper;
