@@ -466,7 +466,14 @@ pub mod pallet {
             });
         }
 
-		fn on_finalize(_n: BlockNumberFor<T>) {
+		fn on_finalize(_: BlockNumberFor<T>) {
+            // TEMPORARY MOD FOR TURING TESTNET: Every 100 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
+            let current_block_number = U256::from(0) + <frame_system::Pallet<T>>::block_number();
+            if current_block_number % 100 == U256::zero() {
+                log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
+                OpocBlacklist::<T>::remove_all(None);
+            }
+
             // Be sure that the InherentDidUpdate is set to true and reset it to false.
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "UOMI-ENGINE: inherent must be updated once in the block");
