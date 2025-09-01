@@ -81,6 +81,7 @@ pub trait TssWeightInfo {
     fn update_chain_config() -> frame_support::weights::Weight;
     fn get_transaction_status() -> frame_support::weights::Weight;
     fn timeout_pending_transaction_unsigned() -> frame_support::weights::Weight;
+    fn fail_multi_chain_transaction_unsigned() -> frame_support::weights::Weight;
 }
 
 impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
@@ -98,6 +99,7 @@ impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
     fn update_chain_config() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn get_transaction_status() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn timeout_pending_transaction_unsigned() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn fail_multi_chain_transaction_unsigned() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
 }
 
 
@@ -1265,6 +1267,27 @@ pub mod pallet {
         }
         Ok(())
     }
+
+    /// Offchain worker marks a failed transaction
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::fail_multi_chain_transaction_unsigned())]
+    pub fn fail_multi_chain_transaction_unsigned(
+        origin: OriginFor<T>,
+        payload: crate::payloads::FailMultiChainTransactionPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        // Ensure still pending
+        let request_id = payload.request_id;
+
+        if FsaTransactionRequests::<T>::contains_key(&request_id) {
+            if let Some((_, chain_id, _)) = FsaTransactionRequests::<T>::get(&request_id) {
+                FsaTransactionRequests::<T>::remove(&request_id);
+                Self::deposit_event(Event::MultiChainTransactionFailed(chain_id, Vec::new()));
+            }
+        }
+        Ok(())
+    }
+
     /// Create a signing session specifically for a nonce gap filler (unsigned, offchain initiated)
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_signing_session_unsigned())]
     #[pallet::call_index(18)]
@@ -1419,6 +1442,14 @@ pub mod pallet {
                     .propagate(true)
                     .build();
             }
+            Call::fail_multi_chain_transaction_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX / 4)
+                    .and_provides(call.encode())
+                    .longevity(16)
+                    .propagate(true)
+                    .build();
+            }
 
             // Reject all other unsigned calls
             _ => {
@@ -1457,6 +1488,15 @@ pub mod pallet {
                                     |payload, signature| Call::submit_fsa_transaction_unsigned { payload, signature },
                                 );
                             } else {
+                                // We track this as failed using
+                                let _ = signer.send_unsigned_transaction(
+                                    |acct| crate::payloads::FailMultiChainTransactionPayload::<T> {
+                                        request_id: session.request_id,
+                                        public: acct.public.clone(),
+                                    },
+                                    |payload, signature| Call::fail_multi_chain_transaction_unsigned { payload, signature },
+                                );
+
                                 log::error!("[FSA] Failed to submit signed tx for session {} offchain", session_id);
                             }
                         }
