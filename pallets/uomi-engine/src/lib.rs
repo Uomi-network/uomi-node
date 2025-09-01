@@ -23,6 +23,10 @@ pub mod weights;
 pub use weights::*;
 
 use frame_support::pallet_prelude::DispatchClass;
+use frame_support::weights::Weight;
+use sp_runtime::Perbill;
+use sp_staking::offence::{Offence, ReportOffence};
+use sp_staking::SessionIndex; // public alias
 use codec::{Decode, Encode};
 use frame_support::{
     BoundedVec,
@@ -40,6 +44,7 @@ use frame_support::{
     storage::types::StorageValue,
     traits::Randomness,
 };
+use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
     ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
 };
@@ -49,9 +54,10 @@ use pallet_ipfs::{
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
 };
 use pallet_session::{self as session};
+use pallet_authorship as authorship;
 use sp_core::{H160, U256};
 use sp_runtime::{
-    traits::IdentifyAccount,
+    traits::{IdentifyAccount, Convert, SaturatedConversion},
     DispatchResult,
 };
 use sp_std::{
@@ -109,17 +115,25 @@ pub mod pallet {
     pub struct Pallet<T>(PhantomData<T>);
 
     // Config
-	#[pallet::config]
-	pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> + session::Config + pallet_ipfs::Config {
-		type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
-		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-		type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
+    #[pallet::config]
+    pub trait Config: frame_system::Config
+        + CreateSignedTransaction<Call<Self>>
+        + session::Config<ValidatorId = <Self as frame_system::Config>::AccountId>
+        + pallet_session::historical::Config
+        + pallet_offences::Config
+        + authorship::Config
+        + pallet_ipfs::Config {
+        type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
+        type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+        type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
-
-
-        
-	}
+        type OffenceReporter: ReportOffence<
+            <Self as frame_system::Config>::AccountId,
+            pallet_session::historical::IdentificationTuple<Self>,
+            EngineReportedOffence<Self>
+        >;
+    }
 
     // Events
     #[pallet::event]
@@ -166,6 +180,17 @@ pub mod pallet {
             inference_index: u32, // The inference index.
             inference_proof: Data, // The inference proof.
         },
+        // --- Offence reporting (structure only, no logic yet) ---
+        EngineOffenceReported {
+            offence_type: EngineOffenceType, // Type of offence
+            request_id: RequestId,            // Request id context (instead of session id)
+            offenders_count: u32,             // Number of offenders included
+        },
+        EngineValidatorSlashed {
+            offender: T::AccountId,   // Offender account id
+            offence_type: EngineOffenceType, // Offence type
+            request_id: RequestId,    // Request id context
+        },
     }
 
     // Errors
@@ -174,7 +199,88 @@ pub mod pallet {
         SomethingWentWrong,
         InvalidAddress,
         InvalidCid,
+    TooManyOffenders,
+    OffenceAlreadyPending,
+    OffenceNoValidOffenders,
     }
+
+    // ------------------------------------------------------------
+    // Offence reporting (structure only)
+    // ------------------------------------------------------------
+    // NOTE: This mirrors the TSS pallet structure but uses `RequestId` instead of `SessionId`.
+    // No execution / processing logic is added yet – this is a scaffolding for future integration.
+
+    // (No staking offence integration yet; keep lean dependencies)
+
+    // Maximum offenders retained per reported engine offence (can be adjusted later).
+    parameter_types! { pub const MaxEngineOffenders: u32 = 128; }
+    // Max automatic timeout scans per block.
+    // Max engine requests scanned per block for majority-output disagreement.
+    parameter_types! { pub const MaxEngineRequestConsensusScans: u32 = 25; }
+
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen)]
+    #[repr(u8)]
+    pub enum EngineOffenceType {
+        /// Validator failed to provide required output within the allowed time window
+        OutputTimeout = 0,
+        /// Submitted output deemed invalid / inconsistent with consensus
+        InvalidOutput = 1,
+        /// Repeated failures or malicious behavior across requests
+        RepeatedMisbehavior = 2,
+    }
+
+    #[derive(RuntimeDebug, Clone)]
+    pub struct EngineReportedOffence<T: Config> {
+        pub offence_type: EngineOffenceType,
+        pub request_id: RequestId,
+        pub session_index: SessionIndex,
+        pub validator_set_count: u32,
+        pub offenders: Vec<pallet_session::historical::IdentificationTuple<T>>,
+    }
+
+    impl<T: Config> Offence<pallet_session::historical::IdentificationTuple<T>> for EngineReportedOffence<T>
+    where
+        T: pallet_session::historical::Config,
+        T: session::Config<ValidatorId = <T as frame_system::Config>::AccountId>,
+    {
+        const ID: [u8; 16] = *b"engine:offence__";
+        type TimeSlot = RequestId;
+        fn offenders(&self) -> Vec<pallet_session::historical::IdentificationTuple<T>> { self.offenders.clone() }
+    fn session_index(&self) -> SessionIndex { self.session_index }
+        fn validator_set_count(&self) -> u32 { self.validator_set_count }
+        fn time_slot(&self) -> Self::TimeSlot { self.request_id }
+        fn slash_fraction(&self, _offenders_count: u32) -> Perbill {
+            match self.offence_type {
+                EngineOffenceType::OutputTimeout => Perbill::from_percent(1),
+                EngineOffenceType::InvalidOutput => Perbill::from_percent(2),
+                EngineOffenceType::RepeatedMisbehavior => Perbill::from_percent(5),
+            }
+        }
+    }
+
+    /// Pending engine offences keyed by request id. (type, reporter, offenders)
+    #[pallet::storage]
+    #[pallet::getter(fn pending_engine_offences)]
+    pub type PendingEngineOffences<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        RequestId,
+        (EngineOffenceType, T::AccountId, BoundedVec<T::AccountId, MaxEngineOffenders>),
+        OptionQuery,
+    >;
+
+    /// Prevent repeated slashing for the same (request_id, offence_type, offender)
+    #[pallet::storage]
+    pub type ProcessedEngineOffenderFlags<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, RequestId,
+        Blake2_128Concat, (T::AccountId, u8), // (offender, offence_type encoded)
+        (),
+        OptionQuery
+    >;
+
+    // Limit how many pending offences we process per block to bound weight.
+    parameter_types! { pub const MaxEngineOffencesPerBlock: u32 = 10; }
 
     // InherentDidUpdate storage is used to store the execution of the inherent function.
 	#[pallet::storage]
@@ -365,6 +471,12 @@ pub mod pallet {
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "UOMI-ENGINE: inherent must be updated once in the block");
 		}
+
+        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+            Self::detect_invalid_output_offences();
+            if let Err(e) = Self::process_pending_engine_offences() { log::error!("[ENGINE] Offence processing failed: {:?}", e); }
+            Weight::from_parts(20_000,0)
+        }
     }
 
     // The pallet's dispatchable functions that require unsigned payloads are defined here.
@@ -424,6 +536,89 @@ pub mod pallet {
                     InvalidTransaction::Call.into()
                 }
             }
+        }
+    }
+
+    // Internal helper impl block (after hooks / unsigned validation)
+    impl<T: Config> Pallet<T> {
+        fn insert_pending_offence(
+            request_id: RequestId,
+            reporter: T::AccountId,
+            offence_type: EngineOffenceType,
+            offenders: Vec<T::AccountId>,
+        ) -> DispatchResult {
+            ensure!(!PendingEngineOffences::<T>::contains_key(&request_id), Error::<T>::OffenceAlreadyPending);
+            let mut uniq: Vec<T::AccountId> = Vec::new();
+            for a in offenders { if !uniq.contains(&a) { uniq.push(a); } }
+            ensure!(!uniq.is_empty(), Error::<T>::OffenceNoValidOffenders);
+            let bounded: BoundedVec<T::AccountId, MaxEngineOffenders> = uniq.clone().try_into().map_err(|_| Error::<T>::TooManyOffenders)?;
+            PendingEngineOffences::<T>::insert(&request_id, (offence_type, reporter.clone(), bounded.clone()));
+            Self::deposit_event(Event::EngineOffenceReported { offence_type, request_id, offenders_count: bounded.len() as u32 });
+            Ok(())
+        }
+
+        // Detect invalid outputs using OpocErrors storage: any validator flagged with an error
+        // (OpocErrors[rid][validator] == true) is considered an offender for InvalidOutput.
+        // We scan distinct request_ids up to MaxEngineRequestConsensusScans per block.
+        fn detect_invalid_output_offences() {
+            use sp_std::collections::btree_set::BTreeSet;
+            let mut processed: BTreeSet<RequestId> = BTreeSet::new();
+            for (rid, _acc, flag) in OpocErrors::<T>::iter() {
+                if !flag { continue; }
+                if processed.len() as u32 >= MaxEngineRequestConsensusScans::get() { break; }
+                if processed.contains(&rid) { continue; }
+                processed.insert(rid);
+                let offenders: Vec<T::AccountId> = OpocErrors::<T>::iter_prefix(rid)
+                    .filter(|(_, has_err)| *has_err)
+                    .map(|(acc, _)| acc)
+                    .collect();
+                if offenders.is_empty() { continue; }
+                // Reporter: current block author if available and not among offenders, otherwise first non-offender with output, else first offender.
+                let block_author_opt = <authorship::Pallet<T>>::author();
+                let reporter = block_author_opt
+                    .filter(|a| !offenders.contains(a))
+                    .or_else(||
+                        NodesOutputs::<T>::iter_prefix(rid)
+                            .find(|(acc, _)| !offenders.contains(acc))
+                            .map(|(acc, _)| acc)
+                    )
+                    .or_else(|| offenders.first().cloned());
+                if let Some(rep) = reporter { let _ = Self::insert_pending_offence(rid, rep, EngineOffenceType::InvalidOutput, offenders); }
+            }
+        }
+
+        pub fn process_pending_engine_offences() -> DispatchResult {
+            let mut to_process: Vec<RequestId> = Vec::new();
+            for (rid, _) in PendingEngineOffences::<T>::iter().take(MaxEngineOffencesPerBlock::get() as usize) { to_process.push(rid); }
+            for rid in to_process.into_iter() {
+                if let Some((off_type, reporter, offenders)) = PendingEngineOffences::<T>::take(rid) {
+                    let session_index = session::Pallet::<T>::current_index();
+                    let mut tuples: Vec<pallet_session::historical::IdentificationTuple<T>> = Vec::new();
+                    for acc in offenders.into_inner() {
+                        let key = (acc.clone(), off_type as u8);
+                        if ProcessedEngineOffenderFlags::<T>::contains_key(rid, key.clone()) { continue; }
+                        if let Some(full) = <T as pallet_session::historical::Config>::FullIdentificationOf::convert(acc.clone()) {
+                            tuples.push((acc.clone(), full));
+                            ProcessedEngineOffenderFlags::<T>::insert(rid, key, ());
+                        }
+                    }
+                    if tuples.is_empty() { continue; }
+                    let validator_set_count = pallet_session::Pallet::<T>::validators().len() as u32;
+                    let offence = EngineReportedOffence::<T> {
+                        offence_type: off_type,
+                        request_id: rid,
+                        session_index,
+                        validator_set_count,
+                        offenders: tuples.clone(),
+                    };
+                    if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
+                        log::error!("[ENGINE] Report offence failed: {:?}", e);
+                    } else {
+                        for (acc, _) in tuples.into_iter() { Self::deposit_event(Event::EngineValidatorSlashed { offender: acc, offence_type: off_type, request_id: rid }); }
+                    }
+                }
+            }
+            Ok(())
         }
     }
 
@@ -556,6 +751,19 @@ pub mod pallet {
             Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof });
 
             Ok(())
+        }
+
+        #[pallet::call_index(240)]
+        #[pallet::weight(10_000)]
+        pub fn report_engine_offence(
+            origin: OriginFor<T>,
+            request_id: RequestId,
+            offence_type_raw: u8,
+            offenders: Vec<T::AccountId>,
+        ) -> DispatchResult {
+            let reporter = ensure_signed(origin)?;
+            let offence_type = match offence_type_raw { 0 => EngineOffenceType::OutputTimeout, 1 => EngineOffenceType::InvalidOutput, 2 => EngineOffenceType::RepeatedMisbehavior, _ => return Err(Error::<T>::SomethingWentWrong.into()) };
+            Self::insert_pending_offence(request_id, reporter, offence_type, offenders)
         }
     }
 
