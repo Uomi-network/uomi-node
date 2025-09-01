@@ -52,12 +52,16 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                         TssOffenceType::UnresponsiveBehavior
                     }
                 };
-                
-                // Report TSS offence for slashing
-                if let Err(e) = self.client.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
-                    error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
+
+                // Report TSS offence for slashing only if it's a valid offence type
+                if offence_type != TssOffenceType::UnresponsiveBehavior {
+                    if let Err(e) = self.client.report_tss_offence(best_hash, session_id, offence_type, inactive_participants.clone()) {
+                        error!("[TSS] Failed to report TSS offence for session {}: {:?}", session_id, e);
+                    } else {
+                        info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
+                    }
                 } else {
-                    info!("[TSS] Successfully reported TSS offence for session {} with {} offenders", session_id, inactive_participants.len());
+                    info!("[TSS] No valid TSS offence to report for session {}", session_id);
                 }
             }
 
