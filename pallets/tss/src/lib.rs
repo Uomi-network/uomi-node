@@ -2145,16 +2145,35 @@ impl<T: Config> Pallet<T> {
                 continue;
             }
 
-            // Check transaction status on chain - convert to hex string
-            let mut tx_hash_hex = sp_std::vec![0u8; tx_hash_bytes.len() * 2 + 2];
-            tx_hash_hex[0] = b'0';
-            tx_hash_hex[1] = b'x';
-            for (i, byte) in tx_hash_bytes.iter().enumerate() {
-                let hex_chars = [b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f'];
-                tx_hash_hex[2 + i * 2] = hex_chars[(byte >> 4) as usize];
-                tx_hash_hex[2 + i * 2 + 1] = hex_chars[(byte & 0xf) as usize];
-            }
-            let tx_hash_str = core::str::from_utf8(&tx_hash_hex).unwrap_or("invalid_hash");
+            // Build canonical hex hash string WITHOUT double-encoding.
+            // Cases:
+            //  * Stored value already ASCII: length 66 and starts with "0x" -> use directly
+            //  * Stored value raw 32 bytes -> hex encode to 0x + 64 chars
+            //  * Fallback: attempt UTF-8 interpret, else mark invalid.
+            let tx_hash_str: sp_std::borrow::Cow<'_, str> = if tx_hash_bytes.len() == 66 && tx_hash_bytes.starts_with(b"0x") {
+                // Already canonical ASCII.
+                match core::str::from_utf8(&tx_hash_bytes) { Ok(s) => sp_std::borrow::Cow::Borrowed(s), Err(_) => sp_std::borrow::Cow::Owned(String::from("invalid_hash")) }
+            } else if tx_hash_bytes.len() == 32 {
+                // Raw 32 bytes -> encode
+                let mut out = sp_std::vec![0u8; 66];
+                out[0] = b'0'; out[1] = b'x';
+                const HEX: &[u8;16] = b"0123456789abcdef";
+                for (i, b) in tx_hash_bytes.iter().enumerate() {
+                    out[2 + i*2] = HEX[(b >> 4) as usize];
+                    out[2 + i*2 + 1] = HEX[(b & 0x0f) as usize];
+                }
+                sp_std::borrow::Cow::Owned(unsafe { core::str::from_utf8_unchecked(&out).to_string() })
+            } else {
+                // Previously we re-hex-encoded ASCII here causing double encoding; log and try to use as-is.
+                if tx_hash_bytes.starts_with(b"0x") {
+                    log::warn!("[FSA] Unexpected tx hash length {} starting with 0x; using as-is to avoid double encoding", tx_hash_bytes.len());
+                    match core::str::from_utf8(&tx_hash_bytes) { Ok(s) => sp_std::borrow::Cow::Borrowed(s), Err(_) => sp_std::borrow::Cow::Owned(String::from("invalid_hash")) }
+                } else {
+                    log::warn!("[FSA] Non-standard stored tx hash length {}; attempting UTF-8 parse", tx_hash_bytes.len());
+                    match core::str::from_utf8(&tx_hash_bytes) { Ok(s) => sp_std::borrow::Cow::Borrowed(s), Err(_) => sp_std::borrow::Cow::Owned(String::from("invalid_hash")) }
+                }
+            };
+            let tx_hash_str = &*tx_hash_str;
             match Self::check_transaction_status_on_chain(chain_id, tx_hash_str) {
                 Some(status) => {
                     match status {
