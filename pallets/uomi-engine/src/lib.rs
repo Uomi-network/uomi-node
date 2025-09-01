@@ -26,7 +26,7 @@ use frame_support::pallet_prelude::DispatchClass;
 use frame_support::weights::Weight;
 use sp_runtime::Perbill;
 use sp_staking::offence::{Offence, ReportOffence};
-use sp_staking::SessionIndex; // public alias
+use sp_staking::{SessionIndex, EraIndex}; // public alias
 use codec::{Decode, Encode};
 use frame_support::{
     BoundedVec,
@@ -408,6 +408,16 @@ pub mod pallet {
 		ValueQuery
 	>;
 
+    // Track (era, validator) pairs already reset to avoid double subtraction of reward points
+    #[pallet::storage]
+    pub type ProcessedOpocTimeoutEraResets<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, EraIndex,
+        Blake2_128Concat, T::AccountId,
+        (),
+        OptionQuery
+    >;
+
     // OpocErrors storage is used to store the number of errors that have every validator
     #[pallet::storage]
     pub type OpocErrors<T: Config> = StorageDoubleMap<
@@ -560,6 +570,12 @@ pub mod pallet {
             ensure!(!uniq.is_empty(), Error::<T>::OffenceNoValidOffenders);
             let bounded: BoundedVec<T::AccountId, MaxEngineOffenders> = uniq.clone().try_into().map_err(|_| Error::<T>::TooManyOffenders)?;
             PendingEngineOffences::<T>::insert(&request_id, (offence_type, reporter.clone(), bounded.clone()));
+
+
+            // We delete all OpocErrors with request_id=request_id
+            OpocErrors::<T>::remove_prefix(&request_id, None);
+
+
             Self::deposit_event(Event::EngineOffenceReported { offence_type, request_id, offenders_count: bounded.len() as u32 });
             Ok(())
         }
@@ -580,6 +596,13 @@ pub mod pallet {
                     .map(|(acc, _)| acc)
                     .collect();
                 if offenders.is_empty() { continue; }
+
+                // Check if the request was completed, aka it's in Outputs
+                if !Outputs::<T>::contains_key(&rid) {
+                    // request was not completed yet, this might be not an error yet
+                    continue;
+                }
+
                 // Reporter: current block author if available and not among offenders, otherwise first non-offender with output, else first offender.
                 let block_author_opt = <authorship::Pallet<T>>::author();
                 let reporter = block_author_opt

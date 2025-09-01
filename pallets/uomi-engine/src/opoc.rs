@@ -9,6 +9,10 @@ use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
+// Helper trait imports for accessing staking internals
+use pallet_staking::Pallet as Staking;
+use sp_staking::EraIndex;
+
 impl<T: Config> Pallet<T> {
     // OPoC entry point
     pub fn opoc_run(current_block: BlockNumber) -> Result<
@@ -1121,6 +1125,12 @@ impl<T: Config> Pallet<T> {
         // Set the validator as blacklisted
         Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator);
 
+        // Reset staking era reward points for validator so it earns no payout for current era.
+        // This is best-effort; failures shouldn't abort OPoC logic.
+        if let Err(e) = Self::reset_validator_current_era_points(validator) {
+            log::error!("Failed to reset staking points for validator {:?}: {:?}", validator, e);
+        }
+
         Ok(())
     }
 
@@ -1449,6 +1459,25 @@ impl<T: Config> Pallet<T> {
             *total_consensus,
             *nft_id,
         ));
+        Ok(())
+    }
+}
+
+impl<T: Config> Pallet<T> {
+    // Zero out the current era points for a validator (prevent reward payout). Idempotent.
+    pub(crate) fn reset_validator_current_era_points(validator: &T::AccountId) -> Result<(), &'static str> {
+        // Get current era; if staking not yet started, skip
+        let current_era = match <pallet_staking::CurrentEra<T>>::get() { Some(e) => e, None => return Ok(()) };
+        // Avoid repeating for same (era, validator)
+        if <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::contains_key(current_era, validator) { return Ok(()); }
+        // Fetch era points structure (always exists after era start) and mutate in place.
+        let mut era_points = <pallet_staking::ErasRewardPoints<T>>::get(current_era);
+        if let Some(points_entry) = era_points.individual.get_mut(validator) {
+            if *points_entry > 0 { *points_entry = 0; }
+            era_points.total = era_points.individual.values().copied().sum();
+            <pallet_staking::ErasRewardPoints<T>>::insert(current_era, era_points);
+            <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::insert(current_era, validator, ());
+        }
         Ok(())
     }
 }
