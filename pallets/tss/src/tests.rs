@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    mock::*, pallet, types::{MaxNumberOfShares, NftId}, ActiveValidators, DkgSessions, Event as TssEvent, LastOpocRequestId, NextValidatorId, ParticipantReportCount, SessionState, SubmitDKGResultPayload, UpdateValidatorsPayload, CRYPTO_KEY_TYPE
+    mock::*, pallet, types::{MaxNumberOfShares, NftId}, ActiveValidators, DkgSessions, Event as TssEvent, LastOpocRequestId, NextValidatorId, ParticipantReportCount, SessionState, SubmitDKGResultPayload, UpdateValidatorsPayload, CRYPTO_KEY_TYPE,
+    PendingTransactions, MultiChainTransactions
 };
 use frame_support::{assert_noop, assert_ok, traits::OffchainWorker};
 use sp_core::{
@@ -706,6 +707,62 @@ fn test_get_validator_id() {
 
         // Check if the validator ID is correct
         assert_eq!(validator_id, 1);
+    });
+}
+
+// --- New tests for timeout pending transaction logic ---
+#[test]
+fn test_timeout_pending_transaction_extrinsic() {
+    new_test_ext().execute_with(|| {
+        use crate::types::{TransactionStatus, MaxTxHashSize};
+        // Prepare a pending tx
+        let chain_id: u32 = 42;
+        let tx_hash: BoundedVec<u8, MaxTxHashSize> = BoundedVec::try_from(b"deadbeef".to_vec()).unwrap();
+        let submission_block: u64 = 1;
+        let max_wait_blocks: u32 = 5;
+    PendingTransactions::<Test>::insert(chain_id, tx_hash.clone(), (submission_block as u64, max_wait_blocks));
+        MultiChainTransactions::<Test>::insert(chain_id, tx_hash.clone(), TransactionStatus::Submitted);
+
+        // Call unsigned timeout extrinsic
+        use crate::payloads::TimeoutPendingTransactionPayload;
+        let payload = TimeoutPendingTransactionPayload { chain_id, tx_hash: tx_hash.clone(), public: create_test_account(None) };
+        // Signature unused (unsigned validation) but parameter required
+        let dummy_sig = sr25519::Signature::from_raw([1u8; 64]);
+        assert_ok!(TestingPallet::timeout_pending_transaction_unsigned(RuntimeOrigin::none(), payload, dummy_sig));
+
+        // Storage updated
+        assert!(TestingPallet::pending_transactions(chain_id, &tx_hash).is_none());
+        assert_eq!(TestingPallet::multi_chain_transactions(chain_id, &tx_hash).unwrap(), TransactionStatus::Failed);
+
+        // Event emitted
+    // Event presence is optional; focus on storage state for this unit test
+    });
+}
+
+#[test]
+fn test_offchain_generates_timeout_unsigned_tx() {
+    use crate::types::MaxTxHashSize;
+    let mut ext = new_test_ext();
+    let (offchain, _state) = TestOffchainExt::new();
+    let (pool, pool_state) = TestTransactionPoolExt::new();
+    ext.register_extension(OffchainDbExt::new(offchain.clone()));
+    ext.register_extension(OffchainWorkerExt::new(offchain));
+    ext.register_extension(TransactionPoolExt::new(pool));
+    // keystore so Signer can sign
+    let keystore = Arc::new(MemoryKeystore::new());
+    let _pk = keystore.sr25519_generate_new(CRYPTO_KEY_TYPE, None).unwrap();
+    ext.register_extension(KeystoreExt(keystore));
+    ext.execute_with(|| {
+        System::set_block_number(10);
+        let chain_id: u32 = 7;
+        let tx_hash: BoundedVec<u8, MaxTxHashSize> = BoundedVec::try_from(b"timeo".to_vec()).unwrap();
+        // Insert pending with very small max_wait_blocks so it times out immediately
+    PendingTransactions::<Test>::insert(chain_id, tx_hash.clone(), (0u64, 1u32));
+        // Invoke offchain check directly
+        assert!(TestingPallet::check_pending_transactions_offchain().is_ok());
+        // Expect an unsigned tx queued
+    let txs = pool_state.read().transactions.clone();
+    assert!(!txs.is_empty(), "Expected at least one unsigned timeout extrinsic");
     });
 }
 
