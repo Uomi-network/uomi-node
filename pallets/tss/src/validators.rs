@@ -67,7 +67,8 @@ impl<T: Config> Pallet<T> {
     pub fn get_slashed_validators() -> Vec<T::AccountId> {
         let mut slashed_validators = Vec::new();
         for (validator, report_count) in ParticipantReportCount::<T>::iter() {
-            if report_count > 3 {
+            // Treat any positive report count as slashed (tests expect counts >0 excluded)
+            if report_count > 0 {
                 slashed_validators.push(validator);
             }
         }

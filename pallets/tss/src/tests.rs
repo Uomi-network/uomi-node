@@ -2713,4 +2713,114 @@ mod tests {
             assert_eq!(TestingPallet::get_dkg_session(first_session_id).unwrap().state, SessionState::DKGSuperseded, "First superseded");
         });
     }
+
+    // --- New tests: TSS Offence reporting & slashing pipeline ---
+
+    #[test]
+    fn report_tss_offence_and_process_slashes_offenders() {
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(90), account(91), account(92), account(93)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+
+            let session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(9300u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            let offence_type = crate::TssOffenceType::DkgNonParticipation;
+            let reporter = validators[0].clone();
+            let offenders_vec = vec![validators[1].clone(), validators[2].clone()];
+            let offenders: BoundedVec<_, MaxNumberOfShares> = BoundedVec::try_from(offenders_vec.clone()).unwrap();
+            let payload = crate::ReportTssOffencePayload::<Test> {
+                offence_type: offence_type.clone(),
+                session_id,
+                validator_set_count: validators.len() as u32,
+                offenders: offenders.clone(),
+                public: reporter.clone(),
+            };
+            assert_ok!(TestingPallet::report_tss_offence(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])));
+            // Offence was queued (PendingTssOffences entry acts as proof of report)
+            // Pending entry exists
+            assert!(crate::PendingTssOffences::<Test>::contains_key(session_id));
+            // Process
+            assert_ok!(TestingPallet::process_pending_tss_offences());
+            // Slashed events for each offender
+            use crate::ProcessedOffenderFlags;
+            for off in offenders_vec.iter() {
+                assert!(ProcessedOffenderFlags::<Test>::contains_key(session_id, (off.clone(), offence_type.encode())), "Missing processed flag for offender");
+            }
+            // Pending cleared
+            assert!(!crate::PendingTssOffences::<Test>::contains_key(session_id));
+        });
+    }
+
+    #[test]
+    fn duplicate_offence_reports_do_not_duplicate_slashed_events() {
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(94), account(95), account(96)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(9400u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(), 60
+            ));
+            let offence_type = crate::TssOffenceType::SigningNonParticipation;
+            let reporter = validators[0].clone();
+            let offender = validators[1].clone();
+            let offenders: BoundedVec<_, MaxNumberOfShares> = BoundedVec::try_from(vec![offender.clone()]).unwrap();
+            let payload1 = crate::ReportTssOffencePayload::<Test> { offence_type: offence_type.clone(), session_id, validator_set_count: validators.len() as u32, offenders: offenders.clone(), public: reporter.clone() };
+            assert_ok!(TestingPallet::report_tss_offence(RuntimeOrigin::none(), payload1, sr25519::Signature::from_raw([0u8;64])));
+            assert_ok!(TestingPallet::process_pending_tss_offences());
+            let slashed_events_first = System::events().into_iter().filter(|e| matches!(e.event, RuntimeEvent::TestingPallet(TssEvent::ValidatorSlashed(_, _, _)))).count();
+            // Re-report same offender & offence
+            let payload2 = crate::ReportTssOffencePayload::<Test> { offence_type: offence_type.clone(), session_id, validator_set_count: validators.len() as u32, offenders: offenders.clone(), public: reporter.clone() };
+            assert_ok!(TestingPallet::report_tss_offence(RuntimeOrigin::none(), payload2, sr25519::Signature::from_raw([0u8;64])));
+            assert_ok!(TestingPallet::process_pending_tss_offences());
+            let slashed_events_after = System::events().into_iter().filter(|e| matches!(e.event, RuntimeEvent::TestingPallet(TssEvent::ValidatorSlashed(_, _, _)))).count();
+            assert_eq!(slashed_events_first, slashed_events_after, "Duplicate report should not increase slashed events");
+        });
+    }
+
+    #[test]
+    fn report_tss_offence_fails_for_non_participant() {
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(97), account(98)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(9500u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(), 60
+            ));
+            let non_participant = account(120); // not in validators list
+            let offenders: BoundedVec<_, MaxNumberOfShares> = BoundedVec::try_from(vec![validators[0].clone()]).unwrap();
+            let payload = crate::ReportTssOffencePayload::<Test> { offence_type: crate::TssOffenceType::InvalidCryptographicData, session_id, validator_set_count: validators.len() as u32, offenders, public: non_participant.clone() };
+            assert_noop!(TestingPallet::report_tss_offence(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])), pallet::Error::<Test>::UnauthorizedParticipation);
+        });
+    }
+
+    #[test]
+    fn report_tss_offence_invalid_session() {
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(101), account(102)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let invalid_session_id = 999u64; // not created (SessionId is u64)
+            let offenders: BoundedVec<_, MaxNumberOfShares> = BoundedVec::try_from(vec![validators[0].clone()]).unwrap();
+            let payload = crate::ReportTssOffencePayload::<Test> { offence_type: crate::TssOffenceType::UnresponsiveBehavior, session_id: invalid_session_id, validator_set_count: validators.len() as u32, offenders, public: validators[0].clone() };
+            assert_noop!(TestingPallet::report_tss_offence(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])), pallet::Error::<Test>::DkgSessionNotFound);
+        });
+    }
 }

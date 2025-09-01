@@ -38,7 +38,7 @@ use sp_runtime::transaction_validity::{
     TransactionValidity, ValidTransaction, InvalidTransaction, TransactionSource,
     TransactionPriority,
 };
-use sp_runtime::traits::{Saturating, SaturatedConversion};
+use sp_runtime::traits::{Saturating, SaturatedConversion, Convert};
 use frame_system::offchain::SigningTypes;
 
 pub use pallet::*;
@@ -153,50 +153,6 @@ impl TssOffenceType {
     }
 }
 
-/// TSS offence for slashing validators
-#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
-pub struct TssOffence<T: Config> {
-    /// Type of offence
-    pub offence_type: TssOffenceType,
-    /// Session where the offence occurred
-    pub session_id: SessionId,
-    /// Session index for staking
-    pub session_index: SessionIndex,
-    /// Number of validators in the session
-    pub validator_set_count: u32,
-    /// The offending validator and their full identification
-    pub offenders: Vec<(T::AccountId, <T as pallet_session::historical::Config>::FullIdentification)>,
-}
-
-impl<T: Config> Offence<T::AccountId> for TssOffence<T> {
-    const ID: [u8; 16] = *b"tss:offence_____";
-    type TimeSlot = SessionIndex;
-
-    fn offenders(&self) -> Vec<T::AccountId> {
-    self.offenders.iter().map(|(id, _)| id.clone()).collect()
-    }
-
-    fn session_index(&self) -> SessionIndex {
-    self.session_index
-    }
-
-    fn validator_set_count(&self) -> u32 {
-    self.validator_set_count
-    }
-
-    fn time_slot(&self) -> Self::TimeSlot {
-    self.session_index
-    }
-
-    fn slash_fraction(&self, _offenders_count: u32) -> Perbill {
-    match self.offence_type {
-        TssOffenceType::DkgNonParticipation => Perbill::from_percent(1),
-        TssOffenceType::SigningNonParticipation => Perbill::from_percent(1),
-        TssOffenceType::InvalidCryptographicData => Perbill::from_percent(2),
-        TssOffenceType::UnresponsiveBehavior => Perbill::from_percent(1),
-    }
-    }
-}
 
 
 
@@ -221,46 +177,38 @@ pub mod pallet {
     #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
 
+    /// Offence structure reported to the staking offences system.
+    /// Holds multiple offenders for a single (session, offence_type) combination.
     #[derive(RuntimeDebug, Clone)]
-    pub struct MaliciousBehaviourOffence<T: Config> {
-    /// The session index in which the offence occurred.
-    pub session_index: SessionIndex,
-    /// The size of the validator set at the time of the offence.
-    pub validator_set_count: u32,
-    /// The offender's validator ID.
-    pub offender: pallet_session::historical::IdentificationTuple<T>,
+    pub struct TssReportedOffence<T: Config> {
+        pub offence_type: TssOffenceType,
+        pub session_index: SessionIndex,
+        pub validator_set_count: u32,
+        pub offenders: Vec<pallet_session::historical::IdentificationTuple<T>>, // full identification tuples
     }
 
-
-    // Implementazione per Offence
-    impl<T: Config> Offence<pallet_session::historical::IdentificationTuple<T>> for MaliciousBehaviourOffence<T> 
+    impl<T: Config> Offence<pallet_session::historical::IdentificationTuple<T>> for TssReportedOffence<T>
     where
-    T: pallet_session::historical::Config,
-    T: pallet_session::Config<ValidatorId = <T as frame_system::Config>::AccountId>,
+        T: pallet_session::historical::Config,
+        T: pallet_session::Config<ValidatorId = <T as frame_system::Config>::AccountId>,
     {
-    const ID: [u8; 16] = *b"tss:offence_____";
-    type TimeSlot = SessionIndex;
-    
-    fn offenders(&self) -> Vec<pallet_session::historical::IdentificationTuple<T>> {
-        vec![self.offender.clone()]
-    }
-    
-    fn session_index(&self) -> SessionIndex {
-        self.session_index
-    }
-    
-    fn validator_set_count(&self) -> u32 {
-        self.validator_set_count
-    }
-    
-    fn time_slot(&self) -> Self::TimeSlot {
-        self.session_index
-    }
-    
-    fn slash_fraction(&self, _offenders_count: u32) -> Perbill {
-        // Ritorna 5% slash indipendentemente dal numero di offenders
-        Perbill::from_percent(5)
-    }
+        const ID: [u8; 16] = *b"tss:offence_____"; // keep stable; change only with migration
+        type TimeSlot = SessionIndex;
+
+        fn offenders(&self) -> Vec<pallet_session::historical::IdentificationTuple<T>> {
+            self.offenders.clone()
+        }
+        fn session_index(&self) -> SessionIndex { self.session_index }
+        fn validator_set_count(&self) -> u32 { self.validator_set_count }
+        fn time_slot(&self) -> Self::TimeSlot { self.session_index }
+        fn slash_fraction(&self, _offenders_count: u32) -> Perbill {
+            match self.offence_type {
+                TssOffenceType::DkgNonParticipation => Perbill::from_percent(1),
+                TssOffenceType::SigningNonParticipation => Perbill::from_percent(1),
+                TssOffenceType::InvalidCryptographicData => Perbill::from_percent(2),
+                TssOffenceType::UnresponsiveBehavior => Perbill::from_percent(1),
+            }
+        }
     }
 
 
@@ -290,9 +238,9 @@ pub mod pallet {
 
     /// A trait for reporting offences.
     type OffenceReporter: ReportOffence<
-        <Self as frame_system::Config>::AccountId,
-        pallet_session::historical::IdentificationTuple<Self>,
-        MaliciousBehaviourOffence<Self>
+        <Self as frame_system::Config>::AccountId, // reporter AccountId
+        pallet_session::historical::IdentificationTuple<Self>, // offender identification tuple
+        TssReportedOffence<Self>
     >;
     // Weight info specific to this pallet
     type TssWeightInfo: TssWeightInfo;
@@ -443,11 +391,21 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn pending_tss_offences)]
     pub type PendingTssOffences<T: Config> = StorageMap<
-    _,
-    Blake2_128Concat,
-    SessionId,
-    (TssOffenceType, BoundedVec<T::AccountId, T::MaxNumberOfShares>),
-    OptionQuery,
+        _,
+        Blake2_128Concat,
+        SessionId,
+        (TssOffenceType, T::AccountId, BoundedVec<T::AccountId, T::MaxNumberOfShares>), // (type, reporter, offenders)
+        OptionQuery,
+    >;
+
+    /// Prevent repeated slashing for the same (session, offence_type, offender).
+    #[pallet::storage]
+    pub type ProcessedOffenderFlags<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, SessionId,
+        Blake2_128Concat, (T::AccountId, u8), // (offender, offence_type encoded)
+        (),
+        OptionQuery
     >;
 
     // A storage to store temporarily proposed public keys generated from the DKG process associated with the session ID and validator ID
@@ -947,7 +905,8 @@ pub mod pallet {
             session.aggregated_sig = Some(signature.clone());
             session.state = SessionState::SigningComplete;
             let req_id_for_cleanup = session.request_id;
-            SigningSessions::<T>::insert(session_id, session);
+            // Store updated session state (clone to retain local copy if further logic added later)
+            SigningSessions::<T>::insert(session_id, session.clone());
             // Success: clear retry counter so future identical request IDs could start fresh if reused.
             RequestRetryCount::<T>::remove(req_id_for_cleanup);
             Self::deposit_event(Event::SignatureResultSubmitted(session_id, signature));
@@ -1136,21 +1095,12 @@ pub mod pallet {
             session.participants.contains(&who),
             Error::<T>::UnauthorizedParticipation
         );
-        
-        // Store the offence to be processed during on_initialize
-        // PendingTssOffences::<T>::insert(
-        //     payload.session_id, 
-        //     (payload.offence_type.clone(), payload.offenders.clone())
-        // );
-        
-        // Log the pending offence
-        // log::info!(
-        //     "[TSS] Pending offence recorded: {:?} for session {} with {} offenders", 
-        //     payload.offence_type,
-        //     payload.session_id,
-        //     payload.offenders.len()
-        // );
-        
+        // Store the offence with reporter
+        PendingTssOffences::<T>::insert(
+            payload.session_id,
+            (payload.offence_type.clone(), who.clone(), payload.offenders.clone())
+        );
+        Self::deposit_event(Event::OffenceReported(payload.offence_type, payload.session_id, payload.offenders.len() as u32));
         Ok(())
     }
 
@@ -1720,7 +1670,10 @@ impl<T: Config> Pallet<T> {
             .map_err(|_| Error::<T>::InvalidParticipantsCount)?;
 
         // Store the offence for processing
-        PendingTssOffences::<T>::insert(session_id, (offence_type.clone(), bounded_offenders));
+    // We don't know an on-chain reporter here; use zero AccountId placeholder (won't be used for rewards)
+    // Fallback: select first offender as synthetic reporter if available; else abort
+    let synthetic_reporter = bounded_offenders.get(0).cloned().ok_or(Error::<T>::InvalidParticipantsCount)?;
+    PendingTssOffences::<T>::insert(session_id, (offence_type.clone(), synthetic_reporter, bounded_offenders));
 
         // Emit event
         Self::deposit_event(Event::OffenceReported(
@@ -1771,24 +1724,51 @@ impl<T: Config> Pallet<T> {
 
     /// Process any pending TSS offences stored in the PendingTssOffences storage
     pub fn process_pending_tss_offences() -> DispatchResult {
-        let offences: Vec<(SessionId, (TssOffenceType, BoundedVec<T::AccountId, T::MaxNumberOfShares>))> = 
+        let pending: Vec<(SessionId, (TssOffenceType, T::AccountId, BoundedVec<T::AccountId, T::MaxNumberOfShares>))> =
             PendingTssOffences::<T>::iter().collect();
-        
-        if offences.is_empty() {
-            return Ok(());
-        }
-        
-        log::info!("[TSS] Processing {} pending offences", offences.len());
-        
-        for (session_id, (offence_type, offenders)) in offences {
-            // For now, just log the offence - the actual processing can be implemented later
-            log::info!("[TSS] Processing offence {:?} for session {} with {} offenders", 
-                offence_type, session_id, offenders.len());
-            
-            // Remove the processed offence
+        if pending.is_empty() { return Ok(()); }
+        log::info!("[TSS] Processing {} pending offences", pending.len());
+
+        for (session_id, (offence_type, reporter, offenders)) in pending.into_iter() {
+            // Acquire DKG session for validator set size; skip if missing
+            let maybe_session = DkgSessions::<T>::get(session_id);
+            let validator_set_count = maybe_session.as_ref().map(|s| s.participants.len() as u32).unwrap_or(0);
+            let session_index = pallet_session::Pallet::<T>::current_index();
+
+            // Build identification tuples, filter duplicates & previously processed
+            let mut id_tuples: Vec<pallet_session::historical::IdentificationTuple<T>> = Vec::new();
+            for acc in offenders.into_inner().into_iter() {
+                let flag_key = (acc.clone(), offence_type.encode());
+                if ProcessedOffenderFlags::<T>::contains_key(session_id, flag_key.clone()) { continue; }
+                // Use FullIdentificationOf converter to obtain exposure / identification
+                if let Some(full) = <T as pallet_session::historical::Config>::FullIdentificationOf::convert(acc.clone()) {
+                    id_tuples.push((acc.clone(), full));
+                    ProcessedOffenderFlags::<T>::insert(session_id, flag_key, ());
+                } else {
+                    log::warn!("[TSS] Could not fetch full identification for offender (likely not a current validator)");
+                }
+            }
+            if id_tuples.is_empty() {
+                PendingTssOffences::<T>::remove(session_id);
+                continue;
+            }
+            let offence = TssReportedOffence::<T> {
+                offence_type: offence_type.clone(),
+                session_index,
+                validator_set_count,
+                offenders: id_tuples.clone(),
+            };
+            // Report to staking offences pallet
+            if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
+                log::error!("[TSS] Failed to report offence to offences pallet: {:?}", e);
+            } else {
+                // Emit per-offender slashed event (actual slashing managed by offences pallet / staking economic logic)
+                for (acc, _) in id_tuples.into_iter() {
+                    Self::deposit_event(Event::ValidatorSlashed(acc, offence_type.clone(), session_id));
+                }
+            }
             PendingTssOffences::<T>::remove(session_id);
         }
-        
         Ok(())
     }
 
