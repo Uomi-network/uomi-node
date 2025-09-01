@@ -1984,7 +1984,8 @@ impl<T: Config> Pallet<T> {
                 offenders: id_tuples.clone(),
             };
             // Report to staking offences pallet
-            if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
+            // Use the TSS pallet's OffenceReporter (disambiguate vs engine pallet)
+            if let Err(e) = <T as pallet::Config>::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
                 log::error!("[TSS] Failed to report offence to offences pallet: {:?}", e);
             } else {
                 // Emit per-offender slashed event (actual slashing managed by offences pallet / staking economic logic)
@@ -2162,7 +2163,8 @@ impl<T: Config> Pallet<T> {
                     out[2 + i*2] = HEX[(b >> 4) as usize];
                     out[2 + i*2 + 1] = HEX[(b & 0x0f) as usize];
                 }
-                sp_std::borrow::Cow::Owned(unsafe { core::str::from_utf8_unchecked(&out).to_string() })
+                // Avoid requiring ToString trait in no_std by using From<&str> for String
+                sp_std::borrow::Cow::Owned(unsafe { core::str::from_utf8_unchecked(&out) }.into())
             } else {
                 // Previously we re-hex-encoded ASCII here causing double encoding; log and try to use as-is.
                 if tx_hash_bytes.starts_with(b"0x") {
