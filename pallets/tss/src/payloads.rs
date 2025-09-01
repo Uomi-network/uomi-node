@@ -83,6 +83,14 @@ pub struct SubmitFsaTransactionPayload<T: crate::Config> {
     pub public: T::Public,
 }
 
+// Unsigned payload to mark a pending multi-chain transaction as timed out (failed)
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub struct TimeoutPendingTransactionPayload<T: crate::Config> {
+    pub chain_id: u32,
+    pub tx_hash: BoundedVec<u8, MaxTxHashSize>,
+    pub public: T::Public,
+}
+
 impl<T: crate::Config> ReportParticipantsPayload<T> {
     pub fn new(
         session_id: SessionId,
@@ -142,5 +150,9 @@ impl<T: SigningTypes + crate::Config> SignedPayload<T> for GapFillerSigningSessi
 }
 
 impl<T: SigningTypes + crate::Config> SignedPayload<T> for UpdateLastOpocRequestIdPayload<T> {
+    fn public(&self) -> T::Public { self.public.clone() }
+}
+
+impl<T: SigningTypes + crate::Config> SignedPayload<T> for TimeoutPendingTransactionPayload<T> {
     fn public(&self) -> T::Public { self.public.clone() }
 }

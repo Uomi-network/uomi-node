@@ -80,6 +80,7 @@ pub trait TssWeightInfo {
     fn submit_multi_chain_transaction() -> frame_support::weights::Weight;
     fn update_chain_config() -> frame_support::weights::Weight;
     fn get_transaction_status() -> frame_support::weights::Weight;
+    fn timeout_pending_transaction_unsigned() -> frame_support::weights::Weight;
 }
 
 impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
@@ -96,6 +97,7 @@ impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
     fn submit_multi_chain_transaction() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn update_chain_config() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn get_transaction_status() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
+    fn timeout_pending_transaction_unsigned() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
 }
 
 
@@ -1246,6 +1248,23 @@ pub mod pallet {
     FsaTransactionRequests::<T>::remove(&payload.request_id);
         Ok(())
     }
+    /// Offchain worker marks a pending transaction as timed out (Failed) when exceeding deadline
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::timeout_pending_transaction_unsigned())]
+    #[pallet::call_index(19)]
+    pub fn timeout_pending_transaction_unsigned(
+        origin: OriginFor<T>,
+        payload: crate::payloads::TimeoutPendingTransactionPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        // Ensure still pending
+        if PendingTransactions::<T>::contains_key(payload.chain_id, &payload.tx_hash) {
+            PendingTransactions::<T>::remove(payload.chain_id, &payload.tx_hash);
+            MultiChainTransactions::<T>::insert(payload.chain_id, payload.tx_hash.clone(), crate::types::TransactionStatus::Failed);
+            Self::deposit_event(Event::MultiChainTransactionFailed(payload.chain_id, payload.tx_hash.to_vec()));
+        }
+        Ok(())
+    }
     /// Create a signing session specifically for a nonce gap filler (unsigned, offchain initiated)
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_signing_session_unsigned())]
     #[pallet::call_index(18)]
@@ -1389,6 +1408,14 @@ pub mod pallet {
                     .priority(TransactionPriority::MAX / 2) // lower than normal sessions
                     .and_provides(call.encode())
                     .longevity(32)
+                    .propagate(true)
+                    .build();
+            }
+            Call::timeout_pending_transaction_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX / 4)
+                    .and_provides(call.encode())
+                    .longevity(16)
                     .propagate(true)
                     .build();
             }
@@ -1980,9 +2007,15 @@ impl<T: Config> Pallet<T> {
             if blocks_waited.saturated_into::<u32>() > max_wait_blocks {
                 // Transaction timed out
                 log::warn!("[OFFCHAIN] Transaction on chain {} timed out after {} blocks", chain_id, blocks_waited.saturated_into::<u32>());
-                
-                // Remove from pending and update status (this will be done via unsigned transaction)
-                // For now, just log the timeout
+                // Submit unsigned tx to mark failure
+                let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+                if signer.can_sign() {
+                    let tx_hash_clone = tx_hash_bounded.clone();
+                    let _ = signer.send_unsigned_transaction(
+                        |acct| crate::payloads::TimeoutPendingTransactionPayload::<T> { chain_id, tx_hash: tx_hash_clone.clone(), public: acct.public.clone() },
+                        |payload, signature| Call::timeout_pending_transaction_unsigned { payload, signature }
+                    );
+                }
                 continue;
             }
 
