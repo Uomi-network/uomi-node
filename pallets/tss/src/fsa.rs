@@ -138,7 +138,7 @@ impl<T: Config> crate::pallet::Pallet<T> {
         };
 
         // Process all actions in the successfully parsed output
-        for mut action in output.actions {
+    for mut action in output.actions {
             // Attempt to auto-derive sender (from) if missing using aggregated public key associated with nft_id
             if action.from.is_none() {
                 if let Ok(nft_bv) = {
@@ -159,7 +159,7 @@ impl<T: Config> crate::pallet::Pallet<T> {
 
             log::info!("Processing action for request {:?}: {:?}", request_id, action);
 
-            if let Some(data) = handle_action(&action)? {
+            if let Some(data) = handle_action_with_internal_nonce::<T>(&action, &nft_id)? {
                 return Ok(Some((nft_id, data)));
             }
         }
@@ -175,7 +175,7 @@ impl<T: Config> crate::pallet::Pallet<T> {
 /// 3. Normalize key to 64-byte uncompressed form (strip 0x04 prefix if 65 bytes).
 /// 4. keccak256(pubkey[0..64]) and take last 20 bytes -> H160.
 /// 5. Return hex string 0x + lowercase.
-fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String> {
+pub(crate) fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String> {
     // Find session id with this nft_id (linear scan; could be optimized with reverse index later)
     let mut found_session: Option<crate::types::SessionId> = None;
     for (sid, sess) in DkgSessions::<T>::iter() { if sess.nft_id == nft_id { found_session = Some(sid); break; } }
@@ -257,10 +257,10 @@ mod tests {
 }
 
 
-/// Handle an action, potentially constructing a transaction preimage from structured fields.
-fn handle_action(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
+/// Handle an action, constructing a transaction preimage. Integrates internal nonce allocation.
+fn handle_action_with_internal_nonce<T: Config>(action: &Action, nft_id: &U256) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
     match action.action_type.as_str() {
-        "transaction" | "multi_chain_transaction" => build_or_passthrough(action),
+        "transaction" | "multi_chain_transaction" => build_or_passthrough_with_nonce::<T>(action, nft_id),
         unsupported => {
             log::warn!("Unsupported action type: {}", unsupported);
             Err(ProcessingError::UnsupportedActionType("Unsupported action type"))
@@ -283,7 +283,7 @@ fn parse_num_u64(label: &str, v: &str) -> Option<u64> {
     }
 }
 
-fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
+fn build_or_passthrough_with_nonce<T: Config>(action: &Action, nft_id: &U256) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
     // Always validate chain config first
     let chain_config = MultiChainRpcClient::get_chain_config(action.chain_id)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
@@ -329,6 +329,7 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
             MultiChainRpcClient::get_chain_config(chain_id).ok()
                 .and_then(|cfg| MultiChainRpcClient::estimate_gas(&cfg, from, to, value, Some(data)).ok())
         }
+        // RPC nonce fetch retained only as fallback when internal allocation fails and no explicit nonce provided.
         #[cfg(test)]
         fn try_fetch_nonce(_chain_id: u32, _from: &str) -> Option<u64> { None }
         #[cfg(not(test))]
@@ -359,14 +360,24 @@ fn build_or_passthrough(action: &Action) -> Result<Option<(u32, Vec<u8>)>, Proce
         }
         let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).or(rpc_gas_limit).unwrap_or(21_000);
 
-        // nonce (query if not provided)
-        let mut rpc_nonce: Option<u64> = None;
-        if action.nonce.is_none() {
-            if let Some(ref from_addr) = action.from {
-                rpc_nonce = try_fetch_nonce(action.chain_id, from_addr);
-            }
-        }
-        let nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v)).or(rpc_nonce).unwrap_or(0);
+        // Nonce selection priority: explicit action.nonce > internally allocated > RPC > 0
+        let explicit_nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v));
+        let internal_allocated = if explicit_nonce.is_none() {
+            // Convert U256 nft_id into crate::types::NftId (little endian bytes -> bounded vec)
+            let le_bytes: Vec<u8> = {
+                let mut tmp = [0u8; 32]; nft_id.to_little_endian(&mut tmp); tmp.to_vec()
+            };
+            if let Ok(bounded) = crate::types::NftId::try_from(le_bytes) {
+                match crate::pallet::Pallet::<T>::allocate_next_nonce_internal(&bounded, action.chain_id) {
+                    Ok(n) => Some(n),
+                    Err(e) => { log::warn!("[nonce] internal allocation failed: {:?}", e); None }
+                }
+            } else { None }
+        } else { None };
+        let rpc_nonce = if explicit_nonce.is_none() && internal_allocated.is_none() {
+            if let Some(ref from_addr) = action.from { try_fetch_nonce(action.chain_id, from_addr) } else { None }
+        } else { None };
+        let nonce = explicit_nonce.or(internal_allocated).or(rpc_nonce).unwrap_or(0);
 
         let tx_type = action.tx_type.as_deref().unwrap_or("eip1559");
 

@@ -36,6 +36,17 @@ pub struct CreateSigningSessionPayload<T: crate::Config> {
 }
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub struct GapFillerSigningSessionPayload<T: crate::Config> {
+    /// Synthetic unique request id for gap filler (keccak256 of marker + nft + chain + nonce)
+    pub request_id: sp_core::U256,
+    pub nft_id: sp_core::U256,
+    pub chain_id: u32,
+    pub nonce: u64,
+    pub message: BoundedVec<u8, MaxMessageSize>,
+    pub public: T::Public,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct UpdateLastOpocRequestIdPayload<T: crate::Config> {
     pub last_request_id: sp_core::U256,
     pub public: T::Public,
@@ -124,6 +135,10 @@ impl<T: SigningTypes + crate::Config> SignedPayload<T> for CreateSigningSessionP
     fn public(&self) -> T::Public {
         self.public.clone()
     }
+}
+
+impl<T: SigningTypes + crate::Config> SignedPayload<T> for GapFillerSigningSessionPayload<T> {
+    fn public(&self) -> T::Public { self.public.clone() }
 }
 
 impl<T: SigningTypes + crate::Config> SignedPayload<T> for UpdateLastOpocRequestIdPayload<T> {

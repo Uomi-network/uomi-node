@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 use sp_runtime::KeyTypeId;
+use alloc::string::String; // for no_std String
 
 #[cfg(test)]
 mod mock;
@@ -514,6 +515,10 @@ pub mod pallet {
     NonceAllocated(NftId, u32, u64),              // (agent, chain, nonce)
     NonceAccepted(NftId, u32, u64, Vec<u8>),      // (agent, chain, nonce, tx_hash)
     NonceWindowPruned(NftId, u32, u64),           // pruned up to (last_accepted)
+    /// Detected mismatch between internal allocated nonce and chain's reported account nonce (chain reports lower)
+    NonceGapDetected(NftId, u32, u64, u64),       // (agent, chain, internal_last_allocated, chain_next_nonce)
+    /// Queued a gap filler (empty) transaction for the earliest missing nonce
+    NonceGapFillerQueued(NftId, u32, u64),        // (agent, chain, nonce)
     }
 
     #[pallet::error]
@@ -1241,6 +1246,50 @@ pub mod pallet {
     FsaTransactionRequests::<T>::remove(&payload.request_id);
         Ok(())
     }
+    /// Create a signing session specifically for a nonce gap filler (unsigned, offchain initiated)
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_signing_session_unsigned())]
+    #[pallet::call_index(18)]
+    pub fn create_gap_filler_signing_session_unsigned(
+        origin: OriginFor<T>,
+        payload: crate::payloads::GapFillerSigningSessionPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        // Convert nft_id U256 -> NftId
+        let nft_id_bytes: Vec<u8> = payload.nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+        let nft_id = BoundedVec::try_from(nft_id_bytes).map_err(|_| Error::<T>::InvalidTransactionData)?;
+        // Store a minimal empty transaction request for this filler if not already exists
+        let filler_request_id = payload.request_id;
+        if !FsaTransactionRequests::<T>::contains_key(&filler_request_id) {
+            let data = payload.message.clone();
+            FsaTransactionRequests::<T>::insert(filler_request_id, (nft_id.clone(), payload.chain_id, data));
+        }
+        // Reuse existing create_signing_session logic (private) by calling into pallet extrinsic path
+        // We call internal version: ensure no in-progress duplicate for this request
+        let message = payload.message.clone();
+        // Create a signing session state
+        let mut attempt = RequestRetryCount::<T>::get(filler_request_id);
+        if attempt == 0 { attempt = 0; }
+        let dkg_session_id = DkgSessions::<T>::iter().filter_map(|(sid, sess)| if sess.nft_id == nft_id { Some((sid, sess)) } else { None }).max_by_key(|(sid, _)| *sid).map(|(sid, _)| sid).ok_or(Error::<T>::DkgSessionNotFound)?;
+        let dkg_session = DkgSessions::<T>::get(dkg_session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+        ensure!(matches!(dkg_session.state, SessionState::DKGComplete), Error::<T>::DkgSessionNotFound);
+        // Create signing session
+        let signing_session = SigningSession {
+            dkg_session_id,
+            request_id: filler_request_id,
+            nft_id: nft_id.clone(),
+            message: message.clone(),
+            state: SessionState::SigningInProgress,
+            aggregated_sig: None,
+        };
+        let session_id = Self::get_next_session_id();
+        SigningSessions::<T>::insert(session_id, signing_session);
+        // Allocate target nonce explicitly if not already tracked
+        let _ = Self::allocate_next_nonce_internal(&nft_id, payload.chain_id); // ignore errors (window etc.)
+        SigningSessionExpiry::<T>::insert(session_id, frame_system::Pallet::<T>::block_number() + 300u32.into());
+        Self::deposit_event(Event::SigningSessionCreated(session_id, dkg_session_id));
+        Ok(())
+    }
     // (Removed public nonce extrinsics; nonce flow handled internally via unsigned offchain submissions)
 
     }
@@ -1332,6 +1381,14 @@ pub mod pallet {
                     .priority(TransactionPriority::MAX)
                     .and_provides(call.encode())
                     .longevity(64)
+                    .propagate(true)
+                    .build();
+            }
+            Call::create_gap_filler_signing_session_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX / 2) // lower than normal sessions
+                    .and_provides(call.encode())
+                    .longevity(32)
                     .propagate(true)
                     .build();
             }
@@ -1453,6 +1510,10 @@ pub mod pallet {
         // Rest of your existing offchain worker logic
         let stored_validators = ActiveValidators::<T>::get();
         if stored_validators.len() > 0 {
+            // After primary logic, perform nonce gap detection every 20 blocks to avoid spam
+            if n % 20u32.into() == 0u32.into() {
+                Self::detect_and_fill_nonce_gaps_offchain();
+            }
             return;
         }
     }
@@ -1562,6 +1623,79 @@ impl<T: Config> Pallet<T> {
         let nonce = result.ok_or(Error::<T>::PendingStorageFull)?;
         Self::deposit_event(Event::NonceAllocated(nft_id.clone(), chain_id, nonce));
         Ok(nonce)
+    }
+
+    /// Offchain: scan NonceStates and compare internal last_allocated with RPC account nonce; queue empty tx if gap persists.
+    fn detect_and_fill_nonce_gaps_offchain() {
+        use crate::multichain::MultiChainRpcClient;
+    use sp_core::U256 as U256Core;
+        // Iterate all (nft_id, chain_id) nonce states; this can be heavy -> early exit after limited operations
+        const MAX_CHECKS: usize = 25; // safety cap per invocation
+        let mut checked = 0usize;
+        for (nft_id, chain_id, state) in NonceStates::<T>::iter() {
+            if checked >= MAX_CHECKS { break; }
+            checked += 1;
+            let Some(last_alloc) = state.last_allocated else { continue; };
+            // Derive 'from' address from nft_id for RPC query (reuse helper)
+            let from_addr = crate::fsa::derive_from_address::<T>(nft_id.clone());
+            let addr_hex = match from_addr { Some(s) => s, None => continue };
+            // Fetch chain config + chain nonce
+            let chain_cfg = if let Ok(cfg) = MultiChainRpcClient::get_chain_config(chain_id) { cfg } else { continue; };
+            let chain_nonce = match MultiChainRpcClient::get_account_nonce(&chain_cfg, &addr_hex) { Ok(n) => n, Err(_) => continue };
+            // If chain nonce already ahead or equal, no gap (internal last_alloc should never be < chain_nonce)
+            if chain_nonce >= last_alloc + 1 { continue; }
+            // chain reports lower -> gap; emit detection event via unsigned extrinsic? we only log and use local signer if available
+            log::warn!("[nonce-gap] Detected gap for nft {:?} chain {} internal_last_alloc={} chain_nonce={} -> queuing filler", nft_id.clone(), chain_id, last_alloc, chain_nonce);
+            // Attempt to send empty filler transaction(s) for each missing nonce up to last_alloc inclusive; limit to 3 per cycle
+            let mut to_fill = Vec::new();
+            let mut nonce_cursor = chain_nonce; // chain next nonce to use
+            while nonce_cursor < last_alloc + 1 && to_fill.len() < 3 { // +1 because last_alloc was allocated but not on-chain
+                to_fill.push(nonce_cursor);
+                nonce_cursor += 1;
+            }
+            if to_fill.is_empty() { continue; }
+            // Build minimal 0-value legacy transactions (could choose EIP-1559) with empty data
+            let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
+            if !signer.can_sign() { continue; }
+            if signer.can_sign() {
+                for nonce in to_fill {
+                    if let Some(addr_hex_ref) = addr_hex.strip_prefix("0x") {
+                        let mut to_addr = String::from("0x");
+                        to_addr.push_str(addr_hex_ref);
+                        let empty: [u8;0] = [];
+                        // Build preimage to use as message so deterministic signature occurs
+                        if let Ok(preimage) = crate::multichain::TransactionBuilder::build_ethereum_transaction(&to_addr, 0u64, &empty, 21_000, 1_000_000_000, nonce, chain_id) {
+                            // Derive synthetic request id: keccak256("gap"||nft_bytes||chain_id||nonce)
+                            use sp_io::hashing::keccak_256;
+                            let mut seed: Vec<u8> = b"gap".to_vec();
+                            seed.extend_from_slice(&nft_id.clone().into_inner());
+                            seed.extend_from_slice(&chain_id.to_le_bytes());
+                            seed.extend_from_slice(&nonce.to_le_bytes());
+                            let hash = keccak_256(&seed);
+                            let req_id = U256Core::from_big_endian(&hash);
+                            // Avoid duplicate filler sessions
+                            let mut exists = false;
+                            for (_sid, sess) in SigningSessions::<T>::iter() { if sess.request_id == req_id { exists = true; break; } }
+                            if exists { continue; }
+                            // Convert nft_id bytes back to U256 for payload
+                            let mut nft_bytes_arr = [0u8;32];
+                            let raw = nft_id.clone().into_inner();
+                            let copy_len = core::cmp::min(32, raw.len());
+                            nft_bytes_arr[..copy_len].copy_from_slice(&raw[..copy_len]);
+                            let nft_u256 = U256Core::from_little_endian(&nft_bytes_arr);
+                            if let Ok(msg_bv) = BoundedVec::try_from(preimage.clone()) {
+                                let _ = signer.send_unsigned_transaction(
+                                    |acct| crate::payloads::GapFillerSigningSessionPayload::<T> { request_id: req_id, nft_id: nft_u256, chain_id, nonce, message: msg_bv.clone(), public: acct.public.clone() },
+                                    |payload, signature| Call::create_gap_filler_signing_session_unsigned { payload, signature },
+                                );
+                                Self::deposit_event(Event::NonceGapFillerQueued(nft_id.clone(), chain_id, nonce));
+                            }
+                        }
+                    }
+                }
+            }
+            Self::deposit_event(Event::NonceGapDetected(nft_id.clone(), chain_id, last_alloc, chain_nonce));
+        }
     }
 
     fn mark_nonce_accepted_internal(
