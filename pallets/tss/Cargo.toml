@@ -60,6 +60,7 @@ pallet-staking-reward-curve = { workspace = true }
 pallet-session = { workspace = true, features = ["std"] }
 pallet-timestamp = { workspace = true, features = ["std"] }
 pallet-staking = { workspace = true, features = ["std"] }
+proptest = { version = "1.4", default-features = false, features = ["std"] }
 
 [features]
 default = ["std"]

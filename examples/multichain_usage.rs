@@ -73,28 +73,7 @@ fn update_chain_config_example(
     )
 }
 
-// Example 6: Manage agent nonces
-fn manage_agent_nonce(
-    origin: OriginFor<Runtime>,
-    agent_nft_id: NftId,
-    chain_id: u32,
-) -> DispatchResult {
-    // Get current nonce (for display purposes)
-    TssPallet::<Runtime>::get_agent_nonce(
-        origin.clone(),
-        agent_nft_id.clone(),
-        chain_id,
-    )?;
-    
-    // Increment nonce after transaction
-    TssPallet::<Runtime>::increment_agent_nonce(
-        origin,
-        agent_nft_id,
-        chain_id,
-    )
-}
-
-// Example 7: Complete multi-chain transaction workflow
+// Example 6: Complete multi-chain transaction workflow
 fn complete_multichain_workflow() -> Result<(), &'static str> {
     println!("=== Multi-Chain TSS Transaction Workflow ===");
     
@@ -131,7 +110,7 @@ fn complete_multichain_workflow() -> Result<(), &'static str> {
     Ok(())
 }
 
-// Example 8: Event handling
+// Example 7: Event handling
 fn handle_multichain_events() {
     // In your runtime, you would listen for these events:
     
@@ -150,7 +129,7 @@ fn handle_multichain_events() {
     println!("Event handlers should be implemented in your runtime");
 }
 
-// Example 9: Error handling
+// Example 8: Error handling
 fn handle_errors() {
     // Common error scenarios:
     

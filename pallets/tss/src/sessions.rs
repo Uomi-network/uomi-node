@@ -4,9 +4,11 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use sp_std::vec::Vec;
 
 use crate::pallet::{
-    Config, DkgSessions, Event, NextSessionId, Pallet, ParticipantReportCount, 
+    Config, DkgSessions, Event, NextSessionId, Pallet, ParticipantReportCount,
     ReportedParticipants, SessionState, AggregatedPublicKeys, Error,
 };
+use crate::{ProposedPublicKeys};
+use crate::types::{NftId};
 use crate::payloads::{ReportParticipantsPayload, SubmitDKGResultPayload};
 use crate::types::SessionId;
 
@@ -18,24 +20,24 @@ impl<T: Config> Pallet<T> {
     }
 
     pub fn check_expired_sessions(n: BlockNumberFor<T>) -> DispatchResult {
-        // Fetch all the sessions in progress and verify if they are still valid or deadline has passed
-        let mut sessions_to_remove = Vec::new();
+        // Collect sessions whose deadline expired (state still not finalized)
+        let mut sessions_to_remove: Vec<(SessionId, NftId)> = Vec::new();
         for (session_id, session) in DkgSessions::<T>::iter() {
-            // Check if the session is in progress and if the deadline has passed
             if session.state <= SessionState::DKGInProgress {
-                let deadline = session.deadline;
-                if n >= deadline {
-                    sessions_to_remove.push(session_id);
+                if n >= session.deadline {
+                    sessions_to_remove.push((session_id, session.nft_id.clone()));
                 }
             }
         }
-        
-        for session_id in sessions_to_remove {
+        // Remove them & GC any residual ProposedPublicKeys for their NFT
+        for (session_id, nft_id) in sessions_to_remove {
             Pallet::<T>::update_report_count(session_id).ok();
-            Pallet::<T>::deposit_event(Event::DKGFailed(session_id));
+            // Emit explicit expiration event (reuse DKGFailed event for backward compat if needed)
+            Pallet::<T>::deposit_event(Event::DKGExpired(session_id));
             DkgSessions::<T>::remove(session_id);
+            // GC: clear any partial DKG result votes for this NFT (deadline reached, session aborted)
+            let _ = ProposedPublicKeys::<T>::clear_prefix(nft_id, u32::MAX, None);
         }
-
         Ok(())
     }
 
@@ -44,7 +46,7 @@ impl<T: Config> Pallet<T> {
         let session =
             DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
-        // First set the session state to DKGFailed
+    // First set the session state to DKGFailed (protocol failure path)
         DkgSessions::<T>::mutate(session_id, |session| {
             if let Some(s) = session {
                 s.state = SessionState::DKGFailed;
@@ -190,6 +192,22 @@ impl<T: Config> Pallet<T> {
 
         // Store the aggregated public key
         AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
+
+    // Supersede any older completed DKG sessions for same NFT
+        if let Some(current_session) = DkgSessions::<T>::get(session_id) {
+            for (other_id, mut other_session) in DkgSessions::<T>::iter() {
+                if other_id != session_id
+                    && other_session.nft_id == current_session.nft_id
+                    && other_session.state == SessionState::DKGComplete
+                {
+                    other_session.state = SessionState::DKGSuperseded;
+                    DkgSessions::<T>::insert(other_id, other_session);
+                    Pallet::<T>::deposit_event(Event::DKGSuperseded(other_id));
+                }
+            }
+            // GC ProposedPublicKeys votes now that final key chosen
+            let _ = ProposedPublicKeys::<T>::clear_prefix(current_session.nft_id, u32::MAX, None);
+        }
 
         // Emit event with the session ID and aggregated key
         Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));

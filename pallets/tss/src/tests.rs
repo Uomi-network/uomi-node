@@ -1158,7 +1158,7 @@ mod tests {
 
             // Assert
             assert!(!DkgSessions::<Test>::contains_key(session_id)); // Session should be removed
-            System::assert_last_event(TssEvent::DKGFailed(session_id).into());
+            System::assert_last_event(TssEvent::DKGExpired(session_id).into());
             // update_report_count was called implicitly, check state change (already done by removal)
         });
     }
@@ -1203,7 +1203,7 @@ mod tests {
             assert!(!DkgSessions::<Test>::contains_key(1)); // Session 1 removed
             assert!(DkgSessions::<Test>::contains_key(2)); // Session 2 remains
             assert!(DkgSessions::<Test>::contains_key(3)); // Session 3 remains (wrong state)
-            System::assert_has_event(TssEvent::DKGFailed(1).into());
+            System::assert_has_event(TssEvent::DKGExpired(1).into());
         });
     }
 
@@ -1832,9 +1832,9 @@ mod tests {
 
     #[test]
     fn structured_eip1559_action_builds_expected_preimage() {
-        use pallet_uomi_engine::Outputs as EngineOutputs;
         use crate::multichain::TransactionBuilder;
         use sp_core::U256;
+    use pallet_uomi_engine::Outputs as EngineOutputs;
         new_test_ext().execute_with(|| {
             let request_id = U256::from(2u8);
             let nft_id = U256::from(10u8);
@@ -2160,6 +2160,557 @@ mod tests {
             let mut seen = sp_std::collections::btree_set::BTreeSet::new();
             for (_sid, sess) in &all_sessions { seen.insert(sess.request_id); assert_eq!(sess.nft_id, expected_nft); }
             assert_eq!(seen.len(), 3, "All request_ids must be distinct");
+        });
+    }
+
+    #[test]
+    fn dkg_reshare_supersedes_previous_and_signing_uses_latest() {
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            // Prepare validators & initialize
+            let validators = vec![account(20), account(21), account(22), account(23)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            // Also register validators in staking pallet so reshare session picks them up
+            let prefs = pallet_staking::ValidatorPrefs { commission: Perbill::from_percent(0), blocked: false };
+            for v in &validators { pallet_staking::Validators::<Test>::insert(v.clone(), prefs.clone()); }
+            // First DKG (record next_session_id BEFORE call; the created session will use this value)
+            let first_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(900u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            // Sanity: session now exists
+            assert!(TestingPallet::get_dkg_session(first_session_id).is_some(), "First DKG session should exist");
+            // Complete first DKG
+            let agg1 = [7u8; 33];
+            for v in &validators {
+                let s = TestingPallet::get_dkg_session(first_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: first_session_id, public_key: BoundedVec::truncate_from(agg1.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8;64])
+                    ));
+                }
+            }
+            assert_eq!(TestingPallet::get_dkg_session(first_session_id).unwrap().state, SessionState::DKGComplete);
+
+            // Reshare (second DKG). Capture next_session_id BEFORE call again.
+            let second_session_id = TestingPallet::next_session_id();
+            let old_participants = TestingPallet::get_dkg_session(first_session_id).unwrap().participants.clone();
+            assert_ok!(TestingPallet::create_reshare_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60,
+                old_participants
+            ));
+            assert!(TestingPallet::get_dkg_session(second_session_id).is_some(), "Second DKG session should exist");
+            // Complete second DKG
+            let agg2 = [8u8; 33];
+            for v in &validators {
+                let s = TestingPallet::get_dkg_session(second_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: second_session_id, public_key: BoundedVec::truncate_from(agg2.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8;64])
+                    ));
+                }
+            }
+            // Old should now be marked DKGSuperseded; new is complete
+            assert_eq!(TestingPallet::get_dkg_session(first_session_id).unwrap().state, SessionState::DKGSuperseded, "First DKG should be superseded");
+            assert_eq!(TestingPallet::get_dkg_session(second_session_id).unwrap().state, SessionState::DKGComplete);
+
+            // Create signing session; it must bind to second_session_id (latest complete)
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![1,2,3]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(
+                RuntimeOrigin::none(),
+                U256::from(1u64),
+                nft_id.clone(),
+                msg.clone()
+            ));
+            let (_sign_id, sign_session) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            assert_eq!(sign_session.dkg_session_id, second_session_id, "Signing session should use latest completed DKG session");
+        });
+    }
+
+    #[test]
+    fn signing_session_expires_after_ttl() {
+        use sp_core::U256;
+    use sp_runtime::SaturatedConversion; // for saturated_into on BlockNumber
+    use frame_support::traits::Hooks; // bring on_initialize into scope
+    use crate::ProposedSignatures;
+        new_test_ext().execute_with(|| {
+            // Setup validators & DKG
+            let validators = vec![account(30), account(31), account(32)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(1001u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            // Complete DKG
+            let aggk = [9u8; 33];
+            for v in &validators {
+                let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8;64])
+                    ));
+                }
+            }
+            assert_eq!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().state, SessionState::DKGComplete);
+
+            // Create signing session at block 1
+            System::set_block_number(1);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![42]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(
+                RuntimeOrigin::none(),
+                U256::from(888u64),
+                nft_id.clone(),
+                msg
+            ));
+            let (sid, sess) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            assert_eq!(sess.state, SessionState::SigningInProgress);
+            let expiry = crate::SigningSessionExpiry::<Test>::get(sid).expect("expiry set");
+            // Ensure expiry after block 1
+            assert!(expiry > 1u32.into());
+
+            // Insert partial signature votes to ensure GC on expiry
+            ProposedSignatures::<Test>::insert(sid, 1u32, BoundedVec::truncate_from(vec![1u8;65]));
+            ProposedSignatures::<Test>::insert(sid, 2u32, BoundedVec::truncate_from(vec![1u8;65]));
+            assert_eq!(ProposedSignatures::<Test>::iter_prefix(sid).count(), 2);
+
+            // Advance to just before expiry and trigger on_initialize
+            let expiry_u64: u64 = expiry.saturated_into::<u64>();
+            let before_expiry = expiry_u64 - 1;
+            System::set_block_number(before_expiry.into());
+            <TestingPallet as Hooks<_>>::on_initialize(before_expiry.into());
+            assert_eq!(crate::SigningSessions::<Test>::get(sid).unwrap().state, SessionState::SigningInProgress, "Should still be in progress before expiry");
+
+            // Advance to expiry block; should expire now
+            System::set_block_number(expiry);
+            <TestingPallet as Hooks<_>>::on_initialize(expiry);
+            let expired_session = crate::SigningSessions::<Test>::get(sid).unwrap();
+            assert_eq!(expired_session.state, SessionState::SigningExpired, "Expired signing session marked using SigningExpired state");
+            assert!(crate::SigningSessionExpiry::<Test>::get(sid).is_none(), "Expiry entry cleaned up");
+            assert_eq!(ProposedSignatures::<Test>::iter_prefix(sid).count(), 0, "Votes GC'd on expiry");
+        });
+    }
+
+    // --- Signing retry logic tests ---
+    #[test]
+    fn signing_retry_creates_new_session_after_expiry() {
+        use sp_core::U256;
+        use frame_support::traits::Hooks;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(90), account(91), account(92)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            // DKG
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(12345u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60));
+            let aggk = [7u8; 33];
+            for v in &validators { // finalize DKG
+                let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64])));
+                }
+            }
+            // First signing attempt
+            System::set_block_number(10);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![9]).unwrap();
+            let request_id = U256::from(777u64);
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let (first_sid, _) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            let expiry = crate::SigningSessionExpiry::<Test>::get(first_sid).expect("expiry set");
+            // Force expiry
+            System::set_block_number(expiry);
+            <TestingPallet as Hooks<_>>::on_initialize(expiry);
+            assert_eq!(crate::SigningSessions::<Test>::get(first_sid).unwrap().state, SessionState::SigningExpired);
+            // Second attempt auto allowed
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            assert_eq!(crate::SigningSessions::<Test>::iter().count(), 2, "New signing session created after expiry");
+        });
+    }
+
+    #[test]
+    fn signing_retry_caps_after_max_attempts() {
+        use sp_core::U256;
+        use frame_support::traits::Hooks;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(93), account(94), account(95)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            // DKG finalize
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(223344u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60));
+            let aggk = [8u8; 33];
+            for v in &validators { let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap(); if s.state < SessionState::DKGComplete { assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64]))); } }
+            let request_id = U256::from(888888u64);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![1]).unwrap();
+            // Perform 3 attempts (MAX=3) by expiring each
+            for _ in 0..3 { // create & expire up to the max allowed attempts
+                assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+                // Fetch the latest session for this request_id (highest session id)
+                let (sid, _sess) = crate::SigningSessions::<Test>::iter()
+                    .filter(|(_id, s)| s.request_id == request_id)
+                    .max_by_key(|(id, _)| *id)
+                    .expect("signing session just created");
+                let expiry = crate::SigningSessionExpiry::<Test>::get(sid).expect("expiry set");
+                System::set_block_number(expiry);
+                <TestingPallet as Hooks<_>>::on_initialize(expiry);
+                assert_eq!(crate::SigningSessions::<Test>::get(sid).unwrap().state, SessionState::SigningExpired, "attempt should expire");
+            }
+            // Fourth attempt should be ignored (no new session)
+            let count_before = crate::SigningSessions::<Test>::iter().count();
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let count_after = crate::SigningSessions::<Test>::iter().count();
+            assert_eq!(count_before, count_after, "No new session after retries exhausted");
+        });
+    }
+
+    #[test]
+    fn signing_retry_events_emitted() {
+        use sp_core::U256;
+        use frame_support::traits::Hooks;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(120), account(121), account(122)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            // DKG finalize
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(777777u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60));
+            let aggk = [11u8; 33];
+            for v in &validators { let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap(); if s.state < SessionState::DKGComplete { assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64]))); } }
+            let request_id = U256::from(424242u64);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![5]).unwrap();
+            // First attempt (no SigningRetry event expected, only SigningSessionCreated)
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            for ev in System::events() { assert!(!matches!(ev.event, RuntimeEvent::TestingPallet(crate::Event::SigningRetry(_,1,_))), "No SigningRetry for first attempt"); }
+            System::reset_events();
+            // Expire first
+            let first_sid = crate::SigningSessions::<Test>::iter().next().unwrap().0;
+            let expiry = crate::SigningSessionExpiry::<Test>::get(first_sid).unwrap();
+            System::set_block_number(expiry);
+            <TestingPallet as Hooks<_>>::on_initialize(expiry);
+            // Second attempt
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let mut saw_second = false;
+            for ev in System::events() { if matches!(ev.event, RuntimeEvent::TestingPallet(crate::Event::SigningRetry(rid, attempt, _)) if rid == request_id && attempt == 2) { saw_second = true; } }
+            assert!(saw_second, "Second attempt should emit SigningRetry (attempt=2)");
+            System::reset_events();
+            // Expire second & third attempt then check exhausted on fourth
+            for expected_attempt in 2..=3 { // we already created attempt 2
+                let latest_sid = crate::SigningSessions::<Test>::iter().filter(|(_, s)| s.request_id == request_id).max_by_key(|(id, _)| *id).unwrap().0;
+                let expiry_block = crate::SigningSessionExpiry::<Test>::get(latest_sid).unwrap();
+                System::set_block_number(expiry_block);
+                <TestingPallet as Hooks<_>>::on_initialize(expiry_block);
+                if expected_attempt < 3 { // create next attempt (attempt 3)
+                    assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+                    let mut saw_retry = false; let attempt_number = expected_attempt + 1; // 3
+                    for ev in System::events() { if matches!(ev.event, RuntimeEvent::TestingPallet(crate::Event::SigningRetry(rid, a, _)) if rid == request_id && a == attempt_number) { saw_retry = true; } }
+                    assert!(saw_retry, "Attempt {} SigningRetry event expected", attempt_number);
+                    System::reset_events();
+                }
+            }
+            // Now attempts 1,2,3 done; further call should emit SigningRetriesExhausted and no new session
+            let session_count_before = crate::SigningSessions::<Test>::iter().count();
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg));
+            let mut exhausted = false;
+            for ev in System::events() { if matches!(ev.event, RuntimeEvent::TestingPallet(crate::Event::SigningRetriesExhausted(rid, attempts)) if rid == request_id && attempts == 3) { exhausted = true; } }
+            assert!(exhausted, "SigningRetriesExhausted event expected after max attempts");
+            let session_count_after = crate::SigningSessions::<Test>::iter().count();
+            assert_eq!(session_count_before, session_count_after, "No new session created after exhaustion");
+        });
+    }
+
+    #[test]
+    fn signing_retry_counter_cleared_on_success() {
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(96), account(97), account(98)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            // DKG finalize
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(445566u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60));
+            let aggk = [9u8; 33];
+            for v in &validators { let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap(); if s.state < SessionState::DKGComplete { assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64]))); } }
+            let request_id = U256::from(999u64);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![2]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let (sid, _) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            // Need >= 67% of 3 validators => 2 votes
+            let fake_sig = BoundedVec::truncate_from(vec![3u8;65]);
+            for voter in validators.iter().take(2) { // submit two matching votes
+                assert_ok!(TestingPallet::submit_signature_result(
+                    RuntimeOrigin::none(),
+                    crate::payloads::SubmitSignatureResultPayload { session_id: sid, signature: fake_sig.clone(), public: voter.clone() },
+                    sr25519::Signature::from_raw([0u8;64])
+                ));
+            }
+            assert_eq!(crate::SigningSessions::<Test>::get(sid).unwrap().state, SessionState::SigningComplete, "Session should complete after quorum");
+            assert!(crate::RequestRetryCount::<Test>::get(request_id) == 0, "Retry counter cleared on success");
+        });
+    }
+
+    #[test]
+    fn end_to_end_reshare_and_retry_flow() {
+        use sp_core::U256;
+        use frame_support::traits::Hooks;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(150), account(151), account(152)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            // Register validators in staking as in other reshare tests
+            let prefs = pallet_staking::ValidatorPrefs { commission: Perbill::from_percent(0), blocked: false };
+            for v in &validators { pallet_staking::Validators::<Test>::insert(v.clone(), prefs.clone()); }
+
+            // --- Initial DKG ---
+            let initial_dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(2024u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60));
+            let aggk1 = [21u8;33];
+            for v in &validators { let s = TestingPallet::get_dkg_session(initial_dkg_session_id).unwrap(); if s.state < SessionState::DKGComplete { assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: initial_dkg_session_id, public_key: BoundedVec::truncate_from(aggk1.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64]))); } }
+            assert_eq!(TestingPallet::get_dkg_session(initial_dkg_session_id).unwrap().state, SessionState::DKGComplete, "Initial DKG should complete");
+
+            // --- First signing attempt (will expire) ---
+            let request_id = U256::from(1111u64);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![42]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let (first_signing_sid, first_signing) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            assert_eq!(first_signing.dkg_session_id, initial_dkg_session_id, "Signing should reference initial DKG");
+            // Force expiry
+            let expiry_block = crate::SigningSessionExpiry::<Test>::get(first_signing_sid).unwrap();
+            System::set_block_number(expiry_block);
+            <TestingPallet as Hooks<_>>::on_initialize(expiry_block);
+            assert_eq!(crate::SigningSessions::<Test>::get(first_signing_sid).unwrap().state, SessionState::SigningExpired, "First signing attempt expired");
+
+            // --- Reshare DKG (new key) ---
+            // create reshare DKG (capture next_session_id BEFORE call like other tests)
+            let reshare_session_id = TestingPallet::next_session_id();
+            let old_participants = TestingPallet::get_dkg_session(initial_dkg_session_id).unwrap().participants.clone();
+            assert_ok!(TestingPallet::create_reshare_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60, old_participants));
+            let aggk2 = [22u8;33];
+            for v in &validators { let s = TestingPallet::get_dkg_session(reshare_session_id).unwrap(); if s.state < SessionState::DKGComplete { assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: reshare_session_id, public_key: BoundedVec::truncate_from(aggk2.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64]))); } }
+            assert_eq!(TestingPallet::get_dkg_session(reshare_session_id).unwrap().state, SessionState::DKGComplete, "Reshare DKG completes");
+            // Older DKG should now be superseded
+            assert_eq!(TestingPallet::get_dkg_session(initial_dkg_session_id).unwrap().state, SessionState::DKGSuperseded, "Initial DKG superseded by reshare");
+
+            // --- New signing attempt uses latest DKG ---
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            // Fetch latest signing session for request
+            let (second_signing_sid, second_signing) = crate::SigningSessions::<Test>::iter().filter(|(_, s)| s.request_id == request_id).max_by_key(|(id, _)| *id).unwrap();
+            assert_eq!(second_signing.dkg_session_id, reshare_session_id, "Second signing should bind to reshare DKG");
+
+            // Finalize signing with quorum signatures (2/3)
+            let fake_sig = BoundedVec::truncate_from(vec![0xAB;65]);
+            for signer in validators.iter().take(2) {
+                assert_ok!(TestingPallet::submit_signature_result(RuntimeOrigin::none(), crate::payloads::SubmitSignatureResultPayload { session_id: second_signing_sid, signature: fake_sig.clone(), public: signer.clone() }, sr25519::Signature::from_raw([0u8;64])));
+            }
+            assert_eq!(crate::SigningSessions::<Test>::get(second_signing_sid).unwrap().state, SessionState::SigningComplete, "Second signing completes");
+            assert_eq!(crate::RequestRetryCount::<Test>::get(request_id), 0, "Retry counter cleared after successful signing");
+        });
+    }
+
+    #[test]
+    fn signing_no_duplicate_while_in_progress() {
+        use sp_core::U256;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(101), account(102), account(103)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = U256::from(123123u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(RuntimeOrigin::signed(create_test_account(None)), nft_id.clone(), 60));
+            let aggk = [10u8; 33];
+            for v in &validators { let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap(); if s.state < SessionState::DKGComplete { assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() }, sr25519::Signature::from_raw([0u8;64]))); } }
+            let request_id = U256::from(4242u64);
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![4]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let count_before = crate::SigningSessions::<Test>::iter().count();
+            // Attempt duplicate while in progress
+            assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
+            let count_after = crate::SigningSessions::<Test>::iter().count();
+            assert_eq!(count_before, count_after, "Duplicate in-progress prevented");
+        });
+    }
+
+    #[test]
+    fn dkg_proposed_public_keys_cleared_on_completion() {
+        new_test_ext().execute_with(|| {
+            use crate::ProposedPublicKeys;
+            let validators = vec![account(40), account(41), account(42)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(6000u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            let aggk = [11u8; 33];
+            for v in &validators {
+                let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8;64])
+                    ));
+                }
+            }
+            assert_eq!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().state, SessionState::DKGComplete);
+            assert_eq!(ProposedPublicKeys::<Test>::iter_prefix(nft_id).count(), 0, "ProposedPublicKeys cleared");
+        });
+    }
+
+    #[test]
+    fn signing_proposed_signatures_cleared_on_completion() {
+        new_test_ext().execute_with(|| {
+            use crate::ProposedSignatures;
+            let validators = vec![account(50), account(51), account(52)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(7000u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            let aggk = [13u8; 33];
+            for v in &validators {
+                let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8;64])
+                    ));
+                }
+            }
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![5,5,5]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(
+                RuntimeOrigin::none(),
+                sp_core::U256::from(9000u64),
+                nft_id.clone(),
+                msg
+            ));
+            let (sign_id, _s) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            let sig = BoundedVec::truncate_from(vec![2u8;65]);
+            // Insert single vote and then finalize via submit_signature_result which will also insert same vote again but that's fine
+            ProposedSignatures::<Test>::insert(sign_id, 1u32, sig.clone());
+            assert_ok!(TestingPallet::submit_signature_result(
+                RuntimeOrigin::none(),
+                crate::payloads::SubmitSignatureResultPayload { session_id: sign_id, signature: sig.clone(), public: validators[0].clone() },
+                sr25519::Signature::from_raw([0u8;64])
+            ));
+            assert_eq!(ProposedSignatures::<Test>::iter_prefix(sign_id).count(), 0, "Votes cleared on completion");
+        });
+    }
+
+    // --- Added coverage: DKG expiration GC ---
+    #[test]
+    fn dkg_expiration_clears_votes_and_session_removed() {
+    // removed unused SaturatedConversion import
+    use frame_support::traits::Hooks;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(80), account(81), account(82), account(83)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(9100u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            // Single vote only
+            let aggk = [22u8; 33];
+            assert_ok!(TestingPallet::submit_dkg_result(
+                RuntimeOrigin::none(),
+                SubmitDKGResultPayload { session_id, public_key: BoundedVec::truncate_from(aggk.to_vec()), public: validators[0].clone() },
+                sr25519::Signature::from_raw([0u8;64])
+            ));
+            let s = TestingPallet::get_dkg_session(session_id).unwrap();
+            assert!(s.state < SessionState::DKGComplete);
+            assert!(crate::ProposedPublicKeys::<Test>::iter_prefix(nft_id.clone()).next().is_some());
+            use frame_system::pallet_prelude::BlockNumberFor;
+            let after_deadline = s.deadline + BlockNumberFor::<Test>::from(1u32);
+            System::set_block_number(after_deadline);
+            <TestingPallet as Hooks<_>>::on_initialize(after_deadline);
+            assert!(TestingPallet::get_dkg_session(session_id).is_none(), "Expired session removed");
+            assert_eq!(crate::ProposedPublicKeys::<Test>::iter_prefix(nft_id).count(), 0, "Votes GC'd");
+        });
+    }
+
+    // --- Added coverage: internal finalize supersession & GC ---
+    #[test]
+    fn finalize_internal_supersedes_and_gcs_votes() {
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(81), account(82), account(83)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+            let first_session_id = TestingPallet::next_session_id();
+            let nft_id_u256 = sp_core::U256::from(9200u64);
+            let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            // Insert a vote directly
+            crate::ProposedPublicKeys::<Test>::insert(nft_id.clone(), 1u32, BoundedVec::truncate_from(vec![33u8;33]));
+            assert!(crate::ProposedPublicKeys::<Test>::iter_prefix(nft_id.clone()).next().is_some());
+            assert_ok!(TestingPallet::finalize_dkg_session_internal(first_session_id, vec![44u8;33]));
+            assert_eq!(crate::ProposedPublicKeys::<Test>::iter_prefix(nft_id.clone()).count(), 0, "Votes cleared after finalize");
+            // Second session
+            let second_session_id = TestingPallet::next_session_id();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60
+            ));
+            assert_ok!(TestingPallet::finalize_dkg_session_internal(second_session_id, vec![55u8;33]));
+            assert_eq!(TestingPallet::get_dkg_session(first_session_id).unwrap().state, SessionState::DKGSuperseded, "First superseded");
         });
     }
 }

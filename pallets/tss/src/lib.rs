@@ -6,6 +6,8 @@ use sp_runtime::KeyTypeId;
 mod mock;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod prop_tests;
 
 mod fsa;
 mod multichain;
@@ -76,8 +78,6 @@ pub trait TssWeightInfo {
     fn report_tss_offence() -> frame_support::weights::Weight;
     fn submit_multi_chain_transaction() -> frame_support::weights::Weight;
     fn update_chain_config() -> frame_support::weights::Weight;
-    fn get_agent_nonce() -> frame_support::weights::Weight;
-    fn increment_agent_nonce() -> frame_support::weights::Weight;
     fn get_transaction_status() -> frame_support::weights::Weight;
 }
 
@@ -94,8 +94,6 @@ impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
     fn report_tss_offence() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn submit_multi_chain_transaction() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn update_chain_config() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
-    fn get_agent_nonce() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
-    fn increment_agent_nonce() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
     fn get_transaction_status() -> frame_support::weights::Weight { frame_support::weights::Weight::from_parts(10_000,0) }
 }
 
@@ -302,13 +300,23 @@ pub mod pallet {
 
 
     #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Debug, PartialEq, Eq, Clone, Copy, PartialOrd)]
+    #[repr(u8)]
     pub enum SessionState {
-    DKGCreated,
-    DKGInProgress,
-    DKGComplete,
-    DKGFailed,
-    SigningInProgress,
-    SigningComplete,
+        // NOTE: Explicit discriminants are assigned to preserve backwards compatibility with any
+        // previously stored enum values that used the implicit ordering. DO NOT reorder existing
+        // variants or change their numeric values without a storage migration.
+        // --- DKG lifecycle (original variants 0..=3) ---
+        DKGCreated        = 0, // Session object created (participants + metadata recorded)
+        DKGInProgress     = 1, // Shares / proposals are being collected
+        DKGComplete       = 2, // Aggregated public key finalized
+        DKGFailed         = 3, // Genuine protocol failure (legacy values that previously also meant superseded/expired stay here)
+        // --- Signing lifecycle (original variants 4..=5) ---
+        SigningInProgress = 4, // Collecting partial signatures
+        SigningComplete   = 5, // Final aggregated signature produced
+        // --- Newly added variants (appended; safe for old data) ---
+        DKGSuperseded     = 6, // An older successful DKG rendered inactive by a newer DKG for same nft_id
+        DKGExpired        = 7, // DKG session hit its deadline and was expired/cleaned
+        SigningExpired    = 8, // Signing session TTL elapsed without completion
     }
 
     #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo)] // IMPORTANT: Keep these derives
@@ -347,6 +355,22 @@ pub mod pallet {
     #[pallet::getter(fn get_signing_session)]
     pub type SigningSessions<T: Config> =
     StorageMap<_, Blake2_128Concat, SessionId, SigningSession, OptionQuery>;
+
+    /// Expiration block for a signing session (soft TTL). We avoid altering `SigningSession` itself
+    /// to keep storage layout unchanged; an entry here means the session expires at or after the
+    /// stored block if still `SigningInProgress` with no aggregated signature.
+    #[pallet::storage]
+    #[pallet::getter(fn signing_session_expiry)]
+    pub type SigningSessionExpiry<T: Config> =
+    StorageMap<_, Blake2_128Concat, SessionId, BlockNumberFor<T>, OptionQuery>;
+
+    /// Tracks how many signing attempts have been created for a given request_id.
+    /// Keyed by the original external request identifier; increments only when a new
+    /// signing session is created (not when one is retried internally). Used to cap retries.
+    #[pallet::storage]
+    #[pallet::getter(fn request_retry_count)]
+    pub type RequestRetryCount<T: Config> =
+    StorageMap<_, Blake2_128Concat, U256, u8, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn get_tss_key)]
@@ -473,12 +497,28 @@ pub mod pallet {
     #[pallet::getter(fn next_request_id)]
     pub type NextRequestId<T: Config> = StorageValue<_, u32, ValueQuery>;
 
-    /// Storage for tracking transaction nonces per chain per agent
-    /// Maps (agent_nft_id, chain_id) -> nonce
+    // Legacy AgentNonces storage removed; NonceStates now handles allocation + acceptance window.
+
+    /// Advanced nonce tracking state per (agent, chain)
     #[pallet::storage]
-    #[pallet::getter(fn agent_nonces)]
-    pub type AgentNonces<T: Config> =
-    StorageDoubleMap<_, Blake2_128Concat, NftId, Blake2_128Concat, u32, u64, ValueQuery>;
+    #[pallet::getter(fn nonce_states)]
+    pub type NonceStates<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, NftId,
+        Blake2_128Concat, u32,
+        crate::types::NonceState,
+        ValueQuery
+    >;
+
+    /// Map signing session -> (chain_id, allocated_nonce)
+    #[pallet::storage]
+    #[pallet::getter(fn signing_session_nonce)]
+    pub type SigningSessionNonces<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat, SessionId,
+        (u32, u64),
+        OptionQuery
+    >;
 
     
 
@@ -494,7 +534,12 @@ pub mod pallet {
     SignatureResultSubmitted(SessionId, Signature), // Emitted when threshold reached for signature voting
     SignatureSubmitted(SessionId),               // When signature is stored
     ValidatorIdAssigned(T::AccountId, u32),      // Validator account, ID
-    DKGFailed(SessionId),                        // DKG session failed
+    DKGFailed(SessionId),                        // DKG session failed (protocol failure)
+    DKGSuperseded(SessionId),                    // Older DKG made inactive by a newer one
+    DKGExpired(SessionId),                       // DKG session deadline reached and removed
+    SigningExpired(SessionId),                   // Signing session TTL reached and expired
+    SigningRetry(U256, u8, SessionId),           // (request_id, attempt_number, new_session_id)
+    SigningRetriesExhausted(U256, u8),           // (request_id, attempts)
     /// Validator has been slashed for TSS offence
     ValidatorSlashed(T::AccountId, TssOffenceType, SessionId),
     /// Offence has been reported to the staking system
@@ -507,6 +552,10 @@ pub mod pallet {
     ChainConfigurationUpdated(u32),               // Chain ID updated
     /// Transaction request submitted to FSA
     TransactionRequestSubmitted(NftId, u32),      // NFT ID, Chain ID
+    // Nonce tracking events
+    NonceAllocated(NftId, u32, u64),              // (agent, chain, nonce)
+    NonceAccepted(NftId, u32, u64, Vec<u8>),      // (agent, chain, nonce, tx_hash)
+    NonceWindowPruned(NftId, u32, u64),           // pruned up to (last_accepted)
     }
 
     #[pallet::error]
@@ -540,6 +589,9 @@ pub mod pallet {
     InvalidTransactionData,
     InsufficientGasLimit,
     InvalidNonce,
+    NonceWindowExceeded,
+    NonceNotAllocated,
+    PendingStorageFull,
     }
 
     #[pallet::call]
@@ -567,8 +619,9 @@ pub mod pallet {
         let total_validators = active_validators.len() as u32;
         let slashed_validators_count = slashed_validators.len() as u32; 
 
-        let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
-        let required_validators = (total_validators * threshold) / 100;
+    // Use global minimum validator threshold only for availability check (rename to avoid shadowing user threshold)
+    let min_pct = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
+    let required_validators = (total_validators * min_pct) / 100;
 
         // Check if the number of slashed validators exceeds the threshold
         ensure!(
@@ -591,6 +644,7 @@ pub mod pallet {
         let session = DKGSession {
             nft_id,
             participants: BoundedVec::try_from(participants).map_err(|_| Error::<T>::InvalidParticipantsCount)?,
+            // Store the user-requested session threshold (after validation) rather than global min
             threshold,
             state: SessionState::DKGCreated,
             old_participants: None,
@@ -637,23 +691,44 @@ pub mod pallet {
         nft_id: NftId,
         message: BoundedVec<u8, MaxMessageSize>,
     ) -> DispatchResult {
-        // Prevent duplicate signing sessions for same request_id while one is still in progress
+        // Retry policy constants (could be configurable via Config later)
+        const MAX_SIGNING_RETRIES: u8 = 3; // total attempts allowed (including first)
+
+        // Check existing sessions for this request
+        let mut has_in_progress = false;
         for (_sid, existing) in SigningSessions::<T>::iter() {
-            if existing.request_id == request_id && matches!(existing.state, SessionState::SigningInProgress) {
-                log::debug!("[TSS] Skipping duplicate signing session request for request_id {:?}", request_id);
-                return Ok(()); // idempotent
+            if existing.request_id == request_id {
+                match existing.state {
+                    SessionState::SigningInProgress => {
+                        has_in_progress = true;
+                        break;
+                    }
+                    _ => { /* terminal */ }
+                }
             }
         }
-        // Find the DKG session with this NFT ID
-        let mut dkg_session_id = None;
-        for (id, session) in DkgSessions::<T>::iter() {
-            if session.nft_id == nft_id {
-                dkg_session_id = Some(id);
-                break;
-            }
+        if has_in_progress {
+            log::debug!("[TSS] Skipping duplicate signing session (in progress) for request_id {:?}", request_id);
+            return Ok(());
         }
 
-        let dkg_session_id = dkg_session_id.ok_or(Error::<T>::DkgSessionNotFound)?;
+        // Determine attempt number
+        let mut attempt = RequestRetryCount::<T>::get(request_id);
+        if attempt >= MAX_SIGNING_RETRIES {
+            // Exceeded retry budget
+            Self::deposit_event(Event::SigningRetriesExhausted(request_id, attempt));
+            return Ok(()); // silently ignore further attempts
+        }
+    attempt += 1; // current attempt number (1-based)
+    RequestRetryCount::<T>::insert(request_id, attempt);
+        // Select the MOST RECENT completed DKG session for this NFT (highest session_id).
+        // This avoids relying on the first iterator hit (which is not ordered) and implicitly
+        // gives precedence to newer reshare keys without adding new storage fields.
+        let dkg_session_id = DkgSessions::<T>::iter()
+            .filter(|(_, s)| s.nft_id == nft_id && s.state == SessionState::DKGComplete)
+            .max_by_key(|(id, _)| *id)
+            .map(|(id, _)| id)
+            .ok_or(Error::<T>::DkgSessionNotFound)?;
 
         // Ensure the DKG session is in the correct state
         let dkg_session =
@@ -663,11 +738,14 @@ pub mod pallet {
             Error::<T>::DkgSessionNotReady
         );
 
+        // Determine chain for this request (if transaction data already registered)
+        let maybe_chain_id = FsaTransactionRequests::<T>::get(&request_id).map(|(_, cid, _)| cid);
+
         // Create new Signing session
         let session = SigningSession {
             dkg_session_id,
             request_id,
-            nft_id,
+            nft_id: nft_id.clone(),
             message,
             aggregated_sig: None,
             state: SessionState::SigningInProgress,
@@ -678,9 +756,21 @@ pub mod pallet {
 
         // Store the session
         SigningSessions::<T>::insert(session_id, session);
+    // Record expiry (TTL) using a fixed heuristic; avoid new Config item to keep runtime stable.
+    let ttl_blocks: BlockNumberFor<T> = 300u32.into(); // TODO: consider making configurable in future upgrade
+    let expiry = frame_system::Pallet::<T>::block_number() + ttl_blocks;
+    SigningSessionExpiry::<T>::insert(session_id, expiry);
 
-        // Emit event with both session IDs
-        Self::deposit_event(Event::SigningSessionCreated(session_id, dkg_session_id));
+    // Emit events
+    // Allocate nonce early if we know chain
+    if let Some(chain_id) = maybe_chain_id {
+        if let Ok(nonce) = Self::allocate_next_nonce_internal(&session.nft_id, chain_id) {
+            SigningSessionNonces::<T>::insert(session_id, (chain_id, nonce));
+        }
+    }
+    Self::deposit_event(Event::SigningSessionCreated(session_id, dkg_session_id));
+    // Emit SigningRetry only for retry attempts (attempt > 1)
+    if attempt > 1 { Self::deposit_event(Event::SigningRetry(request_id, attempt, session_id)); }
 
         Ok(())
     }
@@ -770,7 +860,7 @@ pub mod pallet {
         // Check if the number of votes meets the threshold
         let mut votes = 0;
         
-        for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(nft_id) {
+    for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(nft_id.clone()) {
             if key == aggregated_key {
                 votes += 1;
             }
@@ -789,8 +879,27 @@ pub mod pallet {
             // Store the aggregated public key
             AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
 
+            // Mark all older completed DKG sessions for the same NFT as failed (superseded).
+            // We reuse the existing DKGFailed state to avoid introducing a new enum variant / storage field.
+            // This overloading should be documented: DKGFailed now also means "Inactive (superseded)".
+            if let Some(current_session) = DkgSessions::<T>::get(session_id) {
+                for (other_id, mut other_session) in DkgSessions::<T>::iter() {
+                    if other_id != session_id
+                        && other_session.nft_id == current_session.nft_id
+                        && other_session.state == SessionState::DKGComplete
+                    {
+                        other_session.state = SessionState::DKGSuperseded; // mark as inactive
+                        DkgSessions::<T>::insert(other_id, other_session);
+                        Self::deposit_event(Event::DKGSuperseded(other_id));
+                    }
+                }
+            }
+
             // Emit event
             Self::deposit_event(Event::DKGCompleted(session_id, aggregated_key));
+
+            // GC: remove all ProposedPublicKeys votes for this nft_id (final key chosen)
+            let _ = ProposedPublicKeys::<T>::clear_prefix(nft_id.clone(), u32::MAX, None);
         }
         Ok(())
     }
@@ -837,8 +946,14 @@ pub mod pallet {
             // Finalize
             session.aggregated_sig = Some(signature.clone());
             session.state = SessionState::SigningComplete;
+            let req_id_for_cleanup = session.request_id;
             SigningSessions::<T>::insert(session_id, session);
+            // Success: clear retry counter so future identical request IDs could start fresh if reused.
+            RequestRetryCount::<T>::remove(req_id_for_cleanup);
             Self::deposit_event(Event::SignatureResultSubmitted(session_id, signature));
+
+            // GC: clear votes for this signing session now finalized
+            let _ = ProposedSignatures::<T>::clear_prefix(session_id, u32::MAX, None);
         }
         Ok(())
     }
@@ -857,6 +972,22 @@ pub mod pallet {
         DkgSessions::<T>::insert(session_id, session);
         let bounded: PublicKey = BoundedVec::try_from(aggregated_key.clone()).map_err(|_| Error::<T>::InvalidParticipantsCount)?;
         AggregatedPublicKeys::<T>::insert(session_id, bounded.clone());
+
+        // Mark older completed sessions for same NFT as failed (superseded) without extra storage.
+        if let Some(current_session) = DkgSessions::<T>::get(session_id) {
+            for (other_id, mut other_session) in DkgSessions::<T>::iter() {
+                if other_id != session_id
+                    && other_session.nft_id == current_session.nft_id
+                    && other_session.state == SessionState::DKGComplete
+                {
+                    other_session.state = SessionState::DKGSuperseded;
+                    DkgSessions::<T>::insert(other_id, other_session);
+                    Self::deposit_event(Event::DKGSuperseded(other_id));
+                }
+            }
+            // GC: clear any lingering proposed public keys for this NFT
+            let _ = ProposedPublicKeys::<T>::clear_prefix(current_session.nft_id, u32::MAX, None);
+        }
         Self::deposit_event(Event::DKGCompleted(session_id, bounded));
         Ok(())
     }
@@ -887,10 +1018,15 @@ pub mod pallet {
 
         session.aggregated_sig = Some(signature.clone());
         session.state = SessionState::SigningComplete;
-        SigningSessions::<T>::insert(session_id, session.clone());
+    let req_id_for_cleanup = session.request_id;
+    SigningSessions::<T>::insert(session_id, session.clone());
+    RequestRetryCount::<T>::remove(req_id_for_cleanup);
 
         // Signature is already stored in session.aggregated_sig for FSA processing
         log::info!("Completed signature for session {} ready for transaction submission", session_id);
+
+    // GC: clear votes for this signing session
+    let _ = ProposedSignatures::<T>::clear_prefix(session_id, u32::MAX, None);
 
         Self::deposit_event(Event::SigningCompleted(session_id, signature));
         Ok(())
@@ -1103,50 +1239,7 @@ pub mod pallet {
         Ok(())
     }
 
-    /// Get the current nonce for an agent on a specific chain
-    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::get_agent_nonce())]
-    #[pallet::call_index(11)]
-    pub fn get_agent_nonce(
-        origin: OriginFor<T>,
-        nft_id: NftId,
-        chain_id: u32,
-    ) -> DispatchResult {
-        let _who = ensure_signed(origin)?;
-
-        // Validate chain is supported
-        ensure!(
-            Self::is_chain_supported(chain_id),
-            Error::<T>::UnsupportedChain
-        );
-
-        let _current_nonce = AgentNonces::<T>::get(&nft_id, chain_id);
-        
-        // In a real implementation, this would return the nonce
-        // For now, we just validate the request
-        Ok(())
-    }
-
-    /// Increment the nonce for an agent on a specific chain
-    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::increment_agent_nonce())]
-    #[pallet::call_index(12)]
-    pub fn increment_agent_nonce(
-        origin: OriginFor<T>,
-        nft_id: NftId,
-        chain_id: u32,
-    ) -> DispatchResult {
-        let _who = ensure_signed(origin)?;
-
-        // Validate chain is supported
-        ensure!(
-            Self::is_chain_supported(chain_id),
-            Error::<T>::UnsupportedChain
-        );
-
-        // Increment nonce
-        AgentNonces::<T>::mutate(&nft_id, chain_id, |nonce| *nonce += 1);
-
-        Ok(())
-    }
+    // Removed legacy get_agent_nonce / increment_agent_nonce extrinsics (indices 11,12) – internal nonce management only.
 
     /// Get the status of a multi-chain transaction
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::get_transaction_status())]
@@ -1198,6 +1291,7 @@ pub mod pallet {
     FsaTransactionRequests::<T>::remove(&payload.request_id);
         Ok(())
     }
+    // (Removed public nonce extrinsics; nonce flow handled internally via unsigned offchain submissions)
 
     }
 
@@ -1427,6 +1521,29 @@ pub mod pallet {
         // Process any pending TSS offences
         Pallet::<T>::process_pending_tss_offences().ok();
 
+    // Expire stale signing sessions
+        const MAX_EXPIRE_PER_BLOCK: u32 = 50; // limit weight
+        let mut expired = 0u32;
+        for (sid, expiry_block) in SigningSessionExpiry::<T>::iter() {
+            if expired >= MAX_EXPIRE_PER_BLOCK { break; }
+            if expiry_block <= n {
+                if let Some(mut sess) = SigningSessions::<T>::get(sid) {
+                    if matches!(sess.state, SessionState::SigningInProgress) && sess.aggregated_sig.is_none() {
+                        sess.state = SessionState::SigningExpired; // mark as expired
+                        SigningSessions::<T>::insert(sid, sess);
+                        Self::deposit_event(Event::SigningExpired(sid));
+                        // Keep the expiry entry for audit or remove it; remove to shrink storage.
+                        SigningSessionExpiry::<T>::remove(sid);
+                        // GC: clear partial ProposedSignatures votes for expired session
+                        let _ = ProposedSignatures::<T>::clear_prefix(sid, u32::MAX, None);
+                        expired += 1;
+                    }
+                } else {
+                    SigningSessionExpiry::<T>::remove(sid); // cleanup dangling
+                }
+            }
+        }
+
     // FSA processing moved to offchain worker (unsigned extrinsics); no on-chain direct call
 
 
@@ -1472,6 +1589,57 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
+    // ------------------- Internal Nonce Helpers -------------------
+    fn allocate_next_nonce_internal(nft_id: &NftId, chain_id: u32) -> Result<u64, Error<T>> {
+        ensure!(Self::is_chain_supported(chain_id), Error::<T>::UnsupportedChain);
+        let mut result: Option<u64> = None;
+        NonceStates::<T>::mutate(nft_id, chain_id, |state| {
+            let next = state.last_allocated.map(|v| v + 1).unwrap_or(0);
+            let window = match (state.last_accepted, state.last_allocated) {
+                (Some(acc), Some(alloc)) => alloc.saturating_sub(acc),
+                (None, Some(alloc)) => alloc + 1,
+                _ => 0,
+            };
+            let max_window = <crate::types::MaxPendingNonces as Get<u32>>::get() as u64;
+            if window >= max_window { return; }
+            if !state.pending.iter().any(|p| p.nonce == next) {
+                let entry = crate::types::PendingNonce { nonce: next, status: crate::types::PendingStatus::Allocated };
+                if state.pending.try_push(entry).is_err() { return; }
+            }
+            state.last_allocated = Some(next);
+            result = Some(next);
+        });
+        let nonce = result.ok_or(Error::<T>::PendingStorageFull)?;
+        Self::deposit_event(Event::NonceAllocated(nft_id.clone(), chain_id, nonce));
+        Ok(nonce)
+    }
+
+    fn mark_nonce_accepted_internal(
+        nft_id: &NftId,
+        chain_id: u32,
+        nonce: u64,
+        tx_hash: &BoundedVec<u8, crate::types::MaxTxHashSize>
+    ) -> Result<(), Error<T>> {
+        ensure!(Self::is_chain_supported(chain_id), Error::<T>::UnsupportedChain);
+        let mut advanced_to: Option<u64> = None;
+        let mut found = false;
+        NonceStates::<T>::mutate(nft_id, chain_id, |state| {
+            for entry in state.pending.iter_mut() {
+                if entry.nonce == nonce { entry.status = crate::types::PendingStatus::Accepted(tx_hash.clone()); found = true; break; }
+            }
+            if !found { return; }
+            loop {
+                let target = state.last_accepted.map(|v| v + 1).unwrap_or(0);
+                let ok = state.pending.iter().find(|p| p.nonce == target && matches!(p.status, crate::types::PendingStatus::Accepted(_)) ).is_some();
+                if ok { state.last_accepted = Some(target); advanced_to = state.last_accepted; } else { break; }
+            }
+            if let Some(acc) = state.last_accepted { state.pending.retain(|p| p.nonce > acc); }
+        });
+        ensure!(found, Error::<T>::NonceNotAllocated);
+        Self::deposit_event(Event::NonceAccepted(nft_id.clone(), chain_id, nonce, tx_hash.clone().into_inner()));
+        if let Some(acc) = advanced_to { Self::deposit_event(Event::NonceWindowPruned(nft_id.clone(), chain_id, acc)); }
+        Ok(())
+    }
     /// Multi-chain transaction submission function
     /// Submits a signed transaction to the specified blockchain network via Ankr RPC
     pub fn submit_multi_chain_transaction_to_chain(
@@ -1818,7 +1986,6 @@ impl<T: Config> Pallet<T> {
         signature: &crate::types::Signature,
     ) -> Option<BoundedVec<u8, crate::types::MaxTxHashSize>> {
         use crate::multichain::TransactionBuilder;
-        use ethereum_types::U256;
         // Expect 65-byte secp256k1 signature: r(32)||s(32)||recid(1)
         let sig_bytes = signature.as_slice();
         if sig_bytes.len() != 65 { 
@@ -1903,7 +2070,18 @@ impl<T: Config> Pallet<T> {
                         // Convert string tx_hash to BoundedVec<u8>
                         let tx_hash_bytes = hash.as_bytes();
                         match BoundedVec::try_from(tx_hash_bytes.to_vec()) {
-                            Ok(bounded_hash) => Some(bounded_hash),
+                            Ok(bounded_hash) => {
+                                // mark nonce accepted if allocated
+                                if let Some((stored_chain, stored_nonce)) = SigningSessionNonces::<T>::get(session_id) {
+                                    if stored_chain == chain_id {
+                                        let session_opt = SigningSessions::<T>::get(session_id);
+                                        if let Some(sess) = session_opt {
+                                            let _ = Self::mark_nonce_accepted_internal(&sess.nft_id, chain_id, stored_nonce, &bounded_hash);
+                                        }
+                                    }
+                                }
+                                Some(bounded_hash)
+                            },
                             Err(_) => {
                                 log::error!("[FSA] Transaction hash too long for BoundedVec");
                                 None

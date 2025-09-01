@@ -8179,6 +8179,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-era-payout"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-runtime",
+ "sp-std 14.0.0 (git+https://github.com/paritytech/polkadot-sdk?branch=release-polkadot-v1.9.0)",
+]
+
+[[package]]
 name = "pallet-ethereum"
 version = "4.0.0-dev"
 source = "git+https://github.com/Uomi-network/frontier?branch=polkadot-v1.9.0#8c94d30f05e2473da2ab2417b615fb9d01d01086"
@@ -9163,6 +9177,7 @@ dependencies = [
  "pallet-timestamp",
  "pallet-uomi-engine",
  "parity-scale-codec",
+ "proptest",
  "rlp",
  "scale-info",
  "sp-api",
@@ -16841,6 +16856,7 @@ dependencies = [
  "pallet-democracy",
  "pallet-election-provider-multi-phase",
  "pallet-elections-phragmen",
+ "pallet-era-payout",
  "pallet-ethereum",
  "pallet-evm",
  "pallet-evm-precompile-assets-erc20",

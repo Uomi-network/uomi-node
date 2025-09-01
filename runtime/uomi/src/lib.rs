@@ -64,7 +64,7 @@ use node_primitives::Moment;
 use pallet_identity::legacy::IdentityInfo;
 use pallet_im_online::sr25519::AuthorityId as ImOnlineId;
 use pallet_ethereum::PostLogContent;
-use pallet_evm::{FeeCalculator, GasWeightMapping, Runner};
+use pallet_evm::{AddressMapping, FeeCalculator, GasWeightMapping, Runner};
 use pallet_evm_precompile_assets_erc20::AddressToAssetId;
 use pallet_grandpa::{fg_primitives, AuthorityList as GrandpaAuthorityList};
 use pallet_transaction_payment::{CurrencyAdapter, Multiplier, TargetedFeeAdjustment};
@@ -103,6 +103,7 @@ pub use pallet_staking::StakerStatus;
 pub use pallet_uomi_engine;
 pub use pallet_ipfs;
 pub use pallet_tss;
+pub use pallet_era_payout;
 
 pub use crate::precompiles::WhitelistedCalls;
 #[cfg(feature = "std")]
@@ -1343,6 +1344,12 @@ impl pallet_ipfs::Config for Runtime {
     type TssInterface = Tss;
 }
 
+impl pallet_era_payout::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Balance = Balance;
+    type MaxCidSize = pallet_tss::types::MaxCidSize;
+}
+
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
@@ -1685,7 +1692,8 @@ construct_runtime!(
         Session: pallet_session = 120,
         Historical: pallet_session_historical = 121,
         Staking: pallet_staking = 122,
-        Tss: pallet_tss = 123
+        Tss: pallet_tss = 123,
+        EraPayoutEvents: pallet_era_payout = 124
 
 
     }
@@ -2657,10 +2665,7 @@ impl UOMIEraPayout {
             }
         }
         
-        let agent_count = unique_nft_ids.len() as u32;
-        print("[UOMIEraPayout] Active agents with TSS wallets: ");
-        print(agent_count.to_string().as_str());
-        agent_count
+        unique_nft_ids.len() as u32
     }
     
     fn distribute_agent_payouts(agent_payout_total: Balance) {
@@ -2668,9 +2673,9 @@ impl UOMIEraPayout {
         let max_agents = MaxAgents::get();
         
         if agent_count == 0 {
-            print("[UOMIEraPayout] No agents found, sending all agent payout to treasury");
             let treasury_account = AgentPayoutTreasuryAccount::get();
             let _ = <Balances as Currency<AccountId>>::deposit_creating(&treasury_account, agent_payout_total);
+            EraPayoutEvents::emit_treasury_remainder(agent_payout_total);
             return;
         }
         
@@ -2678,10 +2683,8 @@ impl UOMIEraPayout {
         let distributed_amount = individual_share * agent_count as u128;
         let treasury_remainder = agent_payout_total - distributed_amount;
         
-        print("[UOMIEraPayout] Individual agent share: ");
-        print(individual_share.to_string().as_str());
-        print("[UOMIEraPayout] Treasury remainder: ");
-        print(treasury_remainder.to_string().as_str());
+        // Emit payout distribution started event
+        EraPayoutEvents::emit_payout_distribution_started(agent_payout_total, agent_count, individual_share);
         
         let mut unique_nft_ids = BTreeSet::new();
         for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
@@ -2703,15 +2706,29 @@ impl UOMIEraPayout {
         
         for (session_id, nft_id) in session_to_nft_map {
             if let Some(public_key) = pallet_tss::AggregatedPublicKeys::<Runtime>::get(session_id) {
-                if public_key.len() >= 20 {
-                    let mut account_bytes = [0u8; 32];
-                    account_bytes[..20].copy_from_slice(&public_key[..20]);
-                    let agent_account = sp_runtime::AccountId32::from(account_bytes);
+                if public_key.len() >= 64 {
+                    // Convert ECDSA public key (x,y coordinates) to EVM address
+                    // Take the 64-byte public key (excluding any prefix)
+                    let pubkey_bytes = if public_key.len() == 65 && public_key[0] == 0x04 {
+                        &public_key[1..65] // Skip 0x04 prefix if present
+                    } else if public_key.len() >= 64 {
+                        &public_key[..64] // Use first 64 bytes
+                    } else {
+                        EraPayoutEvents::emit_agent_payout_failed(nft_id, "Invalid public key format");
+                        continue;
+                    };
+                    
+                    // Hash the public key with keccak256 and take last 20 bytes for EVM address
+                    let hash = sp_io::hashing::keccak_256(pubkey_bytes);
+                    let evm_address = H160::from_slice(&hash[12..]);
+                    
+                    // Use UnifiedAccounts to get the corresponding Substrate account
+                    let agent_account = <UnifiedAccounts as AddressMapping<AccountId>>::into_account_id(evm_address);
+                    
                     let _ = <Balances as Currency<AccountId>>::deposit_creating(&agent_account, individual_share);
-                    print("[UOMIEraPayout] Paid agent with NFT ID: ");
-                    print(sp_core::hexdisplay::HexDisplay::from(&nft_id.as_slice()).to_string().as_str());
+                    EraPayoutEvents::emit_agent_payout(nft_id, evm_address, agent_account, individual_share);
                 } else {
-                    print("[UOMIEraPayout] Invalid public key length for agent");
+                    EraPayoutEvents::emit_invalid_agent_public_key(session_id, public_key.len() as u32);
                 }
             }
         }
@@ -2719,8 +2736,7 @@ impl UOMIEraPayout {
         if treasury_remainder > 0 {
             let treasury_account = AgentPayoutTreasuryAccount::get();
             let _ = <Balances as Currency<AccountId>>::deposit_creating(&treasury_account, treasury_remainder);
-            print("[UOMIEraPayout] Sent remainder to treasury: ");
-            print(treasury_remainder.to_string().as_str());
+            EraPayoutEvents::emit_treasury_remainder(treasury_remainder);
         }
     }
 }
@@ -2731,9 +2747,7 @@ impl EraPayout<Balance> for UOMIEraPayout {
         total_issuance: Balance,
         era_duration_millis: u64,
     ) -> (Balance, Balance) {
-        print("[UOMIEraPayout]");
-        print(total_issuance.to_string().as_str());
-        print(era_duration_millis.to_string().as_str());
+        // Era payout calculation logic
         
         let halving_period = 3; // Years before halving
         

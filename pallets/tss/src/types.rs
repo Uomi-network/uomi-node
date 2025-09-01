@@ -3,7 +3,7 @@ use sp_std::prelude::*;
 use scale_info::prelude::string::String;
 use codec::{Encode, Decode, MaxEncodedLen};
 use scale_info::TypeInfo;
-
+use frame_support::traits::Get;
 
 const MAX_KEY_SIZE: u32 = 64;
 const MAX_SHARE_SIZE: u32 = 128;
@@ -18,6 +18,7 @@ const MAX_CID_SIZE: u32 = 59;
 const MAX_RPC_URL_SIZE: u32 = 256;
 const MAX_CHAIN_NAME_SIZE: u32 = 32;
 const MAX_TX_HASH_SIZE: u32 = 66; // 0x + 64 hex chars
+const MAX_PENDING_NONCES: u32 = 64; // window size for outstanding nonces per agent+chain
 
 parameter_types! {
     pub const MaxKeySize: u32 = MAX_KEY_SIZE;
@@ -31,6 +32,7 @@ parameter_types! {
     pub const MaxRpcUrlSize: u32 = MAX_RPC_URL_SIZE;
     pub const MaxChainNameSize: u32 = MAX_CHAIN_NAME_SIZE;
     pub const MaxTxHashSize: u32 = MAX_TX_HASH_SIZE;
+    pub const MaxPendingNonces: u32 = MAX_PENDING_NONCES;
 
 
 }
@@ -42,6 +44,36 @@ pub type Share = BoundedVec<u8, MaxShareSize>;
 pub type PublicKey = BoundedVec<u8, MaxPublicKeySize>;
 pub type Signature = BoundedVec<u8, MaxSignatureSize>;
 pub type NftId = BoundedVec<u8, MaxCidSize>;
+
+// ---------------- Nonce Tracking Types (agent multi-chain) -----------------
+use codec::{Compact};
+use crate::types::MaxTxHashSize as _MaxTxHashSizeAlias; // avoid unused warnings if refactored
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen)]
+pub enum PendingStatus {
+    /// Allocated but not yet submitted to RPC (no hash)
+    Allocated,
+    /// RPC accepted (tx hash present)
+    Accepted(BoundedVec<u8, MaxTxHashSize>),
+    /// Temporary failure (e.g. networking) with retry counter
+    FailedTemp(u8),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen)]
+pub struct PendingNonce {
+    pub nonce: u64,
+    pub status: PendingStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen, Default)]
+pub struct NonceState {
+    /// Highest nonce ever allocated (Some) or None if none allocated yet
+    pub last_allocated: Option<u64>,
+    /// Highest contiguous nonce with Accepted status (Some) or None
+    pub last_accepted: Option<u64>,
+    /// Outstanding nonces above last_accepted (unsorted vector kept sorted by logic)
+    pub pending: BoundedVec<PendingNonce, MaxPendingNonces>,
+}
 
 /// Chain configuration for multi-chain support
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
