@@ -755,7 +755,7 @@ pub mod pallet {
         let session_id = Self::get_next_session_id();
 
         // Store the session
-        SigningSessions::<T>::insert(session_id, session);
+        SigningSessions::<T>::insert(session_id, session.clone());
     // Record expiry (TTL) using a fixed heuristic; avoid new Config item to keep runtime stable.
     let ttl_blocks: BlockNumberFor<T> = 300u32.into(); // TODO: consider making configurable in future upgrade
     let expiry = frame_system::Pallet::<T>::block_number() + ttl_blocks;
