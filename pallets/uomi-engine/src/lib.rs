@@ -42,7 +42,7 @@ use frame_support::{
     },
     parameter_types,
     storage::types::StorageValue,
-    traits::Randomness,
+    traits::{Randomness, Get},
 };
 use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
@@ -127,6 +127,10 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
+    /// Maximum number of concurrent offchain worker executions allowed per node.
+    /// When the number of running offchain executions reaches this value, further
+    /// attempts will be skipped until some finish.
+    type MaxOffchainConcurrent: Get<u32>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
         type OffenceReporter: ReportOffence<
             <Self as frame_system::Config>::AccountId,

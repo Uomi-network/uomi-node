@@ -7,10 +7,13 @@ use sp_std::{
     vec,
     vec::Vec,
 };
+use sp_core::Get;
 use scale_info::prelude::string::String;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
-static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
+// Counter for concurrent offchain executions.
+// AtomicU32 is Sync and const-initializable, so we can use a plain static without unsafe.
+static SEMAPHORE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use crate::OpocLevel;
 use crate::{
@@ -48,8 +51,29 @@ struct CallAiResponseCleaned {
 
 
 impl<T: Config> Pallet<T> {
-    pub fn semaphore_status() -> bool {
-        unsafe { SEMAPHORE.load(Ordering::Relaxed) }
+    /// Returns current number of active offchain executions.
+    pub fn semaphore_status() -> u32 {
+    SEMAPHORE_COUNTER.load(Ordering::Relaxed)
+    }
+
+    // Test-only helpers to safely manipulate the counter using the same
+    // semantics as production code (CAS for acquire, atomic decrement for release).
+    #[cfg(test)]
+    pub fn test_acquire_slot() -> bool {
+        let max = <T as Config>::MaxOffchainConcurrent::get();
+        let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
+        loop {
+            if current >= max { return false; }
+            match SEMAPHORE_COUNTER.compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(v) => current = v,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn test_release_slot() {
+        SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
     }
 
     // Offchain worker entry point
@@ -80,24 +104,31 @@ impl<T: Config> Pallet<T> {
     #[cfg(feature = "std")]
     fn offchain_run_agents(account_id: &T::AccountId) -> DispatchResult {
 
-        // Check semaphore to be sure to do nothing if another agent is running
-        // SAFETY: This is safe because offchain workers run in their own thread
-        let semaphore = unsafe { &SEMAPHORE };
-        if semaphore.compare_exchange(
-            false,  // expected value
-            true,   // new value
-            Ordering::Acquire,
-            Ordering::Relaxed
-        ).is_err() {
-            // Another worker is already running
-            return Ok(());
+    // Try to acquire a slot in the semaphore counter. If the number of
+    // concurrent executions is >= configured max, skip execution.
+    let max = <T as Config>::MaxOffchainConcurrent::get();
+    let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
+        loop {
+            if current >= max {
+                // No slots available
+                return Ok(());
+            }
+            match SEMAPHORE_COUNTER.compare_exchange(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break, // acquired slot
+                Err(v) => current = v,
+            }
         }
 
         // Find the request with less expiration block number to execute
         let (request_id, (expiration_block_number, _opoc_level)) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
-            // Unlock the semaphore
-            semaphore.store(false, Ordering::Release);
+            // Unlock the semaphore (decrement counter)
+            SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
             return Ok(());
         }
 
@@ -116,8 +147,8 @@ impl<T: Config> Pallet<T> {
                 Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
-                // Unlock the semaphore
-                semaphore.store(false, Ordering::Release);
+                // Unlock the semaphore (decrement counter)
+                SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
                 return Ok(());
             },
         };
@@ -145,8 +176,8 @@ impl<T: Config> Pallet<T> {
             },
         }
 
-        // Unlock the semaphore
-        semaphore.store(false, Ordering::Release);
+    // Unlock the semaphore (decrement counter)
+    SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
 
         Ok(())
     }

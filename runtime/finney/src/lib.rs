@@ -1353,6 +1353,7 @@ impl pallet_uomi_engine::Config for Runtime {
     type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
     type InherentDataType = u16;
     type OffenceReporter = pallet_offences::Pallet<Runtime>;
+    type MaxOffchainConcurrent = frame_support::traits::ConstU32<1>;
 }
 
 pub struct IpfsWrapper;

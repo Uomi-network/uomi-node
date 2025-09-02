@@ -318,16 +318,16 @@ fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
         OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
-        // Read semaphore status and be sure is false
-        let semaphore = TestingPallet::semaphore_status();
-        assert_eq!(semaphore, false);
+    // Read semaphore status and be sure no offchain execution is running
+    let semaphore = TestingPallet::semaphore_status();
+    assert_eq!(semaphore, 0u32);
 
         // Run the offchain worker
         TestingPallet::offchain_worker(current_block_number);
 
-        // Read semaphore status and be sure is false
-        let semaphore = TestingPallet::semaphore_status();
-        assert_eq!(semaphore, false);
+    // Read semaphore status and be sure no offchain execution is running
+    let semaphore = TestingPallet::semaphore_status();
+    assert_eq!(semaphore, 0u32);
 
         // Verify transactions in the pool
         let state_read = state.read();
@@ -495,6 +495,81 @@ fn test_offchain_worker_not_existing() {
         // Verify transactions in the pool
         let state_read = state.read();
         assert_eq!(state_read.transactions.len(), 2);
+    });
+}
+
+#[test]
+#[serial]
+fn test_offchain_semaphore_blocks_when_full() {
+    make_logger();
+
+    let mut ext = new_test_ext();
+    
+    // Set up the offchain worker test environment
+    let (offchain, _state) = TestOffchainExt::new();
+    let (pool, state) = TestTransactionPoolExt::new();
+    ext.register_extension(OffchainDbExt::new(offchain.clone()));
+    ext.register_extension(OffchainWorkerExt::new(offchain));
+    ext.register_extension(TransactionPoolExt::new(pool));
+
+    // Create and register the keystore
+    let keystore = Arc::new(MemoryKeystore::new());
+    keystore.sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None).unwrap();
+    ext.register_extension(KeystoreExt(keystore.clone()));
+    let validator = keystore.sr25519_public_keys(crate::crypto::CRYPTO_KEY_TYPE).swap_remove(0);
+
+    let empty_cid = Cid::default();
+    let not_empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+    ext.execute_with(|| {
+        // Set current block
+        System::set_block_number(12);
+        let current_block_number = System::block_number();
+
+        // Insert two inputs with nft_id = 1 (infinite loop agent used for tests)
+        let request_id1 = U256::from(1000);
+        Inputs::<Test>::insert(request_id1, (
+            U256::zero(), // block_number
+            H160::repeat_byte(0xAA), // address
+            U256::from(1), // nft_id (infinite)
+            U256::from(5), // nft_required_consensus
+            U256::from(25), // nft_execution_max_time
+            empty_cid.clone(), // nft_file_cid
+            not_empty_bounded_vec.clone(), // input_data
+            empty_cid.clone(), // input_file_cid
+        ));
+
+        let request_id2 = U256::from(1001);
+        Inputs::<Test>::insert(request_id2, (
+            U256::zero(), // block_number
+            H160::repeat_byte(0xAA), // address
+            U256::from(1), // nft_id (infinite)
+            U256::from(5), // nft_required_consensus
+            U256::from(25), // nft_execution_max_time
+            empty_cid.clone(), // nft_file_cid
+            not_empty_bounded_vec.clone(), // input_data
+            empty_cid.clone(), // input_file_cid
+        ));
+
+        // Insert assignments for the validator for both requests
+        OpocAssignment::<Test>::insert(request_id1, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0));
+        OpocAssignment::<Test>::insert(request_id2, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0));
+        NodesWorks::<Test>::insert(validator.clone(), request_id1, true);
+        NodesWorks::<Test>::insert(validator.clone(), request_id2, true);
+
+    // Emulate first worker acquiring the slot via test helper
+    assert!(TestingPallet::test_acquire_slot());
+    assert_eq!(TestingPallet::semaphore_status(), 1);
+
+    // Second acquire should fail because max = 1
+    assert!(!TestingPallet::test_acquire_slot());
+    assert_eq!(TestingPallet::semaphore_status(), 1);
+
+    // Release slot and ensure counter returns to 0
+    TestingPallet::test_release_slot();
+    assert_eq!(TestingPallet::semaphore_status(), 0);
+
+    // No transactions expected here because we didn't invoke offchain_worker logic; test is about counter semantics only.
     });
 }
 

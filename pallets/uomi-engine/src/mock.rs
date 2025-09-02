@@ -58,8 +58,10 @@ frame_support::construct_runtime!(
        Timestamp: pallet_timestamp,
        Staking: pallet_staking,
        Session: pallet_session,
-       Babe: pallet_babe,
-       Ipfs: pallet_ipfs
+    Babe: pallet_babe,
+    Ipfs: pallet_ipfs,
+    Offences: pallet_offences,
+    Historical: pallet_session::historical,
    }
 );
 
@@ -68,6 +70,7 @@ parameter_types! {
     pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
     pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
     pub const ExpectedBlockTime: u64 = 6_000;
+        pub const TestMaxOffchainConcurrent: u32 = 1;
 }
 
 pub struct IpfsWrapper;
@@ -388,7 +391,43 @@ impl pallet_uomi_engine::Config for Test {
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
+    type MaxOffchainConcurrent = TestMaxOffchainConcurrent;
+    type OffenceReporter = TestOffenceReporter;
 }
+
+// Provide minimal implementations required by the pallet Config trait bounds.
+// Provide an identity converter (AccountId -> Option<AccountId>) for historical session pallet
+pub struct IdentityOf;
+impl sp_runtime::traits::Convert<AccountId, Option<AccountId>> for IdentityOf {
+    fn convert(a: AccountId) -> Option<AccountId> { Some(a) }
+}
+
+impl pallet_session::historical::Config for Test {
+    type FullIdentification = AccountId; // minimal
+    type FullIdentificationOf = IdentityOf; // simple identity mapping
+}
+
+impl pallet_offences::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
+    type OnOffenceHandler = (); // no-op in tests
+}
+
+impl pallet_authorship::Config for Test {
+    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
+    type EventHandler = ();
+}
+
+// Provide a minimal OffenceReporter for the mock runtime so the pallet's Config
+// associated type is satisfied in tests.
+pub struct TestOffenceReporter;
+impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking::offence::ReportOffence<Reporter, Offender, Off> for TestOffenceReporter {
+    fn report_offence(_reporters: Vec<Reporter>, _offence: Off) -> Result<(), sp_staking::offence::OffenceError> { Ok(()) }
+    fn is_known_offence(_offenders: &[Offender], _time_slot: &Off::TimeSlot) -> bool { false }
+}
+
+// Minimal authorship config to satisfy trait bounds in tests (no-op implementations)
+// No authorship-specific behavior needed in tests; authorship is implemented in other test modules.
 
 impl pallet_timestamp::Config for Test {
    type Moment = u64;
