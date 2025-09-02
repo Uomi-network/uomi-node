@@ -81,14 +81,16 @@ impl StateManagerGroup {
 pub struct ParticipantManager {
     pub sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
     pub active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
-    pub unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
+    // Buffer of messages received from a peer before we could authenticate / map it.
+    // Store full SignedTssMessage so original signature & timestamp are preserved for later verification.
+    pub unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<SignedTssMessage>>>>,
 }
 
 impl ParticipantManager {
     pub fn new(
         sessions_participants: Arc<Mutex<HashMap<SessionId, HashMap<Identifier, TSSPublic>>>>,
         active_participants: Arc<Mutex<HashMap<SessionId, Vec<TSSPeerId>>>>,
-        unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<TssMessage>>>>,
+        unknown_peer_queue: Arc<Mutex<HashMap<PeerId, Vec<SignedTssMessage>>>>,
     ) -> Self {
         Self {
             sessions_participants,

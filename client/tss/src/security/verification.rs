@@ -40,9 +40,11 @@ pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
     
     if !is_valid {
         log::warn!(
-            "[TSS] Signature verification failed - message: {:?}, payload_hex: {}",
+            "[TSS] Signature verification failed - message: {:?}, payload_hex: {}, public_key: {}, signature: {}",
             signed_message.message,
-            hex::encode(&payload)
+            hex::encode(&payload),
+            hex::encode(&signed_message.sender_public_key),
+            hex::encode(&signed_message.signature),
         );
     }
     // TODO: restore after diagnostics

@@ -174,25 +174,22 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     }
 
     // Add a TssMessage we received from an unknown peer until they announce themselves
-    pub fn add_unknown_peer_message(&self, peer_id: PeerId, message: TssMessage) {
-        log::info!("[TSS] Adding unknown peer message from {:?}", peer_id);
+    pub fn add_unknown_peer_message(&self, peer_id: PeerId, signed_message: SignedTssMessage) {
+        log::info!("[TSS] Adding unknown peer SIGNED message from {:?}", peer_id);
         let mut unknown_peer_queue = self.participant_manager.unknown_peer_queue.lock().unwrap();
         let messages = unknown_peer_queue.entry(peer_id).or_insert_with(Vec::new);
-        messages.push(message);
-        drop(unknown_peer_queue);
+        messages.push(signed_message);
     }
 
     // Consume the queue of an unknown peer as soon as they have announced themselves
-    pub fn consume_unknown_peer_queue(&self, peer_id: PeerId) -> Vec<TssMessage> {
+    pub fn consume_unknown_peer_queue(&self, peer_id: PeerId) -> Vec<SignedTssMessage> {
         log::info!("[TSS] Consuming unknown peer queue for {:?}", peer_id);
         let mut unknown_peer_queue = self.participant_manager.unknown_peer_queue.lock().unwrap();
-        let messages = unknown_peer_queue.remove(&peer_id).unwrap_or_default();
-        drop(unknown_peer_queue);
-        messages
+        unknown_peer_queue.remove(&peer_id).unwrap_or_default()
     }
 
     // Consume unknown peer messages by public key (used when the real PeerId becomes known)
-    pub fn consume_unknown_peer_queue_by_public_key(&self, public_key: &[u8]) -> Vec<TssMessage> {
+    pub fn consume_unknown_peer_queue_by_public_key(&self, public_key: &[u8]) -> Vec<SignedTssMessage> {
         use sp_core::hashing::blake2_256;
         let public_key_hash = blake2_256(public_key);
         
@@ -200,7 +197,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let temp_peer_id = PeerId::from_bytes(&public_key_hash[0..32])
             .unwrap_or_else(|_| PeerId::random());
             
-        self.consume_unknown_peer_queue(temp_peer_id)
+    self.consume_unknown_peer_queue(temp_peer_id)
     }
 
     /// Populate PeerMapper.validator_ids with the current on-chain mapping at startup.
@@ -244,44 +241,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
     
 
-    /// Process a queued message directly without signature verification
-    /// These messages were received before we knew the sender, but now we do
-    pub fn process_queued_message_directly(&mut self, message: TssMessage, sender_peer_id: PeerId) {
-        log::info!("[TSS] 🔄 Processing queued message directly from known peer: {}", sender_peer_id.to_base58());
-        
-        // We can now process this message directly since we know who sent it
-        // This is safe because:
-        // 1. The message was received through the gossip protocol 
-        // 2. We now have verified the sender through their announcement
-        // 3. The message was buffered while waiting for sender identification
-        
-        // Get the actual public key for this peer from the peer mapper
-        let sender_public_key = {
-            let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
-            peer_mapper.get_account_id_from_peer_id(&sender_peer_id)
-                .map(|public_key| {
-                    let mut key_array = [0u8; 32];
-                    key_array.copy_from_slice(&public_key[..32.min(public_key.len())]);
-                    key_array
-                })
-                .unwrap_or([0u8; 32])
-        };
-        
-        // Create a temporary SignedTssMessage for processing
-        let signed_message = SignedTssMessage {
-            message,
-            sender_public_key,
-            signature: [0u8; 64], // We don't have the actual signature here (but it's bypassed in test mode)
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
-        
-        // Delegate to the message processor with the known sender PeerId
-        MessageProcessor::handle_gossip_message(self, signed_message, Some(sender_peer_id));
-        log::info!("[TSS] ✅ Successfully processed queued message");
-    }
+    // Removed insecure process_queued_message_directly: queued messages now retain original signature & are re-verified.
 
     pub async fn run(mut self) {
         log::info!("[TSS] Listening for messages inside Session Manager from Gossip and Runtime");

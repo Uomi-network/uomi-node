@@ -1378,10 +1378,9 @@ fn test_unknown_peer_handling() {
         assert!(unknown_queue.contains_key(&node_b_id), "Message from unknown peer B should be buffered");
         assert_eq!(unknown_queue.get(&node_b_id).unwrap().len(), 2, "Should be one message buffered for B");
         // We can't easily compare TssMessage directly without PartialEq, but we know the type
-        match &unknown_queue.get(&node_b_id).unwrap()[0] {
-            TssMessage::DKGRound1(id, data) => {
+        match &unknown_queue.get(&node_b_id).unwrap()[0].message {
+            TssMessage::DKGRound1(id, _data) => {
                 assert_eq!(*id, session_id);
-                // assert_eq!(data, &vec![1, 2, 3]);
             },
             _ => panic!("Incorrect message type buffered"),
         }

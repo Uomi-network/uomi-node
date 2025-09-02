@@ -56,8 +56,8 @@ impl MessageProcessor {
         log::info!("[TSS] ✅ Signed message signature and timestamp verified successfully");
         
         // Extract the inner message and sender info
-        let message = signed_message.message.clone();
-        let sender_public_key = signed_message.sender_public_key.to_vec();
+    let message = signed_message.message.clone();
+    let sender_public_key = signed_message.sender_public_key.to_vec();
 
         // Prefer the network-provided PeerId when available, else fall back to mapping/public key
         let sender_peer_id = if let Some(network_peer_id) = network_sender_peer_id {
@@ -75,7 +75,8 @@ impl MessageProcessor {
                         "[TSS] Buffering message from unknown network peer {} and requesting identification",
                         network_peer_id.to_base58()
                     );
-                    session_manager.add_unknown_peer_message(network_peer_id.clone(), message.clone());
+                    // Buffer full signed message for later verification once peer announces
+                    session_manager.add_unknown_peer_message(network_peer_id.clone(), signed_message.clone());
                     // Generate challenge nonce
                     let nonce: u32 = rand::random();
                     {
@@ -132,7 +133,7 @@ impl MessageProcessor {
                             .unwrap_or_else(|_| PeerId::random());
 
                         // Buffer the message and ask the sender to identify themselves
-                        session_manager.add_unknown_peer_message(temp_peer_id, message.clone());
+                        session_manager.add_unknown_peer_message(temp_peer_id, signed_message.clone());
                         // Generate challenge nonce
                         let nonce: u32 = rand::random();
                         {
@@ -485,14 +486,15 @@ impl MessageProcessor {
                         let mut messages = session_manager.consume_unknown_peer_queue(announcing_peer_id.clone());
                         let mut messages_by_key = session_manager.consume_unknown_peer_queue_by_public_key(&public_key_data);
                         messages.append(&mut messages_by_key);
-                        for queued_message in messages {
-                            log::info!("[TSS] 🔄 Processing queued message for newly announced peer: {:?}", 
-                                std::mem::discriminant(&queued_message));
-                            
-                            // Since these messages were received before we knew the sender, 
-                            // we need to process them directly without signature verification.
-                            // We now know the sender from the announcement, so we can trust the queued messages.
-                            session_manager.process_queued_message_directly(queued_message, announcing_peer_id.clone());
+                        for queued_signed in messages {
+                            log::info!("[TSS] 🔄 Processing queued signed message for newly announced peer: {:?}", 
+                                std::mem::discriminant(&queued_signed.message));
+                            // Re-verify signature now that we trust the peer mapping
+                            if verification::verify_signature(&queued_signed) {
+                                MessageProcessor::handle_gossip_message(session_manager, queued_signed, Some(announcing_peer_id.clone()));
+                            } else {
+                                log::warn!("[TSS] Dropping queued message with invalid signature after announcement");
+                            }
                         }
                     } else {
                         log::warn!("[TSS] Invalid announcement signature from peer: {}", announcing_peer_id.to_base58());
