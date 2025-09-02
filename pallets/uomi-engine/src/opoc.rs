@@ -178,6 +178,24 @@ impl<T: Config> Pallet<T> {
                             _ =>(),
                         }
 
+                        // Build an exclude list: include the timed-out validator, any currently assigned validators for this
+                        // request, and any validators that already produced an output (answered). This avoids reassigning an
+                        // already-answered or already-assigned node when the validator pool is small.
+                        let mut validators_to_exclude = Vec::<T::AccountId>::new();
+                        validators_to_exclude.push(validator.clone());
+                        // add already assigned validators for this request
+                        for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
+                            if !validators_to_exclude.contains(&assigned_validator) {
+                                validators_to_exclude.push(assigned_validator);
+                            }
+                        }
+                        // add validators that already wrote outputs for this request
+                        for (out_validator, _) in NodesOutputs::<T>::iter_prefix(*request_id) {
+                            if !validators_to_exclude.contains(&out_validator) {
+                                validators_to_exclude.push(out_validator);
+                            }
+                        }
+
                         // Reassign the request to another validator
                         match
                             Self::opoc_assignment(
@@ -188,7 +206,7 @@ impl<T: Config> Pallet<T> {
                                 &current_block,
                                 OpocLevel::Level0,
                                 1,
-                                vec![validator],
+                                validators_to_exclude,
                                 true
                             )
                         {
@@ -282,6 +300,20 @@ impl<T: Config> Pallet<T> {
                                 _ => (),
                             }
 
+                            // Build exclude list to avoid reassigning the same or already-answered validators
+                            let mut validators_to_exclude = Vec::<T::AccountId>::new();
+                            validators_to_exclude.push(validator.clone());
+                            for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
+                                if !validators_to_exclude.contains(&assigned_validator) {
+                                    validators_to_exclude.push(assigned_validator);
+                                }
+                            }
+                            for (out_validator, _) in NodesOutputs::<T>::iter_prefix(*request_id) {
+                                if !validators_to_exclude.contains(&out_validator) {
+                                    validators_to_exclude.push(out_validator);
+                                }
+                            }
+
                             // Reassign the request to another validator
                             match
                                 Self::opoc_assignment(
@@ -292,7 +324,7 @@ impl<T: Config> Pallet<T> {
                                     &current_block,
                                     OpocLevel::Level0,
                                     1,
-                                    vec![validator],
+                                    validators_to_exclude,
                                     true
                                 )
                             {
@@ -329,6 +361,20 @@ impl<T: Config> Pallet<T> {
                     if opoc_assignments_of_level_1 > 1 {
                         // When we have a minimum consensus of 2, we need to assign the request to other validators
                         // Assign the request to validators for opoc level 1
+                        // Build exclude list to avoid assigning to validator(s) that already handled this request
+                        let mut validators_to_exclude = Vec::<T::AccountId>::new();
+                        validators_to_exclude.push(validator.clone());
+                        for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
+                            if !validators_to_exclude.contains(&assigned_validator) {
+                                validators_to_exclude.push(assigned_validator);
+                            }
+                        }
+                        for (out_validator, _) in NodesOutputs::<T>::iter_prefix(*request_id) {
+                            if !validators_to_exclude.contains(&out_validator) {
+                                validators_to_exclude.push(out_validator);
+                            }
+                        }
+
                         match
                             Self::opoc_assignment(
                                 &mut opoc_blacklist_operations,
@@ -338,7 +384,7 @@ impl<T: Config> Pallet<T> {
                                 &current_block,
                                 OpocLevel::Level1,
                                 (opoc_assignments_of_level_1 as u32) - 1,
-                                vec![validator],
+                                validators_to_exclude,
                                 false
                             )
                         {
@@ -788,10 +834,66 @@ impl<T: Config> Pallet<T> {
                     }
                 }
                 _ => {
+                    // Collect diagnostics to help debug why we reached an unexpected state
+                    let mut assignments: Vec<(T::AccountId, (BlockNumber, OpocLevel))> = Vec::new();
+                    for (validator, (expiration, level)) in OpocAssignment::<T>::iter_prefix(request_id) {
+                        assignments.push((validator.clone(), (expiration.clone(), level)));
+                    }
+
+                    let mut timeouts: Vec<T::AccountId> = Vec::new();
+                    for (validator, is_timeout) in OpocTimeouts::<T>::iter_prefix(request_id) {
+                        if is_timeout {
+                            timeouts.push(validator.clone());
+                        }
+                    }
+
+                    let mut errors: Vec<T::AccountId> = Vec::new();
+                    for (validator, is_error) in OpocErrors::<T>::iter_prefix(request_id) {
+                        if is_error {
+                            errors.push(validator.clone());
+                        }
+                    }
+
+                    let mut outputs_keys: Vec<T::AccountId> = Vec::new();
+                    for (validator, _output) in NodesOutputs::<T>::iter_prefix(request_id) {
+                        outputs_keys.push(validator.clone());
+                    }
+
                     log::error!(
-                        "Found an unexpected number of opoc assignments for request ID: {:?}",
-                        request_id
+                        "Found an unexpected number of opoc assignments for request ID: {:?}. diagnostics: assignments={:?}, timeouts={:?}, errors={:?}, outputs_keys={:?}, required_consensus={:?}",
+                        request_id,
+                        assignments,
+                        timeouts,
+                        errors,
+                        outputs_keys,
+                        opoc_assignments_of_level_1
                     );
+
+                    // Fail the request to avoid it staying forever in a half-assigned state.
+                    // Use Data::default() as the output and treat as 0 executions so cleanup will run in opoc_store_operations.
+                    let executions = 0 as u32;
+                    match Self::opoc_complete(
+                        &mut outputs_operations,
+                        &request_id,
+                        &Data::default(),
+                        &executions,
+                        &executions,
+                        &nft_id
+                    ) {
+                        Err(error) => {
+                            log::error!(
+                                "Failed to complete request at OPoC unexpected branch for request {:?}. error: {:?}",
+                                request_id,
+                                error
+                            );
+                        }
+                        _ => {
+                            log::warn!(
+                                "Request {:?} moved to failed completion (Data::default()) due to unexpected opoc assignment state",
+                                request_id
+                            );
+                        }
+                    }
                 }
             }
         }
