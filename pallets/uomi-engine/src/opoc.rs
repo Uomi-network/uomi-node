@@ -1039,8 +1039,8 @@ impl<T: Config> Pallet<T> {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
                     // Reset staking era reward points for validator so it earns no payout for current era.
                     // This is best-effort; failures shouldn't abort OPoC logic.
-                    if let Err(e) = Self::reset_validator_current_era_points(validator) {
-                        log::error!("Failed to reset staking points for validator {:?}: {:?}", validator, e);
+                    if let Err(e) = Self::reset_validator_current_era_points(account_id) {
+                        log::error!("Failed to reset staking points for validator {:?}: {:?}", account_id, e);
                     }
                 } else {
                     OpocTimeouts::<T>::remove(request_id, account_id);
