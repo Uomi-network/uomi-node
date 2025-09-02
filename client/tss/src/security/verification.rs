@@ -17,19 +17,36 @@ pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
         }
     }
 
+    // Reconstruct the payload that was signed: message + sender_public_key + timestamp
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&signed_message.message.encode());
+    payload.extend_from_slice(&signed_message.sender_public_key);
+    payload.extend_from_slice(&signed_message.timestamp.to_le_bytes());
+
+    // Debug logging to help identify the issue
+    log::debug!(
+        "[TSS] Verifying signature - payload_len: {}, public_key: {:?}, signature: {:?}, timestamp: {}",
+        payload.len(),
+        hex::encode(&signed_message.sender_public_key),
+        hex::encode(&signed_message.signature),
+        signed_message.timestamp
+    );
+
+    // Verify the signature using sr25519
+    let public_key = sr25519::Public::from_raw(signed_message.sender_public_key);
+    let signature = sr25519::Signature::from_raw(signed_message.signature);
+
+    let is_valid = sr25519_verify(&signature, &payload, &public_key);
+    
+    if !is_valid {
+        log::warn!(
+            "[TSS] Signature verification failed - message: {:?}, payload_hex: {}",
+            signed_message.message,
+            hex::encode(&payload)
+        );
+    }
+    // TODO: restore after diagnostics
     true
-
-    // // Reconstruct the payload that was signed: message + sender_public_key + timestamp
-    // let mut payload = Vec::new();
-    // payload.extend_from_slice(&signed_message.message.encode());
-    // payload.extend_from_slice(&signed_message.sender_public_key);
-    // payload.extend_from_slice(&signed_message.timestamp.to_le_bytes());
-
-    // // Verify the signature using sr25519
-    // let public_key = sr25519::Public::from_raw(signed_message.sender_public_key);
-    // let signature = sr25519::Signature::from_raw(signed_message.signature);
-
-    // sr25519_verify(&signature, &payload, &public_key)
 }
 
 /// Checks if the message timestamp is within acceptable bounds.

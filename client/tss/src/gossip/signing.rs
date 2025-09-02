@@ -31,6 +31,15 @@ impl SigningService {
         payload.extend_from_slice(&self.validator_public_key);
         payload.extend_from_slice(&current_time.to_le_bytes());
         
+        // Debug logging for signing
+        log::debug!(
+            "[TSS] Creating signature - payload_len: {}, public_key: {}, timestamp: {}, payload_hex: {}",
+            payload.len(),
+            hex::encode(&self.validator_public_key),
+            current_time,
+            hex::encode(&payload)
+        );
+        
         // Sign the payload using the keystore
         let signature_result = self.keystore.sign_with(
             UOMI,
@@ -42,6 +51,11 @@ impl SigningService {
         let signature_bytes = signature_result.ok_or("Failed to get signature from keystore")?;
         let signature: [u8; 64] = signature_bytes.try_into()
             .map_err(|_| "Invalid signature length")?;
+        
+        log::debug!(
+            "[TSS] Signature created - signature: {}",
+            hex::encode(&signature)
+        );
         
         Ok(SignedTssMessage {
             message,
