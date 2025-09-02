@@ -2782,7 +2782,7 @@ impl EraPayout<Balance> for UOMIEraPayout {
             print("[UOMIEraPayout] Returning (0, 0)");
             (0u128.into(), 0u128.into())
         } else {
-            let total_era_payout: Balance = (curr_issuance/halving_period/eras_in_a_year * UOMI).into();
+            let total_era_payout: Balance = (curr_issuance/halving_period/eras_in_a_year).into();
             
             let validator_payout = (total_era_payout * 95) / 100;
             let agent_payout_total = (total_era_payout * 5) / 100;
