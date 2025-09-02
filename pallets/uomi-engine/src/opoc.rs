@@ -1037,6 +1037,11 @@ impl<T: Config> Pallet<T> {
             for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
+                    // Reset staking era reward points for validator so it earns no payout for current era.
+                    // This is best-effort; failures shouldn't abort OPoC logic.
+                    if let Err(e) = Self::reset_validator_current_era_points(validator) {
+                        log::error!("Failed to reset staking points for validator {:?}: {:?}", validator, e);
+                    }
                 } else {
                     OpocTimeouts::<T>::remove(request_id, account_id);
                 }
@@ -1227,11 +1232,6 @@ impl<T: Config> Pallet<T> {
         // Set the validator as blacklisted
         Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator);
 
-        // Reset staking era reward points for validator so it earns no payout for current era.
-        // This is best-effort; failures shouldn't abort OPoC logic.
-        if let Err(e) = Self::reset_validator_current_era_points(validator) {
-            log::error!("Failed to reset staking points for validator {:?}: {:?}", validator, e);
-        }
 
         Ok(())
     }
