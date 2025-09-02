@@ -84,6 +84,10 @@ impl<T: Config> crate::pallet::Pallet<T> {
         if last_opoc_request_id.is_zero() { log::info!("No previous OPOC request ID found, starting from ID 1"); }
 
         for _ in 0..10u8 { // process at most 10 per cycle
+            // Check first and foremost if the key actually exists... we have these two assumptions: A. keys are incremental and B. Outputs is monotonic, so we never delete information from it. If we find a missing key we can safely skip it
+            if !pallet_uomi_engine::Outputs::<T>::contains_key(&current) {
+                continue;
+            }
             match Self::process_single_request(current) {
                 Ok(Some((nft_id, data))) => {
                     requests_to_sign.insert(current, (nft_id, data.0, data.1));
