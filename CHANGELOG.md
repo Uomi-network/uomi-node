@@ -1,10 +1,7 @@
-# Changelog for v0.2.1
+# Changelog for v0.2.3
 
 ## Changes
-- feat: new release - tss test
-- fix(tss): fix whitelisted  address
-- fix(tss): fix whitelisted  address
-- Merge pull request #4 from samdotola/main
-- Update CHANGELOG.md
-- fix: version
+- feat: new release
+- Merge pull request #9 from Uomi-network/feat/deepseek-models
+- feat: update AI model versions and increment pallet version to 6
 

@@ -1,12 +1,13 @@
 ![uomi](./img/uomi.jpeg)
 <div align="center">
 
-![Version](https://badgen.net/badge/version/0.2.1/blue)
+![Version](https://badgen.net/badge/version/0.2.3/blue)
 [![Substrate version](https://img.shields.io/badge/Substrate-3.0.0-brightgreen?logo=Parity%20Substrate)](https://substrate.dev/)
 [![License](https://badgen.net/badge/license/MIT/blue)](./LICENSE)
 [![Twitter URL](https://img.shields.io/twitter/follow/UomiNetwork?style=social)](https://twitter.com/UomiNetwork)
 
 </div>
+
 
 
 Empowering Ai Agents to Transform the Physical World through Economic Agency
@@ -85,7 +86,7 @@ Defining _features_ in the root `Cargo.toml` is additive with the features defin
 1. Check if the dependency is already defined in the root `Cargo.toml`
     1. if **yes**, nothing to do, just take note of the enabled features
     2. if **no**, add it (make sure to use `default-features = false` if dependency is used in _no_std_ context)
-2. Add `new_dependecy = { workspace = true }` to the required crate
+2. Add `new_dependency = { workspace = true }` to the required crate
 3. In case dependency is defined with `default-features = false` but you need it in _std_ context, add `features = ["std"]` to the required crate.
 
 ## Further Reading

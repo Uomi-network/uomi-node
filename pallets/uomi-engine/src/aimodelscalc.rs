@@ -83,6 +83,8 @@ impl<T: Config> Pallet<T> {
         let qwen_qwq_32b: Data = b"Qwen/QwQ-32B-AWQ".to_vec().try_into().unwrap();
         let dobby3_1_8b: Data = b"SentientAGI/Dobby-Mini-Unhinged-Llama-3.1-8B".to_vec().try_into().unwrap();
         let sana_1600m: Data = b"Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers".to_vec().try_into().unwrap();
+        let qwen_deepseek_thinking: Data = b"deepseek-ai/DeepSeek-R1-0528-Qwen3-8B".to_vec().try_into().unwrap();
+        let qwen_deepseek_non_thinking: Data = b"deepseek-ai/DeepSeek-R1-0528-Qwen3-8B".to_vec().try_into().unwrap();
 
         let mut version_2 = BTreeMap::new();
         version_2.insert(AiModelKey::from(1), qwen2_5.clone());
@@ -102,6 +104,13 @@ impl<T: Config> Pallet<T> {
         version_5.insert(AiModelKey::from(3), dobby3_1_8b.clone());
         version_5.insert(AiModelKey::from(100), sana_1600m.clone());
         map.insert(5 as u32, version_5);
+
+        let mut version_6 = BTreeMap::new();
+        version_6.insert(AiModelKey::from(1), qwen_deepseek_non_thinking.clone());
+        version_6.insert(AiModelKey::from(2), qwen_deepseek_non_thinking.clone());
+        version_6.insert(AiModelKey::from(3), dobby3_1_8b.clone());
+        version_6.insert(AiModelKey::from(100), sana_1600m.clone());
+        map.insert(6 as u32, version_6);
 
         // Free for future releases...
     
