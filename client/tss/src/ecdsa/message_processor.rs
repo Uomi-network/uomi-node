@@ -557,6 +557,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             return;
         }
 
+        if let Err(err) = self.client.complete_reshare_session(self.client.best_hash(), session_id) {
+            log::error!("[TSS] Error submitting DKG reshare result to chain: {:?}", err);
+        }
+
         let index = match self.get_local_index(&session_id) {
             Some(idx) => idx,
             None => {

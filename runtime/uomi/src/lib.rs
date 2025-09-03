@@ -2636,6 +2636,12 @@ impl_runtime_apis! {
         fn report_participants(id: u64, reported_participants: Vec<[u8; 32]>) {
             pallet_tss::pallet::Pallet::<Runtime>::report_participants(id, reported_participants);
         }
+        fn complete_reshare_session(
+            session_id: u64,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::submit_reshare_result(session_id);
+        }
+
         fn submit_dkg_result(
             session_id: u64,
             aggregated_key: Vec<u8>,

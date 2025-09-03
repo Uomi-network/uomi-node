@@ -1030,6 +1030,18 @@ pub mod pallet {
             payload.old_participants.clone(),
         )
     }
+    
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_reshare_dkg_session())]
+    #[pallet::call_index(22)]
+    pub fn complete_reshare_session_unsigned(
+        origin: OriginFor<T>,
+        payload: crate::payloads::CompleteResharePayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        // Only call internal helper with provided session id
+        Self::complete_reshare_session(payload.session_id)
+    }
 
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::report_participant())]
     #[pallet::call_index(6)]
@@ -1473,6 +1485,15 @@ pub mod pallet {
                     .build();
             }
 
+            Call::complete_reshare_session_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX / 4)
+                    .and_provides(call.encode())
+                    .longevity(16)
+                    .propagate(true)
+                    .build();
+            }
+
             // Reject all other unsigned calls
             _ => {
                 return InvalidTransaction::Call.into();
@@ -1702,6 +1723,57 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
+
+    /// Mark that a reshare used an existing aggregated public key from `old_id` and
+    /// finalize the `new_id` DKG as complete while marking `old_id` as superseded.
+    /// This mirrors parts of `finalize_dkg_session` but avoids re-checking proposals since
+    /// the aggregated key is preserved across resharing.
+    pub fn complete_reshare_session(new_id: SessionId) -> DispatchResult {
+        // Ensure new session exists
+        let mut new_session = DkgSessions::<T>::get(new_id).ok_or(Error::<T>::DkgSessionNotFound)?;
+
+        // Capture NFT id for lookup of prior completed sessions
+        let nft_id = new_session.nft_id.clone();
+
+        // Set new session state to complete
+        new_session.state = SessionState::DKGComplete;
+        DkgSessions::<T>::insert(new_id, new_session.clone());
+
+        // Find the most recent completed DKG session for this NFT (other than new_id)
+        let maybe_prev = DkgSessions::<T>::iter()
+            .filter(|(id, s)| *id != new_id && s.nft_id == nft_id && s.state == SessionState::DKGComplete)
+            .max_by_key(|(id, _)| *id)
+            .map(|(id, _)| id);
+
+        // If a previous aggregated key exists, copy it to the new session
+        if let Some(prev_id) = maybe_prev {
+            if let Some(agg) = AggregatedPublicKeys::<T>::get(prev_id) {
+                AggregatedPublicKeys::<T>::insert(new_id, agg.clone());
+            }
+        }
+
+        // Mark other completed sessions for same NFT as superseded
+        if let Some(current_session) = DkgSessions::<T>::get(new_id) {
+            for (other_id, mut other_session) in DkgSessions::<T>::iter() {
+                if other_id != new_id
+                    && other_session.nft_id == current_session.nft_id
+                    && other_session.state == SessionState::DKGComplete
+                {
+                    other_session.state = SessionState::DKGSuperseded;
+                    DkgSessions::<T>::insert(other_id, other_session);
+                    Self::deposit_event(Event::DKGSuperseded(other_id));
+                }
+            }
+        }
+
+        // Emit completion event for new session with aggregated key if present
+        if let Some(bounded) = AggregatedPublicKeys::<T>::get(new_id) {
+            Self::deposit_event(Event::DKGCompleted(new_id, bounded));
+        } 
+
+        Ok(())
+    }
+
     // ------------------- Internal Nonce Helpers -------------------
     fn allocate_next_nonce_internal(nft_id: &NftId, chain_id: u32) -> Result<u64, Error<T>> {
         ensure!(Self::is_chain_supported(chain_id), Error::<T>::UnsupportedChain);
@@ -2405,6 +2477,7 @@ sp_api::decl_runtime_apis! {
             session_id: SessionId,
             aggregated_key: Vec<u8>,
         );
+        fn complete_reshare_session(session_id: SessionId);
 
         /// Report TSS offence from runtime API
         fn report_tss_offence(

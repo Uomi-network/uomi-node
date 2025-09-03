@@ -2685,6 +2685,13 @@ impl_runtime_apis! {
         ) {
             let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
         }
+
+        fn complete_reshare_session(
+            session_id: u64,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::submit_reshare_result(session_id);
+        }
+
         fn report_tss_offence(
             session_id: u64,
             offence_type: u8,

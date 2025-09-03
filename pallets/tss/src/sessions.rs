@@ -9,7 +9,7 @@ use crate::pallet::{
 };
 use crate::{ProposedPublicKeys};
 use crate::types::{NftId};
-use crate::payloads::{ReportParticipantsPayload, SubmitDKGResultPayload};
+use crate::payloads::{ReportParticipantsPayload, SubmitDKGResultPayload, CompleteResharePayload};
 use crate::types::SessionId;
 
 impl<T: Config> Pallet<T> {
@@ -119,6 +119,34 @@ impl<T: Config> Pallet<T> {
         );
         log::info!("[TSS] Reported participants");
     }
+
+
+    pub fn submit_reshare_result(session_id: SessionId) -> DispatchResult {
+       
+        // Create a transaction to submit
+        let signer = Signer::<T, <T as crate::pallet::Config>::AuthorityId>::all_accounts();
+
+        if !signer.can_sign() {
+            log::error!("[TSS]: No accounts available to sign cast_vote_on_dkg_result");
+            return Err(Error::<T>::KeyUpdateFailed.into());
+        }
+
+        log::info!("[TSS] Sending unsigned transaction for DKG result...");
+
+        // Send unsigned transaction with signed payload
+        let _ = signer.send_unsigned_transaction(
+            |acct| CompleteResharePayload::<T> {
+                session_id,
+                public: acct.public.clone(),
+            },
+            |payload, signature| crate::pallet::Call::complete_reshare_session_unsigned { payload, signature },
+        );
+
+        log::info!("[TSS] DKG result submitted successfully.");
+
+        Ok(())
+    }
+
 
     // cast_vote_on_dkg_result is called by each validator and created. This function will sign the payload
     // and call submit_dkg_result with the signature
