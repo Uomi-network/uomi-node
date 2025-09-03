@@ -6,7 +6,7 @@ use crate::pallet::{
     ParticipantReportCount, PreviousEraValidators, Event,
     DkgSessions, SessionState, TSSKey,
 };
-use crate::types::NftId;
+use crate::types::{SessionId, NftId};
 
 impl<T: Config> Pallet<T> {
     pub fn initialize_validator_ids() -> DispatchResult {
@@ -194,6 +194,14 @@ impl<T: Config> Pallet<T> {
                 .collect::<Vec<T::AccountId>>()
         ).map_err(|_| crate::pallet::Error::<T>::InvalidParticipantsCount)?;
 
+        // Determine previous completed DKG session id for this nft (if any) for key material retrieval off-chain
+        let mut prev_id: SessionId = 0;
+        for (sid, existing) in crate::pallet::DkgSessions::<T>::iter() {
+            if existing.nft_id == nft_id && matches!(existing.state, crate::pallet::SessionState::DKGComplete) {
+                if sid > prev_id { prev_id = sid; }
+            }
+        }
+
         let session = crate::pallet::DKGSession {
             nft_id,
             participants,
@@ -204,7 +212,7 @@ impl<T: Config> Pallet<T> {
         };
         let session_id = Self::get_next_session_id();
         crate::pallet::DkgSessions::<T>::insert(session_id, session);
-        Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
+        Self::deposit_event(Event::DKGReshareSessionCreated(session_id, prev_id));
         Ok(())
     }
 }

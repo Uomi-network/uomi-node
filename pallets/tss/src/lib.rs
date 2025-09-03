@@ -490,7 +490,7 @@ pub mod pallet {
     pub enum Event<T: Config> {
     /// A new TSS key has been set.
     DKGSessionCreated(SessionId),
-    DKGReshareSessionCreated(SessionId),
+    DKGReshareSessionCreated(SessionId, SessionId), // (new_session_id, old_session_id)
     SigningSessionCreated(SessionId, SessionId), // Signing session ID, DKG session ID
     DKGCompleted(SessionId, PublicKey),          // Aggregated public key
     SigningCompleted(SessionId, Signature),      // Final aggregated signature

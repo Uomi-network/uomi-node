@@ -91,7 +91,7 @@ where
     async fn handle_runtime_event(&self, hash: B::Hash, event: RuntimeEvent) {
         match event {
             RuntimeEvent::Tss(TssEvent::DKGSessionCreated(id)) => self.handle_dkg_session_created(hash, id).await,
-            RuntimeEvent::Tss(TssEvent::DKGReshareSessionCreated(id)) => self.handle_dkg_reshare_session_created(hash, id).await,
+            RuntimeEvent::Tss(TssEvent::DKGReshareSessionCreated(new_id, old_id)) => self.handle_dkg_reshare_session_created(hash, new_id, old_id).await,
             RuntimeEvent::Tss(TssEvent::SigningSessionCreated(signing_session_id, dkg_session_id)) => self.handle_signing_session_created(hash, signing_session_id, dkg_session_id).await,
             RuntimeEvent::Tss(TssEvent::ValidatorIdAssigned(account_id, id)) => self.handle_validator_id_assigned(account_id, id).await,
             _ => (),
@@ -158,25 +158,26 @@ where
     }
 
     /// Handle DKG reshare session creation event
-    async fn handle_dkg_reshare_session_created(&self, hash: B::Hash, id: u64) {
-        let n = self.get_dkg_session_participants_count(hash, id);
-        let t = self.get_dkg_session_threshold(hash, id);
+    async fn handle_dkg_reshare_session_created(&self, hash: B::Hash, new_id: u64, old_id: u64) {
+        let n = self.get_dkg_session_participants_count(hash, new_id);
+        let t = self.get_dkg_session_threshold(hash, new_id);
 
         // t is a percentage value, convert it to the actual threshold value
         let t = (t as f64 * n as f64 / 100.0) as u16;
 
-        let participants = self.get_dkg_session_participants(hash, id);
+    let participants = self.get_dkg_session_participants(hash, new_id);
 
-        let old_participants = self.get_dkg_session_old_participants(hash, id);
+    let old_participants = self.get_dkg_session_old_participants(hash, new_id);
 
         // Notify the session manager about the new DKG Reshare Session
         if let Err(e) = self.sender.unbounded_send(
             TSSRuntimeEvent::DKGReshareSessionInfoReady(
-                id,
+                new_id,
                 u16::try_from(t).unwrap_or(u16::MAX),
                 n,
                 participants,
                 old_participants,
+                old_id,
             ),
         ) {
             log::error!("[TSS] There was a problem communicating with the TSS Session Manager {:?}", e);

@@ -296,9 +296,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     log::error!("[TSS] Failed to process DKG session {}: {:?}", id, e);
                 }
             }
-            TSSRuntimeEvent::DKGReshareSessionInfoReady(id, t, n, participants, old_participants) => {
+            TSSRuntimeEvent::DKGReshareSessionInfoReady(id, t, n, participants, old_participants, old_id) => {
+                log::info!("[TSS] Processing reshare event new_id={} old_id={}", id, old_id);
                 if let Err(e) = self.add_and_initialize_dkg_reshare_session(id, t, n, participants, old_participants) {
-                    log::error!("[TSS] Failed to process DKG session {}: {:?}", id, e);
+                    log::error!("[TSS] Failed to process DKG reshare session {} (old {}) : {:?}", id, old_id, e);
                 }
             }
             TSSRuntimeEvent::SigningSessionInfoReady(signing_id, dkg_id, t, n, participants, coordinator, message) => {
@@ -343,7 +344,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         Ok(())
     }
 
-    fn add_and_initialize_dkg_reshare_session(&self, id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, old_participants: Vec<TSSParticipant>) -> Result<(), String> {
+    fn add_and_initialize_dkg_reshare_session(&self, id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, old_participants: Vec<TSSParticipant>, old_id: SessionId) -> Result<(), String> {
         self.add_session_data(id, t, n, [0; 32], participants.clone(), Vec::new())
             .map_err(|e| format!("Failed to add data: {:?}", e))?;
         
@@ -354,7 +355,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         
         log::info!("[TSS] Successfully initialized DKG session {}", id);
         
-        self.ecdsa_create_reshare_phase(id, n.into(), t.into(), participants, old_participants);
+        self.ecdsa_create_reshare_phase(id, n.into(), t.into(), participants, old_participants, old_id);
         
         Ok(())
     }

@@ -126,6 +126,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         t: u16,
         participants: Vec<TSSParticipant>,
         old_participants: Vec<TSSParticipant>,
+        old_id: SessionId
     ) {
     let my_id = match self.get_my_index(id) {
             Some(id) => id,
@@ -137,7 +138,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         log::info!("[TSS] My Id = {:?}", my_id);
 
-        let current_keys = self.get_current_keys(id, my_id);
+        let current_keys = self.get_current_keys(id, old_id);
         let mut handler = self.ecdsa_manager.lock().unwrap();
 
         let reshare_result = handler.add_reshare(

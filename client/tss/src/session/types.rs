@@ -22,7 +22,7 @@ pub enum SessionManagerMessage {
 #[derive(Encode, Decode, Debug)]
 pub enum TSSRuntimeEvent {
     DKGSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>), // Session info from runtime is now available
-    DKGReshareSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>, Vec<TSSParticipant>), // Session info from runtime is now available
+    DKGReshareSessionInfoReady(SessionId, u16, u16, Vec<TSSParticipant>, Vec<TSSParticipant>, SessionId), // (new_id, t, n, new_participants, old_participants, old_id)
     SigningSessionInfoReady(
         SessionId,
         SessionId,
