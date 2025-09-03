@@ -121,29 +121,39 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
     pub fn ecdsa_create_reshare_phase(
         &self,
-        id: SessionId,
+        id: SessionId,               // new session id
         n: u16,
         t: u16,
-        participants: Vec<TSSParticipant>,
-        old_participants: Vec<TSSParticipant>,
-        old_id: SessionId
+        participants: Vec<TSSParticipant>,      // new participants
+        old_participants: Vec<TSSParticipant>,  // old participants
+        old_id: SessionId                       // old (completed) session id whose key material we reuse
     ) {
-    let my_id = match self.get_my_index(id) {
-            Some(id) => id,
+        // Index in the NEW participant list determines our role in new session
+        let my_new_id = match self.get_my_index(id) {
+            Some(idx) => idx,
             None => {
-                log::info!("[TSS] We are not allowed to participate");
+                log::info!("[TSS][Reshare] Not a participant of new session {}", id);
                 return;
             }
         };
+        log::info!("[TSS][Reshare] My new Id = {:?}", my_new_id);
 
-        log::info!("[TSS] My Id = {:?}", my_id);
+        // We must fetch our prior share from the OLD session using our index there.
+        // It's possible our index changed due to validator set reshuffle. Derive old index separately.
+        let my_old_id = match self.get_my_index(old_id) {
+            Some(idx) => idx,
+            None => {
+                log::warn!("[TSS][Reshare] We didn't participate in old session {} so no prior keys; starting fresh", old_id);
+                0u16 // Will cause lookup to fail gracefully
+            }
+        };
 
-        let current_keys = self.get_current_keys(id, old_id);
+        let current_keys = self.get_current_keys_from_old_session(old_id, my_old_id);
         let mut handler = self.ecdsa_manager.lock().unwrap();
 
         let reshare_result = handler.add_reshare(
             id,
-            my_id.to_string(),
+            my_new_id.to_string(),
             self.create_participant_indices(&old_participants),
             self.create_participant_indices(&participants),
             t.into(),
@@ -173,13 +183,20 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         peer_mapper.get_id_from_account_id(&session_id, &self.session_core.validator_key)
     }
 
-    fn get_current_keys(&self, id: SessionId, my_id: u16) -> Option<String> {
-        let identifier: Identifier = my_id.try_into().ok()?;
+    fn get_current_keys_from_old_session(&self, old_session_id: SessionId, my_old_id: u16) -> Option<String> {
+        if my_old_id == 0 { return None; }
+        let identifier: Identifier = my_old_id.try_into().ok()?;
         let storage = self.storage_manager.key_storage.lock().unwrap();
-        
-        match storage.read_data(id, StorageType::EcdsaKeys, Some(&identifier.serialize())) {
-            Ok(keys) => String::from_utf8(keys).ok(),
-            Err(_) => None,
+        match storage.read_data(old_session_id, StorageType::EcdsaKeys, Some(&identifier.serialize())) {
+            Ok(keys) => {
+                let utf8 = String::from_utf8(keys).ok();
+                if utf8.is_some() { log::info!("[TSS][Reshare] Loaded prior key share from old_session_id={} old_index={}", old_session_id, my_old_id); }
+                utf8
+            },
+            Err(_) => {
+                log::warn!("[TSS][Reshare] No prior key share found for old_session_id={} old_index={}", old_session_id, my_old_id);
+                None
+            },
         }
     }
 

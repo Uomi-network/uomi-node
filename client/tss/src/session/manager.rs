@@ -298,7 +298,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             }
             TSSRuntimeEvent::DKGReshareSessionInfoReady(id, t, n, participants, old_participants, old_id) => {
                 log::info!("[TSS] Processing reshare event new_id={} old_id={}", id, old_id);
-                if let Err(e) = self.add_and_initialize_dkg_reshare_session(id, t, n, participants, old_participants) {
+                if let Err(e) = self.add_and_initialize_dkg_reshare_session(id, t, n, participants, old_participants, old_id) {
                     log::error!("[TSS] Failed to process DKG reshare session {} (old {}) : {:?}", id, old_id, e);
                 }
             }
@@ -354,6 +354,26 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         //     .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
         
         log::info!("[TSS] Successfully initialized DKG session {}", id);
+
+        // Preload OLD session participant mapping into PeerMapper if it's missing so we can resolve indices
+        {
+            let mut pm = self.session_core.peer_mapper.lock().unwrap();
+            let have_old_mapping = {
+                let sessions_participants_u16 = pm.sessions_participants_u16.lock().unwrap();
+                sessions_participants_u16.get(&old_id).is_some()
+            };
+            if !have_old_mapping {
+                // Only create mapping if we actually have old participants list (non-empty)
+                if !old_participants.is_empty() {
+                    log::info!("[TSS][Reshare] Preloading old session mapping old_id={} participants_len={}", old_id, old_participants.len());
+                    pm.create_session(old_id, old_participants.clone());
+                } else {
+                    log::warn!("[TSS][Reshare] old_participants list empty; cannot preload mapping for old_id={}", old_id);
+                }
+            } else {
+                log::info!("[TSS][Reshare] Old session mapping already present old_id={}", old_id);
+            }
+        }
         
         self.ecdsa_create_reshare_phase(id, n.into(), t.into(), participants, old_participants, old_id);
         
