@@ -1533,25 +1533,38 @@ pub mod pallet {
 
         // We still only run heavier logic every 10 blocks, but OPOC processing must not depend on validator changes.
         if n % 10u32.into() == 0u32.into() {
-            // Update validators if there are new ones
+            // Update ActiveValidators whenever the session validator set differs from stored state.
             let current_validators = pallet_session::Validators::<T>::get();
-            let mut new_validators = Vec::new();
-            for validator in current_validators.iter() {
-                if !ValidatorIds::<T>::contains_key(validator) {
-                    new_validators.push(validator.clone());
-                }
-            }
-            if !new_validators.is_empty() {
+            let stored_validators = ActiveValidators::<T>::get();
+
+            // Detect difference (order-insensitive) OR presence of any validator without an ID.
+            use sp_std::collections::btree_set::BTreeSet;
+            let curr_set: BTreeSet<_> = current_validators.iter().collect();
+            let stored_set: BTreeSet<_> = stored_validators.iter().collect();
+            let sets_differ = curr_set != stored_set;
+
+            // Track validators missing IDs so that the extrinsic will assign them on-chain.
+            let mut missing_id = false;
+            for v in current_validators.iter() { if !ValidatorIds::<T>::contains_key(v) { missing_id = true; break; } }
+
+            if sets_differ || missing_id {
+                log::info!(
+                    "[TSS] Detected validator set change (sets_differ: {}, missing_id: {}): stored_len={}, current_len={}",
+                    sets_differ, missing_id, stored_validators.len(), current_validators.len()
+                );
                 let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
                 if signer.can_sign() {
-                    let all_validators = current_validators;
-                    let _ = signer.send_unsigned_transaction(
+                    let all_validators = current_validators.clone();
+                    let _res = signer.send_unsigned_transaction(
                         |acct| UpdateValidatorsPayload::<T> { validators: all_validators.clone(), public: acct.public.clone() },
                         |payload, signature| Call::update_validators { payload, signature },
                     );
+                    // We rely on on-chain execution to prune removed validators. Log for debugging.
                 } else {
                     log::error!("TSS: No accounts available to sign update_validators");
                 }
+            } else {
+                log::debug!("[TSS] Validator set unchanged; no update_validators extrinsic sent");
             }
 
             // Always attempt to process OPOC requests on the cadence
