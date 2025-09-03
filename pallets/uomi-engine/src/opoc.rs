@@ -1037,11 +1037,6 @@ impl<T: Config> Pallet<T> {
             for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
-                    // Reset staking era reward points for validator so it earns no payout for current era.
-                    // This is best-effort; failures shouldn't abort OPoC logic.
-                    if let Err(e) = Self::reset_validator_current_era_points(account_id) {
-                        log::error!("Failed to reset staking points for validator {:?}: {:?}", account_id, e);
-                    }
                 } else {
                     OpocTimeouts::<T>::remove(request_id, account_id);
                 }
@@ -1078,6 +1073,28 @@ impl<T: Config> Pallet<T> {
                 total_executions: total_executions.clone(),
                 total_consensus: total_consensus.clone(),
             });
+
+            // Deferred staking penalty application for timeouts:
+            // We moved the reset of staking era reward points from the moment a timeout is recorded
+            // to the moment the request is finalized. This ensures we only slash rewards once we're
+            // sure about the request outcome and avoid penalizing during in-flight reassignment cycles.
+            // Requirement summary:
+            // 1. Apply only to validators that timed out (OpocTimeouts == true for this request).
+            // 2. A later valid output does NOT cancel the penalty (once timed out, still penalized at completion).
+            // 3. TODO (open decision): Whether to skip this on failed (Data::default()) completions. Probably not, so this is ok for now
+            for (account_id, is_timeout) in OpocTimeouts::<T>::iter_prefix(request_id) {
+                if is_timeout {
+                    // Best-effort; failure shouldn't abort OPoC logic.
+                    if let Err(e) = Self::reset_validator_current_era_points(&account_id) {
+                        log::error!(
+                            "Failed to reset staking points for validator {:?} on completed request {:?}: {:?}",
+                            account_id,
+                            request_id,
+                            e
+                        );
+                    }
+                }
+            }
             // remove from Inputs
             Inputs::<T>::remove(request_id);
             // remove all assignments from OpocAssignment
