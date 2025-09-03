@@ -151,11 +151,38 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let current_keys = self.get_current_keys_from_old_session(old_id, my_old_id);
         let mut handler = self.ecdsa_manager.lock().unwrap();
 
+        // Build participant id lists using validator IDs (stable) rather than positional indices
+        let (old_ids, new_ids) = {
+            let pm = self.session_core.peer_mapper.lock().unwrap();
+            let mut missing_any = false;
+            let mut gather = |list: &Vec<TSSParticipant>, label: &str| -> Vec<String> {
+                list.iter().enumerate().filter_map(|(i, pk)| {
+                    match pm.get_validator_id(&pk.to_vec()) {
+                        Some(v) => Some(v.to_string()),
+                        None => {
+                            missing_any = true;
+                            log::warn!("[TSS][Reshare] Missing validator_id for {} participant idx={} pk_prefix={:02x?}; deferring reshare init", label, i, &pk.to_vec()[0..std::cmp::min(4, pk.len())]);
+                            None
+                        }
+                    }
+                }).collect()
+            };
+            let old_ids = gather(&old_participants, "old");
+            let new_ids = gather(&participants, "new");
+            if missing_any {
+                log::warn!("[TSS][Reshare] Aborting reshare phase creation session_id={} due to missing validator IDs (will rely on future retry/event)", id);
+                return; // Safe early exit; higher-level logic expected to retry when IDs populate
+            }
+            (old_ids, new_ids)
+        };
+
+        log::info!("[TSS][Reshare] Using validator-id participant vectors old_ids={:?} new_ids={:?}", old_ids, new_ids);
+
         let reshare_result = handler.add_reshare(
             id,
             my_new_id.to_string(),
-            self.create_participant_indices(&old_participants),
-            self.create_participant_indices(&participants),
+            old_ids,
+            new_ids,
             t.into(),
             n.into(),
             current_keys,
@@ -200,14 +227,9 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         }
     }
 
+    // NOTE: create_participant_indices retained for legacy keygen path; reshare now uses validator IDs.
     fn create_participant_indices(&self, participants: &[TSSParticipant]) -> Vec<String> {
-        let v: Vec<String> = (1..=participants.len()).map(|el| el.to_string()).collect();
-        log::info!(
-            "[TSS][DIAG][Helper] create_participant_indices participants_len={} produced={:?}",
-            participants.len(),
-            v
-        );
-        v
+        (1..=participants.len()).map(|el| el.to_string()).collect()
     }
 
     pub fn ecdsa_create_sign_offline_phase(

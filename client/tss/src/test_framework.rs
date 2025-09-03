@@ -146,6 +146,16 @@ impl<B: BlockT> ClientManager<B> for TestClientManager {
         self.add_submit_dkg_result_call(session_id, aggregated_key);
         Ok(())
     }
+
+    fn complete_reshare_session(
+        &self,
+        _hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+    ) -> Result<(), String> {
+        // For tests we can just record or noop; here we noop.
+        let _ = session_id;
+        Ok(())
+    }
     
     fn report_tss_offence(
         &self,

@@ -64,6 +64,8 @@ pub struct SessionManager<B: BlockT, C: ClientManager<B>> {
     pub signing_to_dkg: Arc<Mutex<HashMap<SessionId, SessionId>>>,
     // Deduplication: track signing runtime events we've already processed (signing_id,dkg_id)
     pub seen_signing_events: Arc<Mutex<HashSet<(SessionId, SessionId)>>>,
+    // Outbound ECDSA P2P messages that couldn't be sent because recipient mapping didn't exist yet
+    pub pending_outbound_p2p: Arc<Mutex<HashMap<SessionId, Vec<(String, String, Vec<u8>, crate::ecdsa::ECDSAPhase)>>>>,
     pub _phantom: PhantomData<B>,
 }
 
@@ -138,6 +140,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             satisfied_challenges: Arc::new(Mutex::new(Vec::new())),
             signing_to_dkg: Arc::new(Mutex::new(empty_hash_map())),
             seen_signing_events: Arc::new(Mutex::new(HashSet::new())),
+            pending_outbound_p2p: Arc::new(Mutex::new(empty_hash_map())),
             _phantom: PhantomData,
         };
 
@@ -417,6 +420,70 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     fn on_new_validator_id_assigned(&mut self, account_id: TSSPublic, id: u32) {
         let mut peer_mapper_handle = self.session_core.peer_mapper.lock().unwrap();
         peer_mapper_handle.set_validator_id(account_id, id);
+        drop(peer_mapper_handle);
+        // Attempt to flush any queued outbound messages that might now resolve
+        self.flush_all_pending_outbound();
+    }
+
+    // Queue an outbound P2P message for later retry when recipient mapping becomes available
+    pub fn queue_outbound_p2p(&self, session_id: SessionId, recipient_id: String, sender_index: String, data: Vec<u8>, phase: crate::ecdsa::ECDSAPhase) {
+        let mut guard = self.pending_outbound_p2p.lock().unwrap();
+        let entry = guard.entry(session_id).or_insert_with(Vec::new);
+        // Avoid unbounded duplication: skip if an identical (recipient_id, sender_index, data hash, phase) already queued
+        let exists = entry.iter().any(|(r,s,d,p)| r==&recipient_id && s==&sender_index && p==&phase && d==&data);
+        if !exists {
+            entry.push((recipient_id, sender_index, data, phase));
+        }
+    }
+
+    // Flush pending outbound for a specific session
+    pub fn flush_pending_outbound_for_session(&self, session_id: SessionId) {
+        use crate::ecdsa::ECDSAPhase;
+        let pending: Option<Vec<(String,String,Vec<u8>,ECDSAPhase)>> = {
+            let mut guard = self.pending_outbound_p2p.lock().unwrap();
+            guard.remove(&session_id)
+        };
+        if let Some(list) = pending {
+            log::info!("[TSS][P2P][QUEUE] Flushing {} queued outbound messages session_id={}", list.len(), session_id);
+            for (recipient_id, sender_index, data, phase) in list {
+                // Re-attempt send; if still missing, requeue
+                if let Err(_) = self.try_send_p2p_once(session_id, &recipient_id, &sender_index, data.clone(), &phase) {
+                    self.queue_outbound_p2p(session_id, recipient_id, sender_index, data, phase);
+                }
+            }
+        }
+    }
+
+    // Flush all sessions
+    pub fn flush_all_pending_outbound(&self) {
+        let sessions: Vec<SessionId> = {
+            let guard = self.pending_outbound_p2p.lock().unwrap();
+            guard.keys().cloned().collect()
+        };
+        for sid in sessions { self.flush_pending_outbound_for_session(sid); }
+    }
+
+    // Internal one-shot attempt used by flush; mirrors logic in send_message_to_recipient sans queueing
+    fn try_send_p2p_once(&self, session_id: SessionId, recipient_id: &str, sender_index: &str, data: Vec<u8>, phase: &crate::ecdsa::ECDSAPhase) -> Result<(), ()> {
+        let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
+        let recipient = peer_mapper.get_peer_id_from_id(&session_id, recipient_id.parse::<u16>().unwrap()).cloned();
+        drop(peer_mapper);
+        if let Some(recipient) = recipient {
+            let ecdsa_message = crate::types::TssMessage::ECDSAMessageP2p(
+                session_id,
+                sender_index.to_string(),
+                recipient.to_bytes(),
+                data,
+                phase.clone(),
+            );
+            if let Err(error) = self.send_signed_message(ecdsa_message) {
+                log::error!("[TSS][P2P][QUEUE] Error sending queued ECDSA P2P message: {:?}", error);
+                return Err(());
+            }
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 

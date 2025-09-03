@@ -1091,6 +1091,7 @@ mod tests {
                 n,
                 participants.clone(),
                 participants.clone(),
+                dkg_session_id, // old_id (reuse same for test scenario)
             );
             node.session_manager.process_runtime_message(event);
         }

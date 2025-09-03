@@ -1456,7 +1456,7 @@ pub mod pallet {
                 return ValidTransaction::with_tag_prefix("TssPallet")
                     .priority(TransactionPriority::MAX)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(32)
                     .propagate(true)
                     .build();
             }

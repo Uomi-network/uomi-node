@@ -353,8 +353,11 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             if let Err(error) = self.send_signed_message(ecdsa_message) {
                 log::error!("[TSS] Error sending signed ECDSA P2P message: {:?}", error);
             }
+            // After successful send, opportunistically try flushing any queued outbound (cheap if none)
+            self.flush_pending_outbound_for_session(session_id);
         } else {
-            log::error!("[TSS] Recipient not found {:#?} (id: {:?})", recipient, recipient_id);
+            log::warn!("[TSS][P2P][QUEUE] Recipient mapping missing; queueing outbound P2P session_id={} recipient_id={} phase={:?} bytes={} ", session_id, recipient_id, phase, data.len());
+            self.queue_outbound_p2p(session_id, recipient_id.to_string(), sender_index.to_string(), data, phase.clone());
         }
     }
 
