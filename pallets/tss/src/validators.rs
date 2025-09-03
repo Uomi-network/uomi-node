@@ -6,6 +6,7 @@ use crate::pallet::{
     ParticipantReportCount, PreviousEraValidators, Event,
     DkgSessions, SessionState, TSSKey,
 };
+use crate::types::NftId;
 
 impl<T: Config> Pallet<T> {
     pub fn initialize_validator_ids() -> DispatchResult {
@@ -128,9 +129,8 @@ impl<T: Config> Pallet<T> {
             log::info!("TSS: Validator set changed at era {}, triggering DKG reshare", current_era);
             
             // Check if we have an existing TSS key that requires resharing
-            let has_existing_key = !TSSKey::<T>::get().is_empty();
-
-            if has_existing_key && !previous_validators.is_empty() {
+            
+            if !previous_validators.is_empty() {
                 // Create reshare DKG session for the validator set change
                 Self::create_reshare_session_for_validator_change(&previous_validators)?;
                 log::info!("TSS: Reshare DKG session created for validator set change");
@@ -159,10 +159,7 @@ impl<T: Config> Pallet<T> {
             if session.state == SessionState::DKGComplete {
                 // Create a reshare session for this specific agent/NFT
                 let threshold = session.threshold;
-                let origin = frame_system::RawOrigin::None.into();
-                
-                if let Err(e) = Self::create_reshare_dkg_session(
-                    origin,
+                if let Err(e) = Self::internal_create_reshare_dkg_session(
                     session.nft_id.clone(),
                     threshold,
                     old_participants.clone(),
@@ -179,6 +176,35 @@ impl<T: Config> Pallet<T> {
             log::warn!("TSS: No completed DKG sessions found to reshare during validator set change");
         }
         
+        Ok(())
+    }
+
+    // Internal helper used by on_initialize + extrinsics (unsigned/signed variants wrap this)
+    pub(crate) fn internal_create_reshare_dkg_session(
+        nft_id: NftId,
+        threshold: u32,
+        old_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
+    ) -> DispatchResult {
+        ensure!(threshold > 0, crate::pallet::Error::<T>::InvalidThreshold);
+        ensure!(threshold <= 100 && threshold >= 50, crate::pallet::Error::<T>::InvalidThreshold);
+
+        let participants = BoundedVec::try_from(
+            pallet_staking::Validators::<T>::iter()
+                .map(|(account_id, _)| account_id)
+                .collect::<Vec<T::AccountId>>()
+        ).map_err(|_| crate::pallet::Error::<T>::InvalidParticipantsCount)?;
+
+        let session = crate::pallet::DKGSession {
+            nft_id,
+            participants,
+            threshold,
+            state: crate::pallet::SessionState::DKGCreated,
+            old_participants: Some(old_participants),
+            deadline: frame_system::Pallet::<T>::block_number() + 100u32.into(),
+        };
+        let session_id = Self::get_next_session_id();
+        crate::pallet::DkgSessions::<T>::insert(session_id, session);
+        Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
         Ok(())
     }
 }

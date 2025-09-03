@@ -36,6 +36,15 @@ pub struct CreateSigningSessionPayload<T: crate::Config> {
 }
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+#[scale_info(skip_type_params(T))]
+pub struct CreateReshareDkgSessionPayload<T: crate::Config> {
+    pub nft_id: NftId,
+    pub threshold: u32,
+    pub old_participants: BoundedVec<T::AccountId, <T as crate::Config>::MaxNumberOfShares>,
+    pub public: T::Public,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct GapFillerSigningSessionPayload<T: crate::Config> {
     /// Synthetic unique request id for gap filler (keccak256 of marker + nft + chain + nonce)
     pub request_id: sp_core::U256,
@@ -150,6 +159,10 @@ impl<T: SigningTypes + crate::Config> SignedPayload<T> for CreateSigningSessionP
     fn public(&self) -> T::Public {
         self.public.clone()
     }
+}
+
+impl<T: SigningTypes + crate::Config> SignedPayload<T> for CreateReshareDkgSessionPayload<T> {
+    fn public(&self) -> T::Public { self.public.clone() }
 }
 
 impl<T: SigningTypes + crate::Config> SignedPayload<T> for GapFillerSigningSessionPayload<T> {

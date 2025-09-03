@@ -1011,35 +1011,24 @@ pub mod pallet {
         old_participants: BoundedVec<T::AccountId, <T as Config>::MaxNumberOfShares>,
     ) -> DispatchResult {
         let _who = ensure_signed(origin)?;
+    // Reuse internal helper
+    Self::internal_create_reshare_dkg_session(nft_id, threshold, old_participants)
+    }
 
-        ensure!(threshold > 0, Error::<T>::InvalidThreshold);
-
-        // threshold needs to be an integer value between 50 and 100%
-        ensure!(threshold <= 100, Error::<T>::InvalidThreshold);
-        ensure!(threshold >= 50, Error::<T>::InvalidThreshold);
-
-        // Create new reshare DKG session
-        let session = DKGSession {
-            nft_id,
-            participants: BoundedVec::try_from(
-                pallet_staking::Validators::<T>::iter()
-                    .map(|(account_id, _)| account_id)
-                    .collect::<Vec<T::AccountId>>(),
-            )
-            .unwrap(),
-            threshold,
-            state: SessionState::DKGCreated,
-            old_participants: Some(old_participants),
-            deadline: frame_system::Pallet::<T>::block_number() + 100u32.into(),
-        };
-
-        // Generate random session ID
-        let session_id = Self::get_next_session_id();
-
-        // Store the session
-        DkgSessions::<T>::insert(session_id, session);
-        Self::deposit_event(Event::DKGReshareSessionCreated(session_id));
-        Ok(())
+    // New unsigned variant with signed payload for offchain usage
+    #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_reshare_dkg_session())]
+    #[pallet::call_index(21)]
+    pub fn create_reshare_dkg_session_unsigned(
+        origin: OriginFor<T>,
+        payload: crate::CreateReshareDkgSessionPayload<T>,
+        _signature: T::Signature,
+    ) -> DispatchResult {
+        ensure_none(origin)?;
+        Self::internal_create_reshare_dkg_session(
+            payload.nft_id.clone(),
+            payload.threshold,
+            payload.old_participants.clone(),
+        )
     }
 
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::report_participant())]
@@ -1294,6 +1283,7 @@ pub mod pallet {
 
     /// Offchain worker marks a failed transaction
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::fail_multi_chain_transaction_unsigned())]
+    #[pallet::call_index(20)]
     pub fn fail_multi_chain_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::FailMultiChainTransactionPayload<T>,
@@ -1443,6 +1433,14 @@ pub mod pallet {
                     .build();
             }
             Call::submit_fsa_transaction_unsigned { .. } => {
+                return ValidTransaction::with_tag_prefix("TssPallet")
+                    .priority(TransactionPriority::MAX)
+                    .and_provides(call.encode())
+                    .longevity(64)
+                    .propagate(true)
+                    .build();
+            }
+            Call::create_reshare_dkg_session_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
                     .priority(TransactionPriority::MAX)
                     .and_provides(call.encode())
