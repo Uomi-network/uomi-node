@@ -14,7 +14,7 @@ use std::{marker::PhantomData, sync::Arc};
 use uomi_runtime::{
     self,
     pallet_tss::{
-        ReportParticipantsPayload, SubmitDKGResultPayload, TssApi, TssOffenceType, CRYPTO_KEY_TYPE,
+        ReportParticipantsPayload, SubmitDKGResultPayload, TssApi, TssOffenceType, CRYPTO_KEY_TYPE, CompleteResharePayload
     },
 };
 use uomi_runtime::{AccountId, RuntimeCall, Signature, UncheckedExtrinsic};
@@ -138,6 +138,28 @@ where
         });
         self.submit_unsigned(call)
     }
+
+
+fn complete_reshare_session(
+        &self,
+        _hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+    ) -> Result<(), String> {
+        let first = self.first_authority_key()?;
+
+        let payload = CompleteResharePayload::<uomi_runtime::Runtime> {
+            session_id,
+            public: MultiSigner::from(first.clone()),
+        };
+        let signature = self.sign_payload(&first, &payload)?;
+
+        let call = RuntimeCall::Tss(uomi_runtime::pallet_tss::Call::complete_reshare_session_unsigned {
+            payload,
+            signature,
+        });
+        self.submit_unsigned(call)
+    }
+
 
     fn report_tss_offence(
         &self,
@@ -284,7 +306,7 @@ mod tests {
     use sp_keystore::Keystore; // bring sr25519_generate_new trait into scope
     use sp_runtime::MultiSigner;
     use uomi_runtime::{
-        pallet_tss::{ReportParticipantsPayload, SubmitDKGResultPayload, TssOffenceType},
+        pallet_tss::{ReportParticipantsPayload, SubmitDKGResultPayload, TssOffenceType, CompleteResharePayload},
         RuntimeCall,
     };
 

@@ -25,6 +25,11 @@ pub trait ClientManager<B: BlockT> {
         session_id: SessionId,
         aggregated_key: Vec<u8>,
     ) -> Result<(), String>;
+    fn complete_reshare_session(
+        &self,
+        hash: <<B as BlockT>::Header as HeaderT>::Hash,
+        session_id: SessionId,
+    ) -> Result<(), String>;
     fn report_tss_offence(
         &self,
         hash: <<B as BlockT>::Header as HeaderT>::Hash,
