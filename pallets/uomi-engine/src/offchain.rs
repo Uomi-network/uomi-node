@@ -103,11 +103,10 @@ impl<T: Config> Pallet<T> {
 
     #[cfg(feature = "std")]
     fn offchain_run_agents(account_id: &T::AccountId) -> DispatchResult {
-
-    // Try to acquire a slot in the semaphore counter. If the number of
-    // concurrent executions is >= configured max, skip execution.
-    let max = <T as Config>::MaxOffchainConcurrent::get();
-    let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
+        // Try to acquire a slot in the semaphore counter. If the number of
+        // concurrent executions is >= configured max, skip execution.
+        let max = <T as Config>::MaxOffchainConcurrent::get();
+        let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
         loop {
             if current >= max {
                 // No slots available
@@ -136,7 +135,19 @@ impl<T: Config> Pallet<T> {
         let (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
 
         // Detect the level of opoc the execution should have
-        let opoc_level = Self::offchain_detect_opoc_level(&request_id);
+        let opoc_level = match Self::offchain_detect_opoc_level(&request_id, &account_id) {
+            Ok(level) => level,
+            Err(error) => {
+                log::error!("UOMI-ENGINE: Error detecting opoc level: {:?}", error);
+                // In case of error checking the opoc level, complete the request with an empty output
+                Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
+                    log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
+                });
+                // Unlock the semaphore (decrement counter)
+                SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
+                return Ok(());
+            }
+        };
 
         // Load wasm associated to the request nft_id
         let wasm = match Self::offchain_load_wasm_from_nft_id(&nft_id, &nft_file_cid) {
@@ -176,8 +187,8 @@ impl<T: Config> Pallet<T> {
             },
         }
 
-    // Unlock the semaphore (decrement counter)
-    SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
+        // Unlock the semaphore (decrement counter)
+        SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
 
         Ok(())
     }
@@ -736,11 +747,15 @@ impl<T: Config> Pallet<T> {
     /// Before we counted them. Both checks are founded on the same premise
     /// i.e. the fact that at each time step there's only one "kind" of assignemt going on
     /// per each reqquest
-    fn offchain_detect_opoc_level(request_id: &RequestId) -> OpocLevel {
-        match OpocAssignment::<T>::iter_prefix(*request_id).last() {
-            Some((_, (_, opoc_level))) => opoc_level,
-            None => OpocLevel::Level0,
+    fn offchain_detect_opoc_level(request_id: &RequestId, account_id: &T::AccountId) -> Result<OpocLevel, DispatchError> {
+        let has_opoc_assignment = OpocAssignment::<T>::contains_key(*request_id, &account_id);
+        if !has_opoc_assignment {
+            log::error!("UOMI-ENGINE: The request_id is not assigned to the validator");
+            return Err(DispatchError::Other("The request_id is not assigned to the validator"));
         }
+
+        let opoc_assignment_data = OpocAssignment::<T>::get(*request_id, &account_id);
+        Ok(opoc_assignment_data.1)
     }
 
     #[cfg(feature = "std")]
