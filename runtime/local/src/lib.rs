@@ -728,7 +728,7 @@ impl pallet_staking::Config for Runtime {
     type Reward = ();
     type SessionsPerEra = ConstU32<6>;
     type BondingDuration = ConstU32<28>;
-    type SlashDeferDuration = ConstU32<28>;
+    type SlashDeferDuration = ConstU32<0>;
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
     type SessionInterface = Self;
     type EraPayout = UOMIEraPayout; //pallet_staking::ConvertCurve<RewardCurve>;
