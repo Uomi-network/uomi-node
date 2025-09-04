@@ -10,6 +10,7 @@ use std::sync::MutexGuard;
 use uomi_runtime::pallet_tss::TssOffenceType;
 use crate::dkghelpers::Storage;
 use sc_network::PeerId;
+use crate::session::signing_state_manager::SigningSessionState; // Reuse signing session states for ECDSA observability
 
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     
@@ -602,6 +603,29 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         ).is_err() {
             return;
         }
+
+        // Map ECDSA offline completion to Round1Initiated + Round2Completed to preserve legacy monitoring semantics.
+        // If already beyond these states (e.g., race), do not regress.
+        let current = self.state_managers.signing_state_manager.get_state(&session_id);
+        if current < SigningSessionState::Round1Initiated {
+            self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round1Initiated);
+        }
+        if current < SigningSessionState::Round2Completed {
+            self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round2Completed);
+        }
+
+        // Drain any queued sign-online requests that were waiting for offline output
+        {
+            let mut pending = self.pending_sign_online_after_offline.lock().unwrap();
+            if let Some(list) = pending.remove(&session_id) {
+                log::info!("[TSS][DIAG][SignOffline->Online] Draining {} queued online requests for session_id={} after offline success", list.len(), session_id);
+                for message in list {
+                    // For each queued message, create a distinct signing_session_id (reuse session_id as signing id)
+                    // We reuse the same dkg_session_id (session_id) as source of offline material.
+                    self.ecdsa_create_sign_phase(session_id, session_id, Vec::new(), message);
+                }
+            }
+        }
     }
 
     fn handle_sign_online_success(&self, session_id: SessionId, msg: String) {
@@ -613,6 +637,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             msg.as_bytes(),
         ).is_err() {
             return;
+        }
+
+        // Online phase success corresponds to final signature generation.
+        // Only set if we haven't already recorded it.
+        let current = self.state_managers.signing_state_manager.get_state(&session_id);
+        if current < SigningSessionState::SignatureGenerated {
+            self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::SignatureGenerated);
         }
 
         if let Some(sig_bytes) = parse_signature_bytes(&msg) {
