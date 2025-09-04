@@ -450,16 +450,22 @@ impl MultiChainRpcClient {
         
         if let Some(val) = value {
             tx_object.push_str(&format!(r#","value":"0x{:x}""#, val));
+        } else {
+            tx_object.push_str(&format!(r#","value":"0x0""#));
         }
         
         if let Some(data_bytes) = data {
             tx_object.push_str(&format!(r#","data":"0x{}""#, hex::encode(data_bytes)));
+        } else {
+            tx_object.push_str(&format!(r#","data":"0x""#));
         }
         
-        tx_object.push('}');
-        tx_params.push(tx_object);
+    tx_object.push('}');
+    // Clone before moving into params so we can still log original content clearly
+    let tx_object_for_log = tx_object.clone();
+    tx_params.push(tx_object);
 
-        log::info!("[RPC] [eth_estimateGas] Estimating gas for transaction tx_object={:?}", tx_object);
+    log::info!("[RPC] [eth_estimateGas] Estimating gas for transaction tx_object={:?}", tx_object_for_log);
 
         let request = JsonRpcRequest::new("eth_estimateGas", tx_params);
         let request_body = miniserde::json::to_string(&request);
