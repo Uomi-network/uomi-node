@@ -187,7 +187,7 @@ impl MultiChainRpcClient {
         // Serialize the request
         let request_body = miniserde::json::to_string(&request);
         
-        log::info!(
+        log::debug!(
             "[RPC] Sending transaction to chain {} (ID: {})", 
             String::from_utf8_lossy(&chain_config.name),
             chain_config.chain_id
@@ -209,7 +209,7 @@ impl MultiChainRpcClient {
             });
         }
 
-        log::info!("[RPC] Transaction submitted with result = {:?}", json_response.result);
+        log::debug!("[RPC] Transaction submitted with result = {:?}", json_response.result);
 
         let tx_hash = json_response.result.ok_or("[RPC] No transaction hash in response")?;
 
@@ -370,7 +370,7 @@ impl MultiChainRpcClient {
         let request = JsonRpcRequest::new("eth_gasPrice", vec![]);
         let request_body = miniserde::json::to_string(&request);
         
-        log::info!(
+        log::debug!(
             "[RPC] Getting gas price from chain {}", 
             String::from_utf8_lossy(&chain_config.name)
         );
@@ -462,7 +462,7 @@ impl MultiChainRpcClient {
         let request = JsonRpcRequest::new("eth_estimateGas", tx_params);
         let request_body = miniserde::json::to_string(&request);
         
-        log::info!(
+        log::debug!(
             "[RPC] Estimating gas for transaction on chain {}", 
             String::from_utf8_lossy(&chain_config.name)
         );
@@ -500,7 +500,7 @@ impl MultiChainRpcClient {
         );
         let request_body = miniserde::json::to_string(&request);
         
-        log::info!(
+        log::debug!(
             "Getting balance for address {} on chain {}", 
             address,
             String::from_utf8_lossy(&chain_config.name)
