@@ -305,7 +305,7 @@ impl MultiChainRpcClient {
     ) -> Result<String, &'static str> {
         let rpc_url = String::from_utf8_lossy(&chain_config.rpc_url);
 
-        log::info!("[RPC] Making RPC call to: {} with body {}", rpc_url, request_body);
+        log::debug!("[RPC] Making RPC call to: {} with body {}", rpc_url, request_body);
 
         // Create HTTP request
         let deadline = Timestamp::from_unix_millis(
@@ -337,7 +337,7 @@ impl MultiChainRpcClient {
         let response_str = str::from_utf8(&response_body)
             .map_err(|_| "[RPC] Invalid UTF-8 in response")?;
         
-        log::info!("[RPC] RPC response: {}", response_str);
+        log::debug!("[RPC] RPC response: {}", response_str);
         
         Ok(String::from(response_str))
     }
@@ -408,7 +408,7 @@ impl MultiChainRpcClient {
         );
         let request_body = miniserde::json::to_string(&request);
         
-        log::info!(
+        log::debug!(
             "[RPC] Getting nonce for address {} on chain {}", 
             address,
             String::from_utf8_lossy(&chain_config.name)
