@@ -36,7 +36,7 @@ where
         let sender: H160 = caller.into();
 
         //check if sender is 0x609a8AEeef8b89BE02C5b59A936A520547252824
-        let agent_address = H160::from_slice(&hex::decode("609a8AEeef8b89BE02C5b59A936A520547252824").expect("Invalid hex"));
+        let agent_address = H160::from_slice(&hex::decode("Db8434F12f21a678F749cb34E6CE0c168776461c").expect("Invalid hex"));
 
         if sender != agent_address {
             return Err(revert("Only the agent contract can call this function"));
