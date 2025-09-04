@@ -249,12 +249,30 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             index,
             keys.len()
         );
-        let constructed_indices: Vec<String> = (1..=n).map(|el| el.to_string()).collect();
-        log::info!(
-            "[TSS][DIAG][SignOffline] constructed_indices={:?} (len={})",
-            constructed_indices,
-            constructed_indices.len()
-        );
+        // Build participant index list from validator IDs (stable) if available; fallback to 1..=n
+        let constructed_indices: Vec<String> = {
+            let mut pm = self.session_core.peer_mapper.lock().unwrap();
+            // sessions_participants_u16 maps session_id -> HashMap<u16 (validator_id), TSSPublic>
+            let handle = pm.sessions_participants_u16.lock().unwrap();
+            if let Some(session_map) = handle.get(&id) {
+                let mut keys: Vec<u16> = session_map.keys().cloned().collect();
+                keys.sort_unstable();
+                let v: Vec<String> = keys.into_iter().map(|k| k.to_string()).collect();
+                log::info!(
+                    "[TSS][DIAG][SignOffline] constructed_indices(from validator IDs)={:?} (len={})",
+                    v,
+                    v.len()
+                );
+                v
+            } else {
+                let fallback: Vec<String> = (1..=n).map(|el| el.to_string()).collect();
+                log::warn!(
+                    "[TSS][DIAG][SignOffline][FALLBACK] No session participants mapping found for session_id={}; using sequential indices {:?}",
+                    id, fallback
+                );
+                fallback
+            }
+        };
         let sign_offline = ecdsa_manager.add_sign(
             id,
             index,
