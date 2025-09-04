@@ -1,7 +1,7 @@
 ![uomi](./img/uomi.jpeg)
 <div align="center">
 
-![Version](https://badgen.net/badge/version/0.2.3/blue)
+![Version](https://badgen.net/badge/version/0.3.0/blue)
 [![Substrate version](https://img.shields.io/badge/Substrate-3.0.0-brightgreen?logo=Parity%20Substrate)](https://substrate.dev/)
 [![License](https://badgen.net/badge/license/MIT/blue)](./LICENSE)
 [![Twitter URL](https://img.shields.io/twitter/follow/UomiNetwork?style=social)](https://twitter.com/UomiNetwork)
