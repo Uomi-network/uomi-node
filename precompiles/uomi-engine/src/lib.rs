@@ -75,7 +75,7 @@ where
         request_id: U256,
     ) -> EvmResult<(UnboundedBytes, U256, U256)> {
         // Read the value from the storage - it returns the value directly because of ValueQuery
-        let (data, total_executions, total_consensus) = pallet_uomi_engine::Outputs::<R>::get(request_id);
+    let (data, total_executions, total_consensus, _nft_id) = pallet_uomi_engine::Outputs::<R>::get(request_id);
         
         let data_vec_u8: Vec<u8> = data.into_inner().to_vec();
         Ok((

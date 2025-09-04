@@ -24,10 +24,11 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+use pallet_staking::EraPayout;
+use parity_scale_codec::alloc::string::ToString;
 use sp_runtime::SaturatedConversion;
 use pallet_ipfs::types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber};
 use frame_support::{
-    BoundedVec,
     construct_runtime,
     dispatch::DispatchClass,
     genesis_builder_helper::{build_config, create_default_config},
@@ -36,7 +37,7 @@ use frame_support::{
         fungible::HoldConsideration,
         tokens::{PayFromAccount, UnityAssetBalanceConversion},
         KeyOwnerProofSystem, EitherOfDiverse, LockIdentifier,
-        AsEnsureOriginWithArg, ConstU128, ConstU32, ConstU64, Currency, EqualPrivilegeOnly,
+        AsEnsureOriginWithArg, ConstU128, ConstU32, ConstU64, EqualPrivilegeOnly,
         FindAuthor, Get, InstanceFilter, LinearStoragePrice, Nothing, OnFinalize, WithdrawReasons,
     },
     weights::{
@@ -70,8 +71,8 @@ use parity_scale_codec::{Compact, Decode, Encode, MaxEncodedLen};
 use sp_api::impl_runtime_apis;
 use sp_core::{crypto::KeyTypeId, ConstBool, OpaqueMetadata, H160, H256, U256};
 use sp_runtime::{
-    curve::PiecewiseLinear,
     create_runtime_str, generic, impl_opaque_keys,
+    print,
     traits::{
         AccountIdConversion, AccountIdLookup, BlakeTwo256, Block as BlockT, ConvertInto,
         DispatchInfoOf, Dispatchable, IdentityLookup, NumberFor, PostDispatchInfoOf,
@@ -130,10 +131,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("finney"),
     impl_name: create_runtime_str!("finney"),
     authoring_version: 1,
-    spec_version: 1,
+    spec_version: 1, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 1,
+    transaction_version: 1, // Extrinsic payload shape change
     state_version: 1,
 };
 
@@ -452,6 +453,10 @@ impl pallet_tss::Config for Runtime {
     type MaxNumberOfShares = pallet_tss::types::MaxNumberOfShares;
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
+    type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
+    type TssWeightInfo = ();
+
 }
 
 
@@ -702,21 +707,64 @@ impl pallet_election_provider_multi_phase::BenchmarkingConfig for ElectionProvid
 }
 
 
-// staking
-pallet_staking_reward_curve::build! {
-    const REWARD_CURVE: PiecewiseLinear<'static> = curve!(
-        min_inflation: 0_025_000,
-        max_inflation: 0_100_000,
-        ideal_stake: 0_500_000,
-        falloff: 0_050_000,
-        max_piece_count: 40,
-        test_precision: 0_005_000,
-    );
-}
 
+
+pub struct UOMIEraPayout {}
+
+impl EraPayout<Balance> for UOMIEraPayout {
+    fn era_payout(
+        _total_staked: Balance,
+        total_issuance: Balance,
+        era_duration_millis: u64,
+    ) -> (Balance, Balance) {
+        print("[UOMIEraPayout]");
+        print(total_issuance.to_string().as_str());
+        print(era_duration_millis.to_string().as_str());
+        // learn where are we, to detect payout
+
+        let halving_period = 3; // Years before halving
+        
+        let year_zero: Balance = (UOMI * 4919219238u128).into();
+        let base_issuance_per_three_year: Balance = (UOMI * 2682750000u128 * halving_period).into();
+        let factor = 2;
+
+        let days_in_one_year = 365;
+        let seconds_in_one_day = 86400;
+        let millis = 1000;
+
+        let millis_in_a_year:u64 = days_in_one_year * seconds_in_one_day * millis;
+        let eras_in_a_year:u128 = (millis_in_a_year/era_duration_millis).into();
+        
+
+        let mut current_year = None;
+        let mut curr_issuance = base_issuance_per_three_year;
+
+        let mut _curr = year_zero;
+
+
+        for i in 1..=10 {
+            if _curr + curr_issuance > total_issuance {
+                current_year = Some(i);
+                break;
+            } else {
+                _curr += curr_issuance;
+                curr_issuance /= factor;
+            }
+            
+        }
+
+        if current_year.is_none() {
+            print("[UOMIEraPayout] Returning (0, 0)");
+            (0u128.into(), 0u128.into())
+        } else {
+            print("[UOMIEraPayout] Returning ");
+            print(current_year.unwrap().to_string().as_str());
+            ((curr_issuance/halving_period/eras_in_a_year).into(), (curr_issuance/halving_period/eras_in_a_year).into())
+        }
+    }
+}
 parameter_types! {
     pub const SessionsPerEra: sp_staking::SessionIndex = 6;
-    pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
     pub const MaxNominators: u32 = <NposSolution16 as frame_election_provider_support::NposSolution>::LIMIT as u32;
     pub const OffendingValidatorsThreshold: Perbill = Perbill::from_percent(17);
     pub const BondingDuration: sp_staking::EraIndex = 6;
@@ -743,10 +791,10 @@ impl pallet_staking::Config for Runtime {
     type Reward = ();
     type SessionsPerEra = ConstU32<6>;
     type BondingDuration = ConstU32<28>;
-    type SlashDeferDuration = ConstU32<28>;
+    type SlashDeferDuration = ConstU32<0>;
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
     type SessionInterface = Self;
-    type EraPayout = pallet_staking::ConvertCurve<RewardCurve>;
+    type EraPayout = UOMIEraPayout;
     type NextNewSession = Session;
     type MaxExposurePageSize = ConstU32<1000>; // O un altro valore appropriato
     type VoterList = VoterList;
@@ -1302,9 +1350,10 @@ impl pallet_uomi_engine::Config for Runtime {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
 	type RuntimeEvent = RuntimeEvent;
     type IpfsPallet = IpfsWrapper;
-    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Runtime>; // for finney update. remove on turing
     type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
     type InherentDataType = u16;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
+    type MaxOffchainConcurrent = frame_support::traits::ConstU32<1>;
 }
 
 pub struct IpfsWrapper;
@@ -1346,6 +1395,8 @@ impl pallet_ipfs::Config for Runtime {
     type BlockNumber = BlockNumber;
     // Nuovo campo per il costo del pinning temporaneo
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    // TSS interface implementation
+    type TssInterface = Tss;
 }
 
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
@@ -1730,6 +1781,8 @@ pub type Executive = frame_executive::Executive<
 >;
 
 pub type Migrations = ();
+//     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
+// );
 
 type EventRecord = frame_system::EventRecord<
     <Runtime as frame_system::Config>::RuntimeEvent,
@@ -2579,8 +2632,11 @@ impl_runtime_apis! {
             }  
             return Vec::new();
         }
-        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
-            Vec::new()
+        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<u8> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_signing_session(session_id) {
+                return session.message.to_vec();
+            }
+            return Vec::new();
         }
         fn get_dkg_session_old_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
             if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
@@ -2618,6 +2674,30 @@ impl_runtime_apis! {
             pallet_tss::pallet::ValidatorIds::<Runtime>::iter()
                 .map(|(account, id)| (id, account.into()))
                 .collect()
+        }
+        fn report_participants(id: u64, reported_participants: Vec<[u8; 32]>) {
+            pallet_tss::pallet::Pallet::<Runtime>::report_participants(id, reported_participants);
+        }
+
+        fn submit_dkg_result(
+            session_id: u64,
+            aggregated_key: Vec<u8>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
+        }
+
+        fn complete_reshare_session(
+            session_id: u64,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::submit_reshare_result(session_id);
+        }
+
+        fn report_tss_offence(
+            session_id: u64,
+            offence_type: u8,
+            offenders: Vec<[u8; 32]>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
         }
     }
 }

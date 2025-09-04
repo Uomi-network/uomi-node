@@ -9,8 +9,8 @@ mod mock;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-mod consts;
-mod types;
+pub mod consts;
+pub mod types;
 mod payloads;
 mod offchain;
 mod opoc;
@@ -23,6 +23,10 @@ pub mod weights;
 pub use weights::*;
 
 use frame_support::pallet_prelude::DispatchClass;
+use frame_support::weights::Weight;
+use sp_runtime::Perbill;
+use sp_staking::offence::{Offence, ReportOffence};
+use sp_staking::{SessionIndex, EraIndex}; // public alias
 use codec::{Decode, Encode};
 use frame_support::{
     BoundedVec,
@@ -34,17 +38,15 @@ use frame_support::{
         DispatchError, DispatchResultWithPostInfo, Hooks, InvalidTransaction, IsType, 
         MaxEncodedLen, Member, RuntimeDebug, StorageDoubleMap, StorageMap, 
         TransactionPriority, TransactionSource, TransactionValidity, ValidTransaction, 
-        ValidateUnsigned, ValueQuery,
+        ValidateUnsigned, ValueQuery, 
     },
     parameter_types,
     storage::types::StorageValue,
-    traits::Randomness,
+    traits::{Randomness, Get},
 };
+use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
-    ensure_signed,
-    ensure_none,
-    offchain::{AppCrypto, CreateSignedTransaction, Signer},
-    pallet_prelude::{BlockNumberFor, OriginFor},
+    ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
 };
 use pallet_ipfs::{
     self,
@@ -52,9 +54,10 @@ use pallet_ipfs::{
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
 };
 use pallet_session::{self as session};
+use pallet_authorship as authorship;
 use sp_core::{H160, U256};
 use sp_runtime::{
-    traits::IdentifyAccount,
+    traits::{IdentifyAccount, Convert, SaturatedConversion},
     DispatchResult,
 };
 use sp_std::{
@@ -76,6 +79,13 @@ pub struct EmptyInherent;
 pub enum InherentError {
     // Definisci qui i tuoi errori specifici
     InvalidInherentValue,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, Default, Copy)]
+pub enum OpocLevel {
+    #[default] Level0,
+    Level1,
+    Level2
 }
 
 // Implementa IsFatalError per il tuo enum
@@ -105,15 +115,29 @@ pub mod pallet {
     pub struct Pallet<T>(PhantomData<T>);
 
     // Config
-	#[pallet::config]
-	pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> + session::Config + pallet_ipfs::Config {
-		type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
-		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-        type RandomnessOld: Randomness<<Self as frame_system::Config>::Hash, BlockNumberFor<Self>>; // For finney update. remove on turing
-		type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
+    #[pallet::config]
+    pub trait Config: frame_system::Config
+        + CreateSignedTransaction<Call<Self>>
+        + session::Config<ValidatorId = <Self as frame_system::Config>::AccountId>
+        + pallet_session::historical::Config
+        + pallet_offences::Config
+        + authorship::Config
+        + pallet_ipfs::Config {
+        type UomiAuthorityId: AppCrypto<Self::Public, Self::Signature>;
+        type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+        type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
+    /// Maximum number of concurrent offchain worker executions allowed per node.
+    /// When the number of running offchain executions reaches this value, further
+    /// attempts will be skipped until some finish.
+    type MaxOffchainConcurrent: Get<u32>;
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
-	}
+        type OffenceReporter: ReportOffence<
+            <Self as frame_system::Config>::AccountId,
+            pallet_session::historical::IdentificationTuple<Self>,
+            EngineReportedOffence<Self>
+        >;
+    }
 
     // Events
     #[pallet::event]
@@ -160,6 +184,17 @@ pub mod pallet {
             inference_index: u32, // The inference index.
             inference_proof: Data, // The inference proof.
         },
+        // --- Offence reporting (structure only, no logic yet) ---
+        EngineOffenceReported {
+            offence_type: EngineOffenceType, // Type of offence
+            request_id: RequestId,            // Request id context (instead of session id)
+            offenders_count: u32,             // Number of offenders included
+        },
+        EngineValidatorSlashed {
+            offender: T::AccountId,   // Offender account id
+            offence_type: EngineOffenceType, // Offence type
+            request_id: RequestId,    // Request id context
+        },
     }
 
     // Errors
@@ -168,7 +203,88 @@ pub mod pallet {
         SomethingWentWrong,
         InvalidAddress,
         InvalidCid,
+    TooManyOffenders,
+    OffenceAlreadyPending,
+    OffenceNoValidOffenders,
     }
+
+    // ------------------------------------------------------------
+    // Offence reporting (structure only)
+    // ------------------------------------------------------------
+    // NOTE: This mirrors the TSS pallet structure but uses `RequestId` instead of `SessionId`.
+    // No execution / processing logic is added yet – this is a scaffolding for future integration.
+
+    // (No staking offence integration yet; keep lean dependencies)
+
+    // Maximum offenders retained per reported engine offence (can be adjusted later).
+    parameter_types! { pub const MaxEngineOffenders: u32 = 128; }
+    // Max automatic timeout scans per block.
+    // Max engine requests scanned per block for majority-output disagreement.
+    parameter_types! { pub const MaxEngineRequestConsensusScans: u32 = 25; }
+
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen)]
+    #[repr(u8)]
+    pub enum EngineOffenceType {
+        /// Validator failed to provide required output within the allowed time window
+        OutputTimeout = 0,
+        /// Submitted output deemed invalid / inconsistent with consensus
+        InvalidOutput = 1,
+        /// Repeated failures or malicious behavior across requests
+        RepeatedMisbehavior = 2,
+    }
+
+    #[derive(RuntimeDebug, Clone)]
+    pub struct EngineReportedOffence<T: Config> {
+        pub offence_type: EngineOffenceType,
+        pub request_id: RequestId,
+        pub session_index: SessionIndex,
+        pub validator_set_count: u32,
+        pub offenders: Vec<pallet_session::historical::IdentificationTuple<T>>,
+    }
+
+    impl<T: Config> Offence<pallet_session::historical::IdentificationTuple<T>> for EngineReportedOffence<T>
+    where
+        T: pallet_session::historical::Config,
+        T: session::Config<ValidatorId = <T as frame_system::Config>::AccountId>,
+    {
+        const ID: [u8; 16] = *b"engine:offence__";
+        type TimeSlot = RequestId;
+        fn offenders(&self) -> Vec<pallet_session::historical::IdentificationTuple<T>> { self.offenders.clone() }
+    fn session_index(&self) -> SessionIndex { self.session_index }
+        fn validator_set_count(&self) -> u32 { self.validator_set_count }
+        fn time_slot(&self) -> Self::TimeSlot { self.request_id }
+        fn slash_fraction(&self, _offenders_count: u32) -> Perbill {
+            match self.offence_type {
+                EngineOffenceType::OutputTimeout => Perbill::from_percent(1),
+                EngineOffenceType::InvalidOutput => Perbill::from_percent(2),
+                EngineOffenceType::RepeatedMisbehavior => Perbill::from_percent(5),
+            }
+        }
+    }
+
+    /// Pending engine offences keyed by request id. (type, reporter, offenders)
+    #[pallet::storage]
+    #[pallet::getter(fn pending_engine_offences)]
+    pub type PendingEngineOffences<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        RequestId,
+        (EngineOffenceType, T::AccountId, BoundedVec<T::AccountId, MaxEngineOffenders>),
+        OptionQuery,
+    >;
+
+    /// Prevent repeated slashing for the same (request_id, offence_type, offender)
+    #[pallet::storage]
+    pub type ProcessedEngineOffenderFlags<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, RequestId,
+        Blake2_128Concat, (T::AccountId, u8), // (offender, offence_type encoded)
+        (),
+        OptionQuery
+    >;
+
+    // Limit how many pending offences we process per block to bound weight.
+    parameter_types! { pub const MaxEngineOffencesPerBlock: u32 = 10; }
 
     // InherentDidUpdate storage is used to store the execution of the inherent function.
 	#[pallet::storage]
@@ -201,26 +317,6 @@ pub mod pallet {
 		bool, // status of work
 		ValueQuery
 	>;
-
-    // NodesTimeouts storage is used to store the number of timeouts that have every validator
-	#[pallet::storage]
-	pub type NodesTimeouts<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId, // account_id
-        u32, // number_of_timeouts
-        ValueQuery
-	>;
-
-    // NodesErrors storage is used to store the number of errors that have every validator
-    #[pallet::storage]
-    pub type NodesErrors<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId, // account_id
-        u32, // number_of_errors
-        ValueQuery
-    >;
 
     // NodesVersions storage is used to store the versions of the nodes.
     #[pallet::storage]
@@ -255,29 +351,32 @@ pub mod pallet {
         RequestId, // request_id
         (
             BlockNumber, // block_number
+            H160, // address
             NftId, // nft_id
             U256, // nft_required_consensus
             U256, // nft_execution_max_time
             Cid, // nft_file_cid
             Data, // input_data
-            Cid, // input_file_cidx
+            Cid, // input_file_cid
         ),
         ValueQuery
 	>;
 
-	// Outputs storage is used to store the outputs of the requests received by the run_request function.
-	#[pallet::storage]
-	pub type Outputs<T: Config> = StorageMap<
-		_,
-		Blake2_128Concat,
-		RequestId, // request_id
-		(
-			Data, // output_data
-			u32, // total executions
-			u32, // total conseusus
-		),
-		ValueQuery
-	>;
+    // Outputs storage is used to store the outputs of the requests received by the run_request function.
+    // Added nft_id to securely link the output to the agent without relying on user-provided payload data.
+    #[pallet::storage]
+    pub type Outputs<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        (
+            Data, // output_data
+            u32, // total executions
+            u32, // total consensus
+            U256, // nft_id (agent id)
+        ),
+        ValueQuery
+    >;
 
 	// OpocBlacklist storage is used to store the blacklist of validators
 	#[pallet::storage]
@@ -297,8 +396,42 @@ pub mod pallet {
         RequestId, // request_id
         Blake2_128Concat,
         T::AccountId, // account_id
-        BlockNumber, // expiration_block_number
+        (BlockNumber, OpocLevel), // expiration_block_number
         ValueQuery
+	>;
+
+    // OpocTimeouts storage is used to store the number of timeouts that have every validator
+	#[pallet::storage]
+	pub type OpocTimeouts<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+		T::AccountId, // account_id
+		bool, // status of timeout
+		ValueQuery
+	>;
+
+    // Track (era, validator) pairs already reset to avoid double subtraction of reward points
+    #[pallet::storage]
+    pub type ProcessedOpocTimeoutEraResets<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, EraIndex,
+        Blake2_128Concat, T::AccountId,
+        (),
+        OptionQuery
+    >;
+
+    // OpocErrors storage is used to store the number of errors that have every validator
+    #[pallet::storage]
+    pub type OpocErrors<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+        T::AccountId, // account_id
+		bool, // status of error
+		ValueQuery
 	>;
 
     // AIModels storage is used to store the AI models and their versions.
@@ -347,11 +480,24 @@ pub mod pallet {
             });
         }
 
-		fn on_finalize(_n: BlockNumberFor<T>) {
+		fn on_finalize(_: BlockNumberFor<T>) {
+            // TEMPORARY MOD FOR TURING TESTNET: Every 100 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
+            let current_block_number = U256::from(0) + <frame_system::Pallet<T>>::block_number();
+            if current_block_number % 100 == U256::zero() {
+                log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
+                OpocBlacklist::<T>::remove_all(None);
+            }
+
             // Be sure that the InherentDidUpdate is set to true and reset it to false.
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "UOMI-ENGINE: inherent must be updated once in the block");
 		}
+
+        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+            Self::detect_invalid_output_offences();
+            if let Err(e) = Self::process_pending_engine_offences() { log::error!("[ENGINE] Offence processing failed: {:?}", e); }
+            Weight::from_parts(20_000,0)
+        }
     }
 
     // The pallet's dispatchable functions that require unsigned payloads are defined here.
@@ -360,8 +506,6 @@ pub mod pallet {
         type Call = Call<T>;
     
         fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-            let current_block_number = frame_system::Pallet::<T>::block_number().into();
-
             match call {
                 Call::set_inherent_data { .. } => {
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -371,11 +515,9 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
-                Call::store_nodes_outputs { .. } => {
-                    // Existing validation for store_nodes_outputs
-                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        log::info!("UOMI-ENGINE: Rejecting store_nodes_outputs unsigned transaction from external origin");
-                        return InvalidTransaction::BadSigner.into()
+                Call::store_nodes_outputs {  payload, signature } => {
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
                     }
 
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -385,13 +527,12 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
-                Call::store_nodes_versions { .. } => {
-                    // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        log::info!("UOMI-ENGINE: Rejecting store_nodes_versions unsigned transaction from external origin");
-                        return InvalidTransaction::BadSigner.into()
+                Call::store_nodes_versions {  payload, signature  } => {
+
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
                     }
-    
+
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
                         .priority(TransactionPriority::MAX)
                         .and_provides(&call)
@@ -399,11 +540,10 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
-                Call::store_nodes_opoc_l0_inferences { .. } => {
-                    // Existing validation for store_nodes_versions
-                    if source == TransactionSource::External && current_block_number < 510000.into() { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-                        log::info!("UOMI-ENGINE: Rejecting store_nodes_opoc_l0_inferences unsigned transaction from external origin");
-                        return InvalidTransaction::BadSigner.into()
+                Call::store_nodes_opoc_l0_inferences { payload, signature } => {
+
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
                     }
 
                     ValidTransaction::with_tag_prefix("UomiEnginePallet")
@@ -414,10 +554,105 @@ pub mod pallet {
                         .build()
                 },
                 _ => {
-                    log::info!("Invalid unsigned call");
                     InvalidTransaction::Call.into()
                 }
             }
+        }
+    }
+
+    // Internal helper impl block (after hooks / unsigned validation)
+    impl<T: Config> Pallet<T> {
+        fn insert_pending_offence(
+            request_id: RequestId,
+            reporter: T::AccountId,
+            offence_type: EngineOffenceType,
+            offenders: Vec<T::AccountId>,
+        ) -> DispatchResult {
+            ensure!(!PendingEngineOffences::<T>::contains_key(&request_id), Error::<T>::OffenceAlreadyPending);
+            let mut uniq: Vec<T::AccountId> = Vec::new();
+            for a in offenders { if !uniq.contains(&a) { uniq.push(a); } }
+            ensure!(!uniq.is_empty(), Error::<T>::OffenceNoValidOffenders);
+            let bounded: BoundedVec<T::AccountId, MaxEngineOffenders> = uniq.clone().try_into().map_err(|_| Error::<T>::TooManyOffenders)?;
+            PendingEngineOffences::<T>::insert(&request_id, (offence_type, reporter.clone(), bounded.clone()));
+
+
+            // We delete all OpocErrors with request_id=request_id
+            OpocErrors::<T>::remove_prefix(&request_id, None);
+
+
+            Self::deposit_event(Event::EngineOffenceReported { offence_type, request_id, offenders_count: bounded.len() as u32 });
+            Ok(())
+        }
+
+        // Detect invalid outputs using OpocErrors storage: any validator flagged with an error
+        // (OpocErrors[rid][validator] == true) is considered an offender for InvalidOutput.
+        // We scan distinct request_ids up to MaxEngineRequestConsensusScans per block.
+        fn detect_invalid_output_offences() {
+            use sp_std::collections::btree_set::BTreeSet;
+            let mut processed: BTreeSet<RequestId> = BTreeSet::new();
+            for (rid, _acc, flag) in OpocErrors::<T>::iter() {
+                if !flag { continue; }
+                if processed.len() as u32 >= MaxEngineRequestConsensusScans::get() { break; }
+                if processed.contains(&rid) { continue; }
+                processed.insert(rid);
+                let offenders: Vec<T::AccountId> = OpocErrors::<T>::iter_prefix(rid)
+                    .filter(|(_, has_err)| *has_err)
+                    .map(|(acc, _)| acc)
+                    .collect();
+                if offenders.is_empty() { continue; }
+
+                // Check if the request was completed, aka it's in Outputs
+                if !Outputs::<T>::contains_key(&rid) {
+                    // request was not completed yet, this might be not an error yet
+                    continue;
+                }
+
+                // Reporter: current block author if available and not among offenders, otherwise first non-offender with output, else first offender.
+                let block_author_opt = <authorship::Pallet<T>>::author();
+                let reporter = block_author_opt
+                    .filter(|a| !offenders.contains(a))
+                    .or_else(||
+                        NodesOutputs::<T>::iter_prefix(rid)
+                            .find(|(acc, _)| !offenders.contains(acc))
+                            .map(|(acc, _)| acc)
+                    )
+                    .or_else(|| offenders.first().cloned());
+                if let Some(rep) = reporter { let _ = Self::insert_pending_offence(rid, rep, EngineOffenceType::InvalidOutput, offenders); }
+            }
+        }
+
+        pub fn process_pending_engine_offences() -> DispatchResult {
+            let mut to_process: Vec<RequestId> = Vec::new();
+            for (rid, _) in PendingEngineOffences::<T>::iter().take(MaxEngineOffencesPerBlock::get() as usize) { to_process.push(rid); }
+            for rid in to_process.into_iter() {
+                if let Some((off_type, reporter, offenders)) = PendingEngineOffences::<T>::take(rid) {
+                    let session_index = session::Pallet::<T>::current_index();
+                    let mut tuples: Vec<pallet_session::historical::IdentificationTuple<T>> = Vec::new();
+                    for acc in offenders.into_inner() {
+                        let key = (acc.clone(), off_type as u8);
+                        if ProcessedEngineOffenderFlags::<T>::contains_key(rid, key.clone()) { continue; }
+                        if let Some(full) = <T as pallet_session::historical::Config>::FullIdentificationOf::convert(acc.clone()) {
+                            tuples.push((acc.clone(), full));
+                            ProcessedEngineOffenderFlags::<T>::insert(rid, key, ());
+                        }
+                    }
+                    if tuples.is_empty() { continue; }
+                    let validator_set_count = pallet_session::Pallet::<T>::validators().len() as u32;
+                    let offence = EngineReportedOffence::<T> {
+                        offence_type: off_type,
+                        request_id: rid,
+                        session_index,
+                        validator_set_count,
+                        offenders: tuples.clone(),
+                    };
+                    if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
+                        log::error!("[ENGINE] Report offence failed: {:?}", e);
+                    } else {
+                        for (acc, _) in tuples.into_iter() { Self::deposit_event(Event::EngineValidatorSlashed { offender: acc, offence_type: off_type, request_id: rid }); }
+                    }
+                }
+            }
+            Ok(())
         }
     }
 
@@ -428,17 +663,16 @@ pub mod pallet {
 		#[pallet::weight((500_000, DispatchClass::Mandatory))]
 		pub fn set_inherent_data(
 			origin: OriginFor<T>,
-			opoc_operations: (
-                BTreeMap<T::AccountId, bool>, 
-                BTreeMap<(RequestId, T::AccountId), BlockNumber>, 
-                BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, 
-                BTreeMap<T::AccountId, u32>, 
-                BTreeMap<T::AccountId, u32>, 
-                BTreeMap<RequestId, (Data, u32, u32)>
+            opoc_operations: (
+                BTreeMap<T::AccountId, bool>,
+                BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
+                BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
+                BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
+                BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
+                BTreeMap<RequestId, (Data, u32, u32, U256)>
             ),
             aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
 		) -> DispatchResultWithPostInfo {
-            log::info!("UOMI-ENGINE: Inherent data called");
 			ensure_none(origin)?;
             assert!(!InherentDidUpdate::<T>::exists(), "Inherent data must be updated only once in the block");
 			
@@ -446,7 +680,6 @@ pub mod pallet {
             Self::aimodelscalc_store_operations(aimodelscalc_operations)?;
 
 			InherentDidUpdate::<T>::set(true);
-            log::info!("UOMI-ENGINE: Inherent data set");
 			Ok(().into())
 		}
         
@@ -457,11 +690,9 @@ pub mod pallet {
             payload: payloads::PayloadNodesOutputs<T::Public>,
 			_signature: T::Signature
         ) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Storing nodes outputs");
             ensure_none(origin)?;
 
             let payloads::PayloadNodesOutputs { request_id, output_data, public } = payload;
-            log::info!("UOMI-ENGINE: Storing output for request ID: {:?}", request_id);
 
             let public_account_id = public.into_account();
 
@@ -476,7 +707,6 @@ pub mod pallet {
                 return Err("Request ID already exists".into());
             }
 
-            log::info!("UOMI-ENGINE: Stored output for request ID: {:?}", request_id);
             NodesOutputs::<T>::insert(request_id, public_account_id.clone(), output_data.clone());
 
             Self::deposit_event(Event::NodeOutputReceived { request_id, account_id: public_account_id, output_data });
@@ -491,24 +721,19 @@ pub mod pallet {
             payload: payloads::PayloadNodesVersions<T::Public>,
             _signature: T::Signature
         ) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Storing node version onchain");
             ensure_none(origin)?;
             let payloads::PayloadNodesVersions { public, version } = payload;
             let public_account_id = public.into_account();
-            log::info!("UOMI-ENGINE: Storing version for account ID: {:?}", public_account_id);
 
             if !Self::address_is_active_validator(&public_account_id) {
-                log::info!("UOMI-ENGINE: Only validators can call this function");
                 return Err("Only validators can call this function".into());
             }
 
             let current_stored_version = NodesVersions::<T>::get(&public_account_id);
             if current_stored_version == version {
-                log::info!("UOMI-ENGINE: Version already stored");
                 return Err("Version already stored".into());
             }
 
-            log::info!("UOMI-ENGINE: Stored version: {:?}", version);
             NodesVersions::<T>::set(public_account_id.clone(), version);
 
             Self::deposit_event(Event::NodeVersionReceived { account_id: public_account_id, version });
@@ -518,7 +743,7 @@ pub mod pallet {
 
         #[pallet::call_index(3)]
         #[pallet::weight(0)]
-        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
+        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult {
             log::info!("UOMI-ENGINE: Cleaning up inputs");
             let _ = ensure_signed(origin)?;
             
@@ -530,29 +755,20 @@ pub mod pallet {
 
             Ok(())
         }
+       
 
         #[pallet::call_index(4)]
-        #[pallet::weight(0)]
-        pub fn temporary_function(origin: OriginFor<T>) -> DispatchResult { // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-            let _ = ensure_none(origin)?;
-            Ok(())
-        }
-
-        #[pallet::call_index(5)]
         #[pallet::weight(0)]
         pub fn store_nodes_opoc_l0_inferences(
             origin: OriginFor<T>, 
             payload: payloads::PayloadNodesOpocL0Inferences<T::Public>,
             _signature: T::Signature
         ) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Storing opoc l0 inferences onchain");
             ensure_none(origin)?;
             let payloads::PayloadNodesOpocL0Inferences { public, request_id, inference_index, inference_proof } = payload;
             let public_account_id = public.into_account();
-            log::info!("UOMI-ENGINE: Storing version for account ID: {:?}", public_account_id);
 
             if !Self::address_is_active_validator(&public_account_id) {
-                log::info!("UOMI-ENGINE: Only validators can call this function");
                 return Err("Only validators can call this function".into());
             }
 
@@ -561,16 +777,27 @@ pub mod pallet {
                 NodesOpocL0Inferences::<T>::contains_key(request_id, account_id) && NodesOpocL0Inferences::<T>::get(request_id, account_id).0 == inference_index
             };
             if inference_already_exists(request_id, &public_account_id, inference_index) {
-                log::info!("UOMI-ENGINE: Inference already exists");
                 return Err("Inference already exists".into());
             }
 
-            log::info!("UOMI-ENGINE: Stored inference for request ID: {:?}", request_id);
             NodesOpocL0Inferences::<T>::insert(request_id, public_account_id.clone(), (inference_index, inference_proof.clone()));
 
             Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof });
 
             Ok(())
+        }
+
+        #[pallet::call_index(240)]
+        #[pallet::weight(10_000)]
+        pub fn report_engine_offence(
+            origin: OriginFor<T>,
+            request_id: RequestId,
+            offence_type_raw: u8,
+            offenders: Vec<T::AccountId>,
+        ) -> DispatchResult {
+            let reporter = ensure_signed(origin)?;
+            let offence_type = match offence_type_raw { 0 => EngineOffenceType::OutputTimeout, 1 => EngineOffenceType::InvalidOutput, 2 => EngineOffenceType::RepeatedMisbehavior, _ => return Err(Error::<T>::SomethingWentWrong.into()) };
+            Self::insert_pending_offence(request_id, reporter, offence_type, offenders)
         }
     }
 
@@ -583,18 +810,12 @@ pub mod pallet {
     
         fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
-            log::info!("UOMI-ENGINE: Creating inherent data for block number: {:?}", current_block_number);
 
             let opoc_operations = match Self::opoc_run(current_block_number) {
                 Ok(operations) => {
-                    log::info!(
-                        "Successfully ran OPoC at block {:?}", 
-                        current_block_number
-                    );
                     operations
                 },
                 Err(error) => {
-                    log::info!("UOMI-ENGINE: Failed to run OPoC on create_inherent. error: {:?}", error);
                     return None;
                 },
             };
@@ -604,7 +825,6 @@ pub mod pallet {
                     operations
                 },
                 Err(error) => {
-                    log::info!("UOMI-ENGINE: Failed to run AI models calc on create_inherent. error: {:?}", error);
                     return None;
                 },
             };
@@ -618,70 +838,69 @@ pub mod pallet {
         fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
             let expected_block_number = current_block_number + 1;
-            log::info!("UOMI-ENGINE: Checking inherent data for block number: {:?}", expected_block_number);
 
             match call {
                 Call::set_inherent_data { opoc_operations, aimodelscalc_operations } => {
-                    // let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
-                    //     Ok(opoc_operations) => {
-                    //         opoc_operations
-                    //     },
-                    //     Err(error) => {
-                    //         log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
-                    //         return Err(InherentError::InvalidInherentValue);
-                    //     },
-                    // };
-                    // let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, nodes_timeouts_operations, outputs_operations, nodes_errors_operations) = opoc_operations;
-                    // let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_nodes_timeouts_operations, expected_outputs_operations, expected_nodes_errors_operations) = expected_opoc_operations;
+                    let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
+                        Ok(opoc_operations) => {
+                            opoc_operations
+                        },
+                        Err(error) => {
+                            log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
+                            return Err(InherentError::InvalidInherentValue);
+                        },
+                    };
+                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, opoc_timeouts_operations, opoc_errors_operations, outputs_operations) = opoc_operations;
+                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_opoc_timeouts_operations, expected_opoc_errors_operations, expected_outputs_operations) = expected_opoc_operations;
                     
-                    // if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
-                    //     log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
-                    //     log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if opoc_assignment_operations != &expected_opoc_assignment_operations {
-                    //     log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
-                    //     log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_works_operations != &expected_nodes_works_operations {
-                    //     log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
-                    //     log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_timeouts_operations != &expected_nodes_timeouts_operations {
-                    //     log::info!("failed check nodes_timeouts_operations: {:?}", nodes_timeouts_operations);
-                    //     log::info!("expected_nodes_timeouts_operations: {:?}", expected_nodes_timeouts_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if outputs_operations != &expected_outputs_operations {
-                    //     log::info!("failed check outputs_operations: {:?}", outputs_operations);
-                    //     log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
-                    // if nodes_errors_operations != &expected_nodes_errors_operations {
-                    //     log::info!("failed check nodes_errors_operations: {:?}", nodes_errors_operations);
-                    //     log::info!("expected_nodes_errors_operations: {:?}", expected_nodes_errors_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
+                    if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
+                        log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
+                        log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if opoc_assignment_operations != &expected_opoc_assignment_operations {
+                        log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
+                        log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if nodes_works_operations != &expected_nodes_works_operations {
+                        log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
+                        log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if opoc_timeouts_operations != &expected_opoc_timeouts_operations {
+                        log::info!("failed check opoc_timeouts_operations: {:?}", opoc_timeouts_operations);
+                        log::info!("expected_opoc_timeouts_operations: {:?}", expected_opoc_timeouts_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if outputs_operations != &expected_outputs_operations {
+                        log::info!("failed check outputs_operations: {:?}", outputs_operations);
+                        log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
+                    if opoc_errors_operations != &expected_opoc_errors_operations {
+                        log::info!("failed check opoc_errors_operations: {:?}", opoc_errors_operations);
+                        log::info!("expected_opoc_errors_operations: {:?}", expected_opoc_errors_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
 
-                    // let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
-                    //     Ok(operations) => {
-                    //         operations
-                    //     },
-                    //     Err(error) => {
-                    //         log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
-                    //         return Err(InherentError::InvalidInherentValue);
-                    //     },
-                    // };
+                    let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
+                        Ok(operations) => {
+                            operations
+                        },
+                        Err(error) => {
+                            log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
+                            return Err(InherentError::InvalidInherentValue);
+                        },
+                    };
                     
-                    // if expected_aimodelscalc_operations != *aimodelscalc_operations {
-                    //     log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
-                    //     log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
-                    //     return Err(InherentError::InvalidInherentValue);
-                    // }
+                    if expected_aimodelscalc_operations != *aimodelscalc_operations {
+                        log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
+                        log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
+                        return Err(InherentError::InvalidInherentValue);
+                    }
 
-                    // log::info!("UOMI-ENGINE: Checking inherent OK");
+                    log::info!("UOMI-ENGINE: Checking inherent OK");
  
                     Ok(())
                 }
@@ -691,10 +910,6 @@ pub mod pallet {
         
         fn is_inherent(call: &Self::Call) -> bool {
             let is_inherent = matches!(call, Call::set_inherent_data { .. });
-            log::info!(
-                "🔍 is_inherent called, result: {:?}", 
-                is_inherent
-            );
             is_inherent
         }
     }
@@ -781,18 +996,12 @@ impl<T: Config> Pallet<T> {
                 nft_file_cid_expiration_block_number != ExpirationBlockNumber::zero() &&
                 block_number + ipfs_min_expire_duration > nft_file_cid_expiration_block_number
             {
-                log::info!(
-                    "UOMI-ENGINE: NFT file cid {:?} expired before the minimum expiration duration",
-                    nft_file_cid
-                );
                 return Err("NFT file cid expired before the minimum expiration duration.".into());
             }
             if nft_file_cid_usable_from_block_number == UsableFromBlockNumber::zero() {
-                log::info!("UOMI-ENGINE: NFT file cid {:?} not usable yet", nft_file_cid);
                 return Err("NFT file cid not usable yet.".into());
             }
             if nft_file_cid_usable_from_block_number > current_block {
-                log::info!("UOMI-ENGINE: NFT file cid {:?} not usable yet", nft_file_cid);
                 return Err("NFT file cid not usable yet.".into());
             }
         }
@@ -802,47 +1011,11 @@ impl<T: Config> Pallet<T> {
         let nft_execution_max_time = min_blocks;
 
         // Store the inputs in the Inputs storage
-        Inputs::<T>::insert(request_id, (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
-
-        // NOTE: This code is used to maintain the retro-compatibility with old blocks on finney network
-        if request_id <= U256::from(47) && nft_required_consensus <= U256::from(1) {
-            log::info!("UOMI-ENGINE: Managed old unsecured mode");
-            let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
-            let mut opoc_assignment_operations = BTreeMap::<(U256, T::AccountId), U256>::new();
-            let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<U256, bool>>::new();
-            let current_block = frame_system::Pallet::<T>::block_number().into();
-            match Self::opoc_assignment_finney_v1(
-                &mut opoc_blacklist_operations,
-                &mut opoc_assignment_operations,
-                &mut nodes_works_operations,
-                &request_id,
-                &current_block,
-                1,
-                vec![],
-                true
-            ) {
-                Ok(_) => {
-                    log::info!("UOMI-ENGINE: Request assigned to a random validator for OPoC level 0 on run_request");
-                    Self::opoc_store_operations((
-                        opoc_blacklist_operations,
-                        opoc_assignment_operations,
-                        nodes_works_operations,
-                        BTreeMap::<T::AccountId, u32>::new(),
-                        BTreeMap::<T::AccountId, u32>::new(),
-                        BTreeMap::<RequestId, (Data, u32, u32)>::new()
-                    ))?;
-                },
-                Err(error) => {
-                    log::error!("UOMI-ENGINE: Failed to assign request to a random validator for OPoC level 0 on run_request. error: {:?}", error);
-                    // NOTE: If assigned is not valid, is not a problem, the request should be assigned by the opoc execution
-                },
-            };
-        }
+        Inputs::<T>::insert(request_id, (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid));
 
         // Emit the RequestAccepted event
         Self::deposit_event(Event::RequestAccepted { request_id, address, nft_id });
 
-        log::info!("UOMI-ENGINE: Accepted request with ID on run_request: {:?}", request_id);
         Ok(())
     }
 
@@ -890,5 +1063,21 @@ impl<T: Config> Pallet<T> {
         data[0..20].copy_from_slice(&address.as_bytes());
         T::AccountId::decode(&mut &data[..])
             .map_err(|_| DispatchError::Other("Failed to decode account"))
+    }
+
+    /// Verify a payload's signature
+    pub fn verify_signature<SP>(
+        public: T::Public, 
+        payload: &SP, 
+        signature: &T::Signature 
+    )-> bool where 
+    SP:SignedPayload<T>,
+     {
+        if Self::address_is_active_validator(&public.into_account()) {
+            // Convert the public key to an account ID before verifying
+            T::UomiAuthorityId::verify(&payload.encode(), payload.public(), signature.clone())
+        } else {
+            false
+        }
     }
 }

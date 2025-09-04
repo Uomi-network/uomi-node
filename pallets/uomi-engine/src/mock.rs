@@ -42,16 +42,12 @@ use sp_std::collections::btree_map::BTreeMap;
 
 // Local imports
 use crate::{
-    Call,
-    DispatchResult,
-    InherentError,
-    types::{AiModelKey, BlockNumber, Data, RequestId},
+    types::{AiModelKey, BlockNumber, Data, RequestId}, Call, DispatchResult, InherentError, OpocLevel
 };
 use crate as pallet_uomi_engine;
 use pallet_uomi_engine::Call as UomiCall;
 
 type Balance = u128;
-// type BlockNumber = u64;
 type AccountId = Public;
 
 frame_support::construct_runtime!(
@@ -62,8 +58,10 @@ frame_support::construct_runtime!(
        Timestamp: pallet_timestamp,
        Staking: pallet_staking,
        Session: pallet_session,
-       Babe: pallet_babe,
-       Ipfs: pallet_ipfs
+    Babe: pallet_babe,
+    Ipfs: pallet_ipfs,
+    Offences: pallet_offences,
+    Historical: pallet_session::historical,
    }
 );
 
@@ -72,6 +70,7 @@ parameter_types! {
     pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
     pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
     pub const ExpectedBlockTime: u64 = 6_000;
+        pub const TestMaxOffchainConcurrent: u32 = 1;
 }
 
 pub struct IpfsWrapper;
@@ -136,11 +135,11 @@ impl onchain::Config for OnChainSeqPhragmen {
 impl MockInherentDataProvider {
     fn opoc_run() -> Result<(
         BTreeMap<AccountId, bool>,
-        BTreeMap<(RequestId, AccountId), BlockNumber>,
+        BTreeMap<(RequestId, AccountId), (BlockNumber, OpocLevel)>,
         BTreeMap<AccountId, BTreeMap<RequestId, bool>>,
-        BTreeMap<AccountId, u32>,
-        BTreeMap<AccountId, u32>,
-        BTreeMap<RequestId, (Data, u32, u32)>
+        BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
+        BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
+        BTreeMap<RequestId, (Data, u32, u32, U256)>
     ), DispatchError> {
         Ok((
             BTreeMap::new(),
@@ -359,6 +358,23 @@ impl Get<&'static str> for TestIpfsUrl {
         &"http://127.0.0.1:5001/api/v0"
     }
 }
+
+// Mock implementation for TssInterface to satisfy pallet_ipfs Config in this test runtime
+pub struct MockTssInterface;
+
+impl uomi_primitives::TssInterface<Test> for MockTssInterface {
+    fn create_agent_wallet(_nft_id: sp_core::U256, _threshold: u8) -> frame_support::pallet_prelude::DispatchResult {
+        Ok(())
+    }
+
+    fn agent_wallet_exists(_nft_id: sp_core::U256) -> bool {
+        true
+    }
+
+    fn get_agent_wallet_address(_nft_id: sp_core::U256) -> Option<sp_core::H160> {
+        None
+    }
+}
 impl pallet_ipfs::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type IpfsApiUrl = TestIpfsUrl;
@@ -366,16 +382,52 @@ impl pallet_ipfs::Config for Test {
     type Currency = pallet_balances::Pallet<Test>;
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    type TssInterface = MockTssInterface;
 }
 
 impl pallet_uomi_engine::Config for Test {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Test>; // for finney update. remove on turing
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
+    type MaxOffchainConcurrent = TestMaxOffchainConcurrent;
+    type OffenceReporter = TestOffenceReporter;
 }
+
+// Provide minimal implementations required by the pallet Config trait bounds.
+// Provide an identity converter (AccountId -> Option<AccountId>) for historical session pallet
+pub struct IdentityOf;
+impl sp_runtime::traits::Convert<AccountId, Option<AccountId>> for IdentityOf {
+    fn convert(a: AccountId) -> Option<AccountId> { Some(a) }
+}
+
+impl pallet_session::historical::Config for Test {
+    type FullIdentification = AccountId; // minimal
+    type FullIdentificationOf = IdentityOf; // simple identity mapping
+}
+
+impl pallet_offences::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
+    type OnOffenceHandler = (); // no-op in tests
+}
+
+impl pallet_authorship::Config for Test {
+    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
+    type EventHandler = ();
+}
+
+// Provide a minimal OffenceReporter for the mock runtime so the pallet's Config
+// associated type is satisfied in tests.
+pub struct TestOffenceReporter;
+impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking::offence::ReportOffence<Reporter, Offender, Off> for TestOffenceReporter {
+    fn report_offence(_reporters: Vec<Reporter>, _offence: Off) -> Result<(), sp_staking::offence::OffenceError> { Ok(()) }
+    fn is_known_offence(_offenders: &[Offender], _time_slot: &Off::TimeSlot) -> bool { false }
+}
+
+// Minimal authorship config to satisfy trait bounds in tests (no-op implementations)
+// No authorship-specific behavior needed in tests; authorship is implemented in other test modules.
 
 impl pallet_timestamp::Config for Test {
    type Moment = u64;

@@ -40,6 +40,8 @@ use sp_runtime::{
     generic,
     traits::{BlakeTwo256, IdentifyAccount, Verify},
 };
+use frame_support::{BoundedVec};
+
 
 /// Alias to 512-bit hash when used in the context of a transaction signature on the chain.
 pub type Signature = sp_runtime::MultiSignature;
@@ -69,3 +71,16 @@ pub type AssetId = u128;
 pub type Block = sp_runtime::generic::Block<Header, sp_runtime::OpaqueExtrinsic>;
 /// Index of a transaction in the chain.
 pub type Nonce = u32;
+
+/// Trait for TSS (Threshold Signature Scheme) functionality
+/// This allows other pallets to interact with TSS without direct dependencies
+pub trait TssInterface<T: frame_system::Config> {
+    /// Create a new wallet for an agent
+    fn create_agent_wallet(nft_id: sp_core::U256, threshold: u8) -> frame_support::pallet_prelude::DispatchResult;
+    
+    /// Check if a wallet exists for an agent
+    fn agent_wallet_exists(nft_id: sp_core::U256) -> bool;
+    
+    /// Get wallet address for an agent
+    fn get_agent_wallet_address(nft_id: sp_core::U256) -> Option<sp_core::H160>;
+}

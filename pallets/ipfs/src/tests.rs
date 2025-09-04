@@ -83,8 +83,9 @@ fn test_pin_agent_works() {
         let account = create_test_account();
         let cid = create_test_cid();
         let nft_id = U256::from(1);
+        let threshold = 90;
 
-        assert_ok!(TestingPallet::pin_agent(RuntimeOrigin::signed(account), cid.clone(), nft_id));
+        assert_ok!(TestingPallet::pin_agent(RuntimeOrigin::signed(account), cid.clone(), nft_id, threshold));
 
         // Check storage updates
         assert_eq!(AgentsPins::<Test>::get(nft_id), cid);
@@ -250,14 +251,15 @@ fn test_pin_agent_update() {
         let cid2 = BoundedVec::try_from(vec![1, 2, 4]).expect("Vector exceeds the bound");
 
         let nft_id = U256::from(1);
+        let threshold = 90;
 
         // Pin first CID
         assert_ok!(
-            TestingPallet::pin_agent(RuntimeOrigin::signed(account.clone()), cid1.clone(), nft_id)
+            TestingPallet::pin_agent(RuntimeOrigin::signed(account.clone()), cid1.clone(), nft_id, threshold)
         );
 
         // Update with second CID
-        assert_ok!(TestingPallet::pin_agent(RuntimeOrigin::signed(account), cid2.clone(), nft_id));
+        assert_ok!(TestingPallet::pin_agent(RuntimeOrigin::signed(account), cid2.clone(), nft_id, threshold));
 
         // Check storage updates
         assert_eq!(AgentsPins::<Test>::get(nft_id), cid2);
@@ -483,6 +485,7 @@ fn test_concurrent_pin_operations() {
         let account = create_test_account();
         let initial_cid = create_test_cid();
         let nft_id = U256::from(1);
+        let threshold = 90;
 
         // Add debug logging for initial state
         log::info!("Initial block number: {:?}", System::block_number());
@@ -493,7 +496,8 @@ fn test_concurrent_pin_operations() {
             TestingPallet::pin_agent(
                 RuntimeOrigin::signed(account.clone()),
                 initial_cid.clone(),
-                nft_id
+                nft_id,
+                threshold
             )
         );
 
@@ -506,7 +510,8 @@ fn test_concurrent_pin_operations() {
             TestingPallet::pin_agent(
                 RuntimeOrigin::signed(account.clone()),
                 initial_cid.clone(),
-                nft_id
+                nft_id,
+                threshold
             ),
             Error::<Test>::SomethingWentWrong
         );
@@ -531,7 +536,8 @@ fn test_concurrent_pin_operations() {
                 TestingPallet::pin_agent(
                     RuntimeOrigin::signed(account.clone()),
                     new_cid.clone(),
-                    nft_id
+                    nft_id,
+                    threshold
                 )
             );
 
@@ -657,10 +663,11 @@ fn test_edge_case_pin_scenarios() {
         for i in 0..100 {
             let mut cid_data = vec![18, 32];
             cid_data.extend_from_slice(&[i as u8; 45]);
+            let threshold = 90;
             let new_cid = BoundedVec::try_from(cid_data).expect("Vector exceeds bound");
 
             assert_ok!(
-                TestingPallet::pin_agent(RuntimeOrigin::signed(account.clone()), new_cid, nft_id)
+                TestingPallet::pin_agent(RuntimeOrigin::signed(account.clone()), new_cid, nft_id, threshold)
             );
         }
     });

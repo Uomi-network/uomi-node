@@ -2,18 +2,22 @@ use frame_support::pallet_prelude::{DispatchError, DispatchResult};
 use frame_system::offchain::{SendUnsignedTransaction, Signer};
 use pallet_ipfs::types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber};
 use pallet_ipfs::MinExpireDuration;
-use sp_core::U256;
+use sp_core::{U256, H160};
 use sp_std::{
     vec,
     vec::Vec,
 };
+use sp_core::Get;
 use scale_info::prelude::string::String;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
-static mut SEMAPHORE: AtomicBool = AtomicBool::new(false);
+// Counter for concurrent offchain executions.
+// AtomicU32 is Sync and const-initializable, so we can use a plain static without unsafe.
+static SEMAPHORE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+use crate::OpocLevel;
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION, TEMP_BLOCK_FOR_NEW_OPOC},
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
     ipfs::IpfsInterface,
     payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
@@ -47,18 +51,37 @@ struct CallAiResponseCleaned {
 
 
 impl<T: Config> Pallet<T> {
-    pub fn semaphore_status() -> bool {
-        unsafe { SEMAPHORE.load(Ordering::Relaxed) }
+    /// Returns current number of active offchain executions.
+    pub fn semaphore_status() -> u32 {
+    SEMAPHORE_COUNTER.load(Ordering::Relaxed)
+    }
+
+    // Test-only helpers to safely manipulate the counter using the same
+    // semantics as production code (CAS for acquire, atomic decrement for release).
+    #[cfg(test)]
+    pub fn test_acquire_slot() -> bool {
+        let max = <T as Config>::MaxOffchainConcurrent::get();
+        let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
+        loop {
+            if current >= max { return false; }
+            match SEMAPHORE_COUNTER.compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(v) => current = v,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn test_release_slot() {
+        SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
     }
 
     // Offchain worker entry point
     #[cfg(feature = "std")]
     pub fn offchain_run(account_id: &T::AccountId) -> DispatchResult {
-        log::info!("UOMI-ENGINE: Running offchain worker");
 
         // Be sure account is a validator, if not, do nothing
         if !cfg!(test) && !Self::address_is_active_validator(account_id) {
-            log::info!("UOMI-ENGINE: Account is not a validator, skipping this run");
             return Ok(());
         }
 
@@ -80,38 +103,51 @@ impl<T: Config> Pallet<T> {
 
     #[cfg(feature = "std")]
     fn offchain_run_agents(account_id: &T::AccountId) -> DispatchResult {
-        log::info!("UOMI-ENGINE: Running agents");
-
-        // Check semaphore to be sure to do nothing if another agent is running
-        // SAFETY: This is safe because offchain workers run in their own thread
-        let semaphore = unsafe { &SEMAPHORE };
-        if semaphore.compare_exchange(
-            false,  // expected value
-            true,   // new value
-            Ordering::Acquire,
-            Ordering::Relaxed
-        ).is_err() {
-            // Another worker is already running
-            log::info!("UOMI-ENGINE: Another worker is already running");
-            return Ok(());
+        // Try to acquire a slot in the semaphore counter. If the number of
+        // concurrent executions is >= configured max, skip execution.
+        let max = <T as Config>::MaxOffchainConcurrent::get();
+        let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
+        loop {
+            if current >= max {
+                // No slots available
+                return Ok(());
+            }
+            match SEMAPHORE_COUNTER.compare_exchange(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break, // acquired slot
+                Err(v) => current = v,
+            }
         }
 
         // Find the request with less expiration block number to execute
-        let (request_id, expiration_block_number) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
+        let (request_id, (expiration_block_number, _opoc_level)) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
-            log::info!("UOMI-ENGINE: No requests to run found");
-            // Unlock the semaphore
-            semaphore.store(false, Ordering::Release);
+            // Unlock the semaphore (decrement counter)
+            SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
             return Ok(());
         }
-        log::info!("UOMI-ENGINE: Request with request id: {:?} - Expiration block number: {:?}", request_id, expiration_block_number);
 
         // Load request data from Inputs storage
-        let (block_number, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
-        log::info!("UOMI-ENGINE: Request data loaded with block number: {:?}, nft_id: {:?} and nft_execution_max_time: {:?}", block_number, nft_id, nft_execution_max_time);
+        let (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
 
         // Detect the level of opoc the execution should have
-        let opoc_level = Self::offchain_detect_opoc_level(&request_id, &nft_required_consensus);
+        let opoc_level = match Self::offchain_detect_opoc_level(&request_id, &account_id) {
+            Ok(level) => level,
+            Err(error) => {
+                log::error!("UOMI-ENGINE: Error detecting opoc level: {:?}", error);
+                // In case of error checking the opoc level, complete the request with an empty output
+                Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
+                    log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
+                });
+                // Unlock the semaphore (decrement counter)
+                SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
+                return Ok(());
+            }
+        };
 
         // Load wasm associated to the request nft_id
         let wasm = match Self::offchain_load_wasm_from_nft_id(&nft_id, &nft_file_cid) {
@@ -122,19 +158,23 @@ impl<T: Config> Pallet<T> {
                 Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
-                // Unlock the semaphore
-                semaphore.store(false, Ordering::Release);
+                // Unlock the semaphore (decrement counter)
+                SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
                 return Ok(());
             },
         };
-        log::info!("UOMI-ENGINE: Wasm loaded with length: {:?}", wasm.len());
 
         // Run the wasm and store the output data
-        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, opoc_level, request_id) {
+        match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id, opoc_level) {
             Ok(output_data) => {
-                log::info!("UOMI-ENGINE: Request {:?} executed successfully with output data length: {:?}", request_id, output_data.len());
+                let mut final_output_data = output_data.clone();
+                // To avoid storing empty data, we force the output data to be at least 1 byte
+                if final_output_data == Data::default() {
+                    final_output_data = Data::try_from(vec![0u8]).unwrap_or_default();
+                }
+
                 // Store the output data
-                Self::offchain_store_output_data(&request_id, &output_data).unwrap_or_else(|e| {
+                Self::offchain_store_output_data(&request_id, &final_output_data).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
             },
@@ -147,41 +187,36 @@ impl<T: Config> Pallet<T> {
             },
         }
 
-        // Unlock the semaphore
-        semaphore.store(false, Ordering::Release);
+        // Unlock the semaphore (decrement counter)
+        SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
 
-        log::info!("UOMI-ENGINE: Request {:?} completed", request_id);
         Ok(())
     }
 
-    fn offchain_find_request_with_min_expiration_block_number(account_id: &T::AccountId) -> (RequestId, BlockNumber) {
-        let mut opoc_assignments = Vec::<(RequestId, BlockNumber)>::new();
+    fn offchain_find_request_with_min_expiration_block_number(account_id: &T::AccountId) -> (RequestId, (BlockNumber,OpocLevel)) {
+        let mut opoc_assignments = Vec::<(RequestId, (BlockNumber, OpocLevel))>::new();
         let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
 
         for (request_id, _) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
-            log::info!("Checking request: {:?}", request_id);
 
             // Check if the request is assigned to the validator by checking if the request_id is in the OpocAssignment storage
             let has_opoc_assignment = OpocAssignment::<T>::contains_key(*request_id, &account_id);
             if !has_opoc_assignment {
-                log::info!("Request {:?} is not assigned to the validator", request_id);
                 continue;
             }
 
             // Be sure request is not already managed by checking if the request_id is in the NodesOutputs storage
             let has_node_output = NodesOutputs::<T>::contains_key(*request_id, &account_id);
             if has_node_output {
-                log::info!("Request {:?} is already managed", request_id);
                 continue;
             }
 
             // Read the expiration_block_number from the OpocAssignment storage
-            let expiration_block_number = OpocAssignment::<T>::get(*request_id, &account_id);
+            let opoc_assignement_data = OpocAssignment::<T>::get(*request_id, &account_id);
 
             // Add the request_id and expiration_block_number to the opoc_assignment vector
-            opoc_assignments.push((*request_id, expiration_block_number));
+            opoc_assignments.push((*request_id, opoc_assignement_data));//TODO LUCA SISTEMARE
 
-            log::info!("Request {:?} is assigned to the validator and not already managed", request_id);
         }
 
         // Return zero if no opoc_assignments has been found
@@ -190,7 +225,7 @@ impl<T: Config> Pallet<T> {
         }
 
         // Sort opoc_assignments by expiration block number
-        opoc_assignments.sort_by(|a, b| a.1.cmp(&b.1));
+        opoc_assignments.sort_by(|a, b| a.1.0.cmp(&b.1.0));
 
         // Return first request
         opoc_assignments[0]
@@ -215,6 +250,10 @@ impl<T: Config> Pallet<T> {
                 let wasm = include_bytes!("./test_agents/agent3.wasm").to_vec();
                 return Ok(wasm);
             }
+            if nft_id == &U256::from(4) { // Agent 4 is a simple agent that read the sender address and return it as output
+                let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
+                return Ok(wasm);
+            }
             if nft_id == &U256::from(1312) { // Agent 1312 is the famous uomi whitepaper chat agent
                 let wasm = include_bytes!("./test_agents/uomi_whitepaper_chat_agent.wasm").to_vec();
                 return Ok(wasm);
@@ -222,7 +261,6 @@ impl<T: Config> Pallet<T> {
 
             return Err(DispatchError::Other("Error loading the wasm from the NFT ID for tests"));
         }
-        log::info!("Loading wasm from NFT ID: {:?}", nft_id);
 
         match T::IpfsPallet::get_file(nft_file_cid) {
             Ok(wasm) => Ok(wasm),
@@ -234,9 +272,11 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, opoc_level: u8, request_id: RequestId) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, request_id: RequestId, opoc_level:OpocLevel) -> Result<Data, wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
+        // Convert address to a Vec<u8>
+        let address_as_vec = address.as_bytes().to_vec();
 
         // Calculate the timeout for the execution of the request
         // The timeout should be calculated as expiration_block_number - start_block
@@ -332,7 +372,13 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
-        let console_log = move |caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
+        let get_request_sender = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(address_as_vec.clone());
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            memory.write(caller, ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
+        let console_log = move |mut caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| {
             // Do nothing, function exposed to help wasm debugging
         };
 
@@ -346,7 +392,7 @@ impl<T: Config> Pallet<T> {
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
             let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, opoc_level, *call_ai_counter.read().unwrap(), request_id) {
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, *call_ai_counter.read().unwrap(), request_id, opoc_level) {
                 Ok(output) => output,
                 Err(error) => {
                     log::error!("Error calling the AI: {:?}", error);
@@ -357,14 +403,38 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
+        // --- New: read_chain_state host function ---
+        let read_chain_state = move |mut caller: wasmtime::Caller<'_, HostState>, pallet_ptr: i32, pallet_len: i32, storage_ptr: i32, storage_len: i32, key_ptr: i32, key_len: i32, output_ptr: i32| {
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut pallet_buf = vec![0u8; pallet_len as usize];
+            let mut storage_buf = vec![0u8; storage_len as usize];
+            let mut key_buf = vec![0u8; key_len as usize];
+            memory.read(&caller, pallet_ptr as usize, &mut pallet_buf).expect("Failed to read memory");
+            memory.read(&caller, storage_ptr as usize, &mut storage_buf).expect("Failed to read memory");
+            memory.read(&caller, key_ptr as usize, &mut key_buf).expect("Failed to read memory");
+
+            let pallet = String::from_utf8_lossy(&pallet_buf).to_string();
+            let storage = String::from_utf8_lossy(&storage_buf).to_string();
+
+            let result = Self::offchain_read_chain_state(pallet, storage, key_buf);
+            let data_to_write = match result {
+                Ok(data) => Self::offchain_worker_generate_data_for_wasm(data),
+                Err(_) => Self::offchain_worker_generate_data_for_wasm(vec![]),
+            };
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+        // --- End new host function ---
+
         let mut linker = wasmtime::Linker::new(&engine);
         linker.func_wrap("env", "get_input_file", get_input_file).unwrap();
         linker.func_wrap("env", "get_input_data", get_input_data).unwrap();
         linker.func_wrap("env", "set_output", set_output).unwrap();
         linker.func_wrap("env", "set_output_transaction", set_output_transaction).unwrap();
         linker.func_wrap("env", "get_cid_file", get_cid_file).unwrap();
+        linker.func_wrap("env", "get_request_sender", get_request_sender).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
         linker.func_wrap("env", "call_ai", call_ai).unwrap();
+        linker.func_wrap("env", "read_chain_state", read_chain_state).unwrap();
 
         let instance = match linker.instantiate(&mut store, &module) {
             Ok(instance) => instance,
@@ -417,7 +487,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, opoc_level: u8, counter: u32, request_id: RequestId) -> Result<Vec<u8>, DispatchError> {
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId, opoc_level:OpocLevel) -> Result<Vec<u8>, DispatchError> {
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
@@ -447,9 +517,9 @@ impl<T: Config> Pallet<T> {
             log::error!("UOMI-ENGINE: Invalid UTF-8 in final local name");
             DispatchError::Other("Invalid UTF-8 in final local name")
         })?;
- 
-        let current_block_number = frame_system::Pallet::<T>::block_number().into(); // For finney update. remove on turing
-        if current_block_number < TEMP_BLOCK_FOR_NEW_OPOC.into() || opoc_level < 1 { // For finney update. remove on turing
+
+
+        if opoc_level == OpocLevel::Level0 { 
             let body_data = CallAiRequestWithoutProof {
                 model: model.clone(),
                 input: input_data.clone(),
@@ -475,7 +545,7 @@ impl<T: Config> Pallet<T> {
                 DispatchError::Other("Failed to convert output")
             })?;
 
-            if !output_json.proof.is_empty() && current_block_number >= TEMP_BLOCK_FOR_NEW_OPOC.into() { // For finney update. remove on turing {
+            if !output_json.proof.is_empty() { 
                 // Store the inference on OpocL0Inferences
                 let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
                 if !signer.can_sign() {
@@ -505,12 +575,16 @@ impl<T: Config> Pallet<T> {
 
             Ok(output.to_vec())
         } else {
+
             let mut proof: Data = Data::default();
-            for (_account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
+            for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
                 let (inference_index, inference_proof) = inference_data;
                 if inference_index == counter {
-                    proof = inference_proof;
-                    break;
+                    let opoc_assignment = OpocAssignment::<T>::try_get(request_id, account_id);
+                    if opoc_assignment.is_ok() && opoc_assignment.unwrap().1 == OpocLevel::Level0 {
+                        proof = inference_proof;
+                        break;
+                    }
                 }
             }
 
@@ -551,6 +625,7 @@ impl<T: Config> Pallet<T> {
 
             Ok(output.to_vec())
         }
+    
     }
     
     fn offchain_worker_call_ai_send_request(body: String) -> Result<Data, DispatchError> {
@@ -668,27 +743,37 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn offchain_detect_opoc_level(request_id: &RequestId, nft_required_consensus: &U256) -> u8 {
-        let opoc_assignments_of_level_0 = 1 as usize;
-        let opoc_assignments_of_level_1 = nft_required_consensus.as_u32() as usize;
+    /// Basically we get one "random" assignment and check the OpocLevel it has
+    /// Before we counted them. Both checks are founded on the same premise
+    /// i.e. the fact that at each time step there's only one "kind" of assignemt going on
+    /// per each reqquest
+    fn offchain_detect_opoc_level(request_id: &RequestId, account_id: &T::AccountId) -> Result<OpocLevel, DispatchError> {
+        let has_opoc_assignment = OpocAssignment::<T>::contains_key(*request_id, &account_id);
+        if !has_opoc_assignment {
+            log::error!("UOMI-ENGINE: The request_id is not assigned to the validator");
+            return Err(DispatchError::Other("The request_id is not assigned to the validator"));
+        }
 
-        let opoc_assignment_count = OpocAssignment::<T>::iter_prefix(*request_id).count();
+        let opoc_assignment_data = OpocAssignment::<T>::get(*request_id, &account_id);
+        Ok(opoc_assignment_data.1)
+    }
 
-        let opoc_level = match opoc_assignment_count {
-            0 => { // NOTE: This case should never happen, but check to avoid runtime error
-                u8::from(0)
-            },
-            x if x == opoc_assignments_of_level_0 => {
-                u8::from(0)
-            },
-            x if x == opoc_assignments_of_level_1 => {
-                u8::from(1)
-            },
-            _ => {
-                u8::from(2)
-            },
-        };
-
-        opoc_level
+    #[cfg(feature = "std")]
+    pub fn offchain_read_chain_state(
+        pallet: String,
+        storage: String,
+        key: Vec<u8>,
+    ) -> Result<Vec<u8>, DispatchError> {
+        // Compose the storage key: Twox128(pallet) ++ Twox128(storage) ++ key
+        let mut storage_key = sp_std::vec::Vec::new();
+        storage_key.extend(sp_io::hashing::twox_128(pallet.as_bytes()));
+        storage_key.extend(sp_io::hashing::twox_128(storage.as_bytes()));
+        storage_key.extend(key);
+        // Read the storage value
+        let value = sp_io::storage::get(&storage_key);
+        match value {
+            Some(data) => Ok(data.to_vec()),
+            None => Err(DispatchError::Other("Chain state not found")),
+        }
     }
 }

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use scale_info::prelude::string::String;
 
 use frame_election_provider_support::{
@@ -12,20 +10,21 @@ use frame_support::{
     traits::EstimateNextSessionRotation, weights::Weight,
 };
 use frame_system::offchain::{CreateSignedTransaction, SendTransactionTypes, SigningTypes};
-use pallet_babe::{self, AuthorityId};
+use pallet_babe;
 use pallet_ipfs::{
     self,
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
 };
 use pallet_session::{SessionHandler, ShouldEndSession};
+use pallet_offences;
+// Simple converter for historical session full identification
+use sp_runtime::traits::Convert;
 use pallet_staking::TestBenchmarkingConfig;
-use sp_core::{
-    offchain::{testing::TestOffchainExt, OffchainDbExt, OffchainWorkerExt}, sr25519::{self, Public, Signature, CRYPTO_ID}, ConstU128, ConstU16, ConstU32, ConstU64, Get, Pair, H256, U256
+use sp_core::{sr25519::{Public, Signature}, ConstU128, ConstU16, ConstU32, ConstU64, Get, H256, U256
 };
 
-use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
 
-use pallet_uomi_engine::{crypto::CRYPTO_KEY_TYPE, Call as UomiCall};
+use pallet_uomi_engine::Call as UomiCall;
 use sp_runtime::{
     curve::PiecewiseLinear,
     testing::{TestXt, UintAuthorityId},
@@ -34,7 +33,7 @@ use sp_runtime::{
 };
 use sp_staking::currency_to_vote::SaturatingCurrencyToVote;
 
-use crate::{runtime_decl_for_tss_api::ID, types::MaxNumberOfShares};
+use crate::{types::{MaxNumberOfShares, MinimumValidatorThreshold, PublicKey}, SignatureVerification};
 
 // TYPES
 pub type Balance = u128; // needed in System
@@ -86,6 +85,8 @@ construct_runtime!(
         Timestamp: pallet_timestamp,
         Ipfs: pallet_ipfs,
         Uomi: pallet_uomi_engine,
+    Offences: pallet_offences,
+    Historical: pallet_session::historical,
     }
 );
 
@@ -99,6 +100,23 @@ impl pallet_session::Config for Test {
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+}
+
+// Provide an identity converter (AccountId -> Option<AccountId>) for historical session pallet
+pub struct IdentityOf;
+impl Convert<AccountId, Option<AccountId>> for IdentityOf {
+    fn convert(a: AccountId) -> Option<AccountId> { Some(a) }
+}
+
+impl pallet_session::historical::Config for Test {
+    type FullIdentification = AccountId; // minimal
+    type FullIdentificationOf = IdentityOf; // simple identity mapping
+}
+
+impl pallet_offences::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
+    type OnOffenceHandler = (); // no-op in tests
 }
 
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig as frame_system::DefaultConfig)]
@@ -143,12 +161,29 @@ impl CreateSignedTransaction<UomiCall<Test>> for Test {
     }
 }
 
+pub struct MockVerifier {}
+impl SignatureVerification<PublicKey> for MockVerifier {
+    fn verify(_key: &PublicKey, _message: &[u8], sig: &crate::types::Signature) -> bool {
+        sig[0] != 0
+    }
+
+}
+
 impl crate::pallet::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type MaxNumberOfShares = MaxNumberOfShares;
-    type SignatureVerifier = crate::pallet::Verifier;
+    type SignatureVerifier = MockVerifier;
 
     type AuthorityId = crate::crypto::AuthId;
+    type MinimumValidatorThreshold = MinimumValidatorThreshold;
+    type OffenceReporter = TestOffenceReporter;
+    type TssWeightInfo = (); // use default placeholder weights in tests
+}
+
+pub struct TestOffenceReporter;
+impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking::offence::ReportOffence<Reporter, Offender, Off> for TestOffenceReporter {
+    fn report_offence(_reporters: Vec<Reporter>, _offence: Off) -> Result<(), sp_staking::offence::OffenceError> { Ok(()) }
+    fn is_known_offence(_offenders: &[Offender], _time_slot: &Off::TimeSlot) -> bool { false }
 }
 
 impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
@@ -172,9 +207,10 @@ impl SendTransactionTypes<crate::pallet::Call<Test>> for Test {
 impl pallet_uomi_engine::Config for Test {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
-    type Randomness = pallet_babe::RandomnessFromOneEpochAgo<Test>;
+    type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
+    type MaxOffchainConcurrent = frame_support::traits::ConstU32<2>;
 }
 
 pub struct IpfsWrapper;
@@ -221,6 +257,7 @@ impl pallet_ipfs::Config for Test {
     type Currency = pallet_balances::Pallet<Test>;
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    type TssInterface = crate::Pallet<Test>;
 }
 
 impl pallet_babe::Config for Test {

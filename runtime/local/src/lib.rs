@@ -24,6 +24,9 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+use pallet_staking::EraPayout;
+use parity_scale_codec::alloc::string::ToString;
+use sp_std::collections::btree_set::BTreeSet;
 use frame_support::{
     construct_runtime,
     dispatch::DispatchClass,
@@ -71,8 +74,8 @@ use sp_api::impl_runtime_apis;
 use sp_core::{crypto::KeyTypeId, ConstBool, OpaqueMetadata, H160, H256, U256};
 use sp_runtime::{
     create_runtime_str,
-    curve::PiecewiseLinear,
     generic, impl_opaque_keys,
+    print,
     traits::{
         AccountIdConversion, AccountIdLookup, BlakeTwo256, Block as BlockT, ConvertInto,
         DispatchInfoOf, Dispatchable, IdentityLookup, NumberFor, OpaqueKeys, PostDispatchInfoOf,
@@ -135,10 +138,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("local"),
     impl_name: create_runtime_str!("local"),
     authoring_version: 1,
-    spec_version: 1,
+    spec_version: 1, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
     impl_version: 2,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 1,
+    transaction_version: 1, // Extrinsic payload shape change
     state_version: 1,
 };
 
@@ -695,21 +698,10 @@ impl pallet_election_provider_multi_phase::BenchmarkingConfig for ElectionProvid
     const MAXIMUM_TARGETS: u32 = 300;
 }
 
-// staking
-pallet_staking_reward_curve::build! {
-    const REWARD_CURVE: PiecewiseLinear<'static> = curve!(
-        min_inflation: 0_025_000,
-        max_inflation: 0_100_000,
-        ideal_stake: 0_500_000,
-        falloff: 0_050_000,
-        max_piece_count: 40,
-        test_precision: 0_005_000,
-    );
-}
+
 
 parameter_types! {
     pub const SessionsPerEra: sp_staking::SessionIndex = 6;
-    pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
     pub const MaxNominators: u32 = <NposSolution16 as frame_election_provider_support::NposSolution>::LIMIT as u32;
     pub const OffendingValidatorsThreshold: Perbill = Perbill::from_percent(17);
     pub const BondingDuration: sp_staking::EraIndex = 6;
@@ -736,10 +728,10 @@ impl pallet_staking::Config for Runtime {
     type Reward = ();
     type SessionsPerEra = ConstU32<6>;
     type BondingDuration = ConstU32<28>;
-    type SlashDeferDuration = ConstU32<28>;
+    type SlashDeferDuration = ConstU32<0>;
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
     type SessionInterface = Self;
-    type EraPayout = pallet_staking::ConvertCurve<RewardCurve>;
+    type EraPayout = UOMIEraPayout; //pallet_staking::ConvertCurve<RewardCurve>;
     type NextNewSession = Session;
     type MaxExposurePageSize = ConstU32<1000>; // O un altro valore appropriato
     type VoterList = VoterList;
@@ -1288,9 +1280,10 @@ impl pallet_uomi_engine::Config for Runtime {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
     type IpfsPallet = IpfsWrapper;
-    type RandomnessOld = pallet_babe::RandomnessFromOneEpochAgo<Runtime>; // for finney update. remove on turing
     type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
     type InherentDataType = u16;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
+    type MaxOffchainConcurrent = frame_support::traits::ConstU32<1>;
 }
 
 pub struct IpfsWrapper;
@@ -1325,6 +1318,9 @@ impl pallet_tss::Config for Runtime {
     
     type SignatureVerifier = pallet_tss::pallet::Verifier;
     type AuthorityId = pallet_tss::crypto::AuthId;
+    type MinimumValidatorThreshold = pallet_tss::types::MinimumValidatorThreshold;
+    type OffenceReporter = pallet_offences::Pallet<Runtime>;
+    type TssWeightInfo = ();
 }
 
 parameter_types! {
@@ -1341,6 +1337,8 @@ impl pallet_ipfs::Config for Runtime {
     type BlockNumber = BlockNumber;
     // Nuovo campo per il costo del pinning temporaneo
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    // TSS interface implementation
+    type TssInterface = Tss;
 }
 
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
@@ -1479,6 +1477,8 @@ impl pallet_democracy::Config for Runtime {
 parameter_types! {
     pub const ProposalBond: Permill = Permill::from_percent(5);
     pub MainTreasuryAccount: AccountId = Treasury::account_id();
+    pub AgentPayoutTreasuryAccount: AccountId = Treasury::account_id();
+    pub const MaxAgents: u32 = 1024;
 }
 
 impl pallet_treasury::Config<MainTreasuryInst> for Runtime {
@@ -1724,6 +1724,8 @@ pub type Executive = frame_executive::Executive<
 >;
 
 pub type Migrations = ();
+//     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
+// );
 
 type EventRecord = frame_system::EventRecord<
     <Runtime as frame_system::Config>::RuntimeEvent,
@@ -2573,8 +2575,11 @@ impl_runtime_apis! {
             }
             return Vec::new();
         }
-        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
-            Vec::new()
+        fn get_signing_session_message(session_id: u64) -> sp_std::prelude::Vec<u8> {
+            if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_signing_session(session_id) {
+                return session.message.to_vec();
+            }
+            return Vec::new();
         }
         fn get_dkg_session_old_participants(session_id: u64) -> sp_std::prelude::Vec<[u8; 32]> {
             if let Some(session) = pallet_tss::pallet::Pallet::<Runtime>::get_dkg_session(session_id) {
@@ -2612,6 +2617,176 @@ impl_runtime_apis! {
             pallet_tss::pallet::ValidatorIds::<Runtime>::iter()
                 .map(|(account, id)| (id, account.into()))
                 .collect()
+        }
+
+        fn report_participants(id: u64, reported_participants: Vec<[u8; 32]>) {
+            pallet_tss::pallet::Pallet::<Runtime>::report_participants(id, reported_participants);
+        }
+        fn submit_dkg_result(
+            session_id: u64,
+            aggregated_key: Vec<u8>,
+        )  {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::cast_vote_on_dkg_result(session_id, aggregated_key);
+        }
+
+        fn complete_reshare_session(
+            session_id: u64,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::submit_reshare_result(session_id);
+        }
+
+
+        fn report_tss_offence(
+            session_id: u64,
+            offence_type: u8,
+            offenders: Vec<[u8; 32]>,
+        ) {
+            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
+        }
+    }
+}
+
+
+pub struct UOMIEraPayout {}
+
+impl UOMIEraPayout {
+    fn count_unique_agents() -> u32 {
+        let mut unique_nft_ids = BTreeSet::new();
+        
+        for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
+            if let Some(session) = pallet_tss::DkgSessions::<Runtime>::get(session_id) {
+                if session.state == pallet_tss::SessionState::DKGComplete {
+                    unique_nft_ids.insert(session.nft_id);
+                }
+            }
+        }
+        
+        let agent_count = unique_nft_ids.len() as u32;
+        print("[UOMIEraPayout] Active agents with TSS wallets: ");
+        print(agent_count.to_string().as_str());
+        agent_count
+    }
+    
+    fn distribute_agent_payouts(agent_payout_total: Balance) {
+        let agent_count = Self::count_unique_agents();
+        let max_agents = MaxAgents::get();
+        
+        if agent_count == 0 {
+            print("[UOMIEraPayout] No agents found, sending all agent payout to treasury");
+            let treasury_account = AgentPayoutTreasuryAccount::get();
+            let _ = <Balances as Currency<AccountId>>::deposit_creating(&treasury_account, agent_payout_total);
+            return;
+        }
+        
+        let individual_share = agent_payout_total / max_agents as u128;
+        let distributed_amount = individual_share * agent_count as u128;
+        let treasury_remainder = agent_payout_total - distributed_amount;
+        
+        print("[UOMIEraPayout] Individual agent share: ");
+        print(individual_share.to_string().as_str());
+        print("[UOMIEraPayout] Treasury remainder: ");
+        print(treasury_remainder.to_string().as_str());
+        
+        let mut unique_nft_ids = BTreeSet::new();
+        for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
+            if let Some(session) = pallet_tss::DkgSessions::<Runtime>::get(session_id) {
+                if session.state == pallet_tss::SessionState::DKGComplete {
+                    unique_nft_ids.insert(session.nft_id.clone());
+                }
+            }
+        }
+        
+        let mut session_to_nft_map = sp_std::collections::btree_map::BTreeMap::new();
+        for (session_id, _public_key) in pallet_tss::AggregatedPublicKeys::<Runtime>::iter() {
+            if let Some(session) = pallet_tss::DkgSessions::<Runtime>::get(session_id) {
+                if session.state == pallet_tss::SessionState::DKGComplete {
+                    session_to_nft_map.insert(session_id, session.nft_id);
+                }
+            }
+        }
+        
+        for (session_id, nft_id) in session_to_nft_map {
+            if let Some(public_key) = pallet_tss::AggregatedPublicKeys::<Runtime>::get(session_id) {
+                if public_key.len() >= 20 {
+                    let mut account_bytes = [0u8; 32];
+                    account_bytes[..20].copy_from_slice(&public_key[..20]);
+                    let agent_account = sp_runtime::AccountId32::from(account_bytes);
+                    let _ = <Balances as Currency<AccountId>>::deposit_creating(&agent_account, individual_share);
+                    print("[UOMIEraPayout] Paid agent with NFT ID: ");
+                    print(sp_core::hexdisplay::HexDisplay::from(&nft_id.as_slice()).to_string().as_str());
+                } else {
+                    print("[UOMIEraPayout] Invalid public key length for agent");
+                }
+            }
+        }
+        
+        if treasury_remainder > 0 {
+            let treasury_account = AgentPayoutTreasuryAccount::get();
+            let _ = <Balances as Currency<AccountId>>::deposit_creating(&treasury_account, treasury_remainder);
+            print("[UOMIEraPayout] Sent remainder to treasury: ");
+            print(treasury_remainder.to_string().as_str());
+        }
+    }
+}
+
+impl EraPayout<Balance> for UOMIEraPayout {
+    fn era_payout(
+        _total_staked: Balance,
+        total_issuance: Balance,
+        era_duration_millis: u64,
+    ) -> (Balance, Balance) {
+        print("[UOMIEraPayout]");
+        print(total_issuance.to_string().as_str());
+        print(era_duration_millis.to_string().as_str());
+        
+        let halving_period = 3; // Years before halving
+        
+        let year_zero: Balance = (UOMI * 4919219238u128).into();
+        let year_zero: Balance = (UOMI * 1399999999999u128).into(); // In the Local environment we use a different year zero value because there's a larger total issuance at t=0.
+        let base_issuance_per_three_year: Balance = (UOMI * 2682750000u128 * halving_period).into();
+        let factor = 2;
+
+        let days_in_one_year = 365;
+        let seconds_in_one_day = 86400;
+        let millis = 1000;
+
+        let millis_in_a_year:u64 = days_in_one_year * seconds_in_one_day * millis;
+        let eras_in_a_year:u128 = (millis_in_a_year/era_duration_millis).into();
+        
+        let mut current_year = None;
+        let mut curr_issuance = base_issuance_per_three_year;
+        let mut _curr = year_zero;
+
+        for i in 1..=10 {
+            if _curr + curr_issuance > total_issuance {
+                current_year = Some(i);
+                break;
+            } else {
+                _curr += curr_issuance;
+                curr_issuance /= factor;
+            }
+        }
+
+        if current_year.is_none() {
+            print("[UOMIEraPayout] Returning (0, 0)");
+            (0u128.into(), 0u128.into())
+        } else {
+            let total_era_payout: Balance = (curr_issuance/halving_period/eras_in_a_year).into();
+            
+            let validator_payout = (total_era_payout * 95) / 100;
+            let agent_payout_total = (total_era_payout * 5) / 100;
+            
+            print("[UOMIEraPayout] Total era payout: ");
+            print(total_era_payout.to_string().as_str());
+            print("[UOMIEraPayout] Validator payout (95%): ");
+            print(validator_payout.to_string().as_str());
+            print("[UOMIEraPayout] Agent payout total (5%): ");
+            print(agent_payout_total.to_string().as_str());
+            
+            Self::distribute_agent_payouts(agent_payout_total);
+            
+            print("[UOMIEraPayout] Returning validator payout");
+            (validator_payout, 0u128.into())
         }
     }
 }

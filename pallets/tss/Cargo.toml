@@ -31,6 +31,16 @@ sp-api = { workspace = true, feature = ["std"]}
 pallet-uomi-engine = { workspace = true }
 pallet-ipfs = { workspace = true }
 pallet-babe = { workspace = true }
+pallet-session = { workspace = true }
+sp-staking = { workspace = true }
+pallet-offences = { workspace = true }
+miniserde = { version = "0.1.42", default-features = false }
+sp-application-crypto = { workspace = true }
+rlp = { version = "0.5", default-features = false }
+ethereum-types = { version = "0.14", default-features = false }
+
+# HTTP client dependencies for multi-chain RPC calls
+sp-runtime-interface = { workspace = true }
 
 # frame deps
 frame-benchmarking = { workspace = true }
@@ -50,6 +60,7 @@ pallet-staking-reward-curve = { workspace = true }
 pallet-session = { workspace = true, features = ["std"] }
 pallet-timestamp = { workspace = true, features = ["std"] }
 pallet-staking = { workspace = true, features = ["std"] }
+proptest = { version = "1.4", default-features = false, features = ["std"] }
 
 [features]
 default = ["std"]
@@ -69,7 +80,10 @@ std = [
     "hex/std",
     "log/std",
     "pallet-babe/std",
+    "pallet-session/std",
     "pallet-uomi-engine/std",
+    "sp-application-crypto/std",
+    "sp-runtime-interface/std",
 ]
 runtime-benchmarks = [
     "frame-benchmarking/runtime-benchmarks",
