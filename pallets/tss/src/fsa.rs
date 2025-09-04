@@ -105,7 +105,6 @@ impl<T: Config> crate::pallet::Pallet<T> {
             }
             current = current.saturating_add(U256::one());
         }
-        if requests_to_sign.is_empty() { return Err("No requests to sign found"); }
         Ok((requests_to_sign, last_processed))
     }
 
