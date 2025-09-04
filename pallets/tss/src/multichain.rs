@@ -47,12 +47,12 @@ impl SupportedChain {
     pub fn get_ankr_rpc_url(&self) -> &'static str {
         match self {
             SupportedChain::Ethereum => "https://eth.llamarpc.com",
-            SupportedChain::BinanceSmartChain => "https://rpc.ankr.com/bsc",
-            SupportedChain::Polygon => "https://rpc.ankr.com/polygon",
-            SupportedChain::Avalanche => "https://rpc.ankr.com/avalanche",
-            SupportedChain::Arbitrum => "https://rpc.ankr.com/arbitrum",
-            SupportedChain::Optimism => "https://rpc.ankr.com/optimism",
-            SupportedChain::Fantom => "https://rpc.ankr.com/fantom",
+            SupportedChain::BinanceSmartChain => "https://bsc-dataseed1.binance.org/",
+            SupportedChain::Polygon => "https://polygon-rpc.com/",
+            SupportedChain::Avalanche => "https://api.avax.network/ext/bc/C/rpc",
+            SupportedChain::Arbitrum => "https://arb1.arbitrum.io/rpc",
+            SupportedChain::Optimism => "https://mainnet.optimism.io",
+            SupportedChain::Fantom => "https://rpc.ftm.tools/",
             SupportedChain::Uomi => "http://localhost:9944", // Local Uomi node RPC
             SupportedChain::Base => "https://base.llamarpc.com",
         }
