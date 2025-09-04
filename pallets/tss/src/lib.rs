@@ -1612,6 +1612,11 @@ pub mod pallet {
                         );
                         if request_id > max_request_id { max_request_id = request_id; }
                     }
+
+                    if requests.is_empty() {
+                        max_request_id = last_id_u256;
+                    }
+
                     // After submitting all signing session creation extrinsics, submit a single extrinsic updating LastOpocRequestId to the highest processed id
                     if max_request_id > sp_core::U256::zero() {
                         let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
