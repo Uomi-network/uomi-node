@@ -97,9 +97,7 @@ impl<T: Config> crate::pallet::Pallet<T> {
                     // Treat as processed even if no actionable action
                     last_processed = current;
                 }
-                Err(ProcessingError::NoOutputFound) => {
-                    log::warn!("No output found for request ID {:?}", current);
-                }
+                Err(ProcessingError::NoOutputFound) => (),
                 Err(e) => {
                     log::warn!("Failed to process request ID {:?}: {:?}", current, e);
                     break; // stop on hard error
@@ -118,11 +116,10 @@ impl<T: Config> crate::pallet::Pallet<T> {
 
         // if Outputs does not contain the request_id, return None
         if output.is_empty() {
-            log::warn!("No output found for request ID {:?}", request_id);
             return Err(ProcessingError::NoOutputFound);
         }
 
-        log::info!("Processing output for request ID {:?}", request_id);
+        log::debug!("Processing output for request ID {:?}", request_id);
 
         // Convert output from a bounded vec to a string
         let output_string = output
