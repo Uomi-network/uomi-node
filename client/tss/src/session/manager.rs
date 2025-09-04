@@ -66,8 +66,6 @@ pub struct SessionManager<B: BlockT, C: ClientManager<B>> {
     pub seen_signing_events: Arc<Mutex<HashSet<(SessionId, SessionId)>>>,
     // Outbound ECDSA P2P messages that couldn't be sent because recipient mapping didn't exist yet
     pub pending_outbound_p2p: Arc<Mutex<HashMap<SessionId, Vec<(String, String, Vec<u8>, crate::ecdsa::ECDSAPhase)>>>>,
-        // If an online signing is requested before offline material exists, we queue the message here
-        pub pending_sign_online_after_offline: Arc<Mutex<HashMap<SessionId, Vec<Vec<u8>>>>>,
     pub _phantom: PhantomData<B>,
 }
 
@@ -143,7 +141,6 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             signing_to_dkg: Arc::new(Mutex::new(empty_hash_map())),
             seen_signing_events: Arc::new(Mutex::new(HashSet::new())),
             pending_outbound_p2p: Arc::new(Mutex::new(empty_hash_map())),
-                pending_sign_online_after_offline: Arc::new(Mutex::new(HashMap::new())),
             _phantom: PhantomData,
         };
 

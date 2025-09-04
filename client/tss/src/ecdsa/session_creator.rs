@@ -348,29 +348,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         );
 
         if let Err(error) = &offline_result {
-            log::warn!("[TSS][DIAG][SignOnline] Offline output missing for dkg_session_id={} (err={:?}); scheduling offline generation first", dkg_session_id, error);
-            drop(storage);
-            // Need t,n,keys for offline phase. Retrieve DKG key material first.
-            let (t,n,keys_str,index_str) = {
-                // Get DKG session data for threshold/participants
-                let session_data = self.get_session_data(&dkg_session_id);
-                if session_data.is_none() { log::error!("[TSS][DIAG][SignOnline][FALLBACK] Missing session data for dkg_session_id={}", dkg_session_id); return; }
-                let (t,n,_coord,_msg) = session_data.unwrap();
-                // Fetch keygen result (EcdsaKeys)
-                let key_storage = self.storage_manager.key_storage.lock().unwrap();
-                let keygen_bytes = key_storage.read_data(dkg_session_id, StorageType::EcdsaKeys, Some(&identifier.serialize()));
-                if let Err(e) = keygen_bytes { log::error!("[TSS][DIAG][SignOnline][FALLBACK] Missing keygen keys for offline generation err={:?}", e); return; }
-                let keys_utf8 = String::from_utf8(keygen_bytes.unwrap()).unwrap_or_default();
-                (t,n,keys_utf8,my_id.to_string())
-            };
-            // Start offline phase now (id = dkg_session_id for offline output)
-            self.ecdsa_create_sign_offline_phase(dkg_session_id, t, n, keys_str, index_str, &mut handler);
-            // Queue this online request until offline completes
-            {
-                let mut pending = self.pending_sign_online_after_offline.lock().unwrap();
-                pending.entry(signing_session_id).or_insert_with(Vec::new).push(message.clone());
-            }
-            log::info!("[TSS][DIAG][SignOnline][FALLBACK] Queued online sign request signing_session_id={} awaiting offline completion", signing_session_id);
+            log::warn!("[TSS][DIAG][SignOnline] Offline output missing for dkg_session_id={} (err={:?}); aborting (fallback removed)", dkg_session_id, error);
             return;
         }
 
@@ -419,14 +397,6 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             signing_session_id
         );
 
-        // Attempt to drain any buffered sign_online messages now that the phase exists
-        {
-            let mut mgr = self.ecdsa_manager.lock().unwrap();
-            if let Err(e) = mgr.handle_sign_online_buffer(signing_session_id) {
-                log::warn!("[TSS][DIAG][SignOnline][BUFFER] Failed draining sign_online buffer for session {} err={:?}", signing_session_id, e);
-            } else {
-                log::info!("[TSS][DIAG][SignOnline][BUFFER] Drained sign_online buffer for session {}", signing_session_id);
-            }
-        }
+    // Buffer draining no longer needed (fallback feature removed)
     }
 }

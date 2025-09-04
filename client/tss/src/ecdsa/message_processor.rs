@@ -614,18 +614,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round2Completed);
         }
 
-        // Drain any queued sign-online requests that were waiting for offline output
-        {
-            let mut pending = self.pending_sign_online_after_offline.lock().unwrap();
-            if let Some(list) = pending.remove(&session_id) {
-                log::info!("[TSS][DIAG][SignOffline->Online] Draining {} queued online requests for session_id={} after offline success", list.len(), session_id);
-                for message in list {
-                    // For each queued message, create a distinct signing_session_id (reuse session_id as signing id)
-                    // We reuse the same dkg_session_id (session_id) as source of offline material.
-                    self.ecdsa_create_sign_phase(session_id, session_id, Vec::new(), message);
-                }
-            }
-        }
+    // Fallback queue removed: no draining logic
     }
 
     fn handle_sign_online_success(&self, session_id: SessionId, msg: String) {
