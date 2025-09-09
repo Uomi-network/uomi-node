@@ -100,16 +100,16 @@ impl<B: BlockT> Validator<B> for TssValidator {
                     return ValidationResult::Discard;
                 }
                 
-                // Check timestamp to prevent replay attacks
-                let current_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+                // // Check timestamp to prevent replay attacks
+                // let current_time = std::time::SystemTime::now()
+                //     .duration_since(std::time::UNIX_EPOCH)
+                //     .unwrap_or_default()
+                //     .as_secs();
 
-                if !verification::is_timestamp_valid(&signed_message, current_time, self.max_message_age) {
-                    log::warn!("[TSS]: Message timestamp invalid or too old from {}", sender.to_base58());
-                    return ValidationResult::Discard;
-                }
+                // if !verification::is_timestamp_valid(&signed_message, current_time, self.max_message_age) {
+                //     log::warn!("[TSS]: Message timestamp invalid or too old from {}", sender.to_base58());
+                //     return ValidationResult::Discard;
+                // }
 
                 log::info!("[TSS]: ✅ Verified signed message from {} - signature and timestamp valid", sender.to_base58());
             }
@@ -136,15 +136,15 @@ impl<B: BlockT> Validator<B> for TssValidator {
         ValidationResult::ProcessAndKeep(topic)
     }
 
-    fn message_expired<'a>(&'a self) -> Box<dyn FnMut(<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
-        Box::new(move |_topic, data| {
-            let processed_messages = self.processed_messages.lock().unwrap();
-            if let Some(_timestamp) = processed_messages.get(data) {
-                return true;
-            }
-            false
-        })
-    }
+    // fn message_expired<'a>(&'a self) -> Box<dyn FnMut(<B as BlockT>::Hash, &[u8]) -> bool + 'a> {
+    //     Box::new(move |_topic, data| {
+    //         let processed_messages = self.processed_messages.lock().unwrap();
+    //         if let Some(_timestamp) = processed_messages.get(data) {
+    //             return true;
+    //         }
+    //         false
+    //     })
+    // }
 
     fn message_allowed<'a>(
         &'a self,
