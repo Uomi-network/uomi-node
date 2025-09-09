@@ -12,6 +12,7 @@ use std::io::{self, ErrorKind, Read, Write as IoWrite};
 
 use std::env;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum StorageType {
@@ -899,11 +900,73 @@ impl Storage for FileStorage {
     }
 }
 
-/// Gets the base directory from the environment variable or defaults to "data".
+/// Default path used when `TSS_STORAGE_DIR` env var is not set AND no fallback base path
+/// has been provided by the node service via `set_tss_fallback_base_path`.
+const DEFAULT_TSS_STORAGE_DIR: &str = "/var/lib/uomi/chains/uomi/tss";
+
+/// Optional fallback base path provided at runtime (e.g. using node's `config.base_path`).
+static FALLBACK_BASE_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// One-time initialized, validated base directory.
+static BASE_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+/// Returns the base directory for TSS storage ensuring it exists and is writable.
+///
+/// On first invocation this will:
+/// 1. Resolve the directory from the `TSS_STORAGE_DIR` env var or fall back to the default.
+/// 2. Attempt to create the directory (including parents) if it does not exist.
+/// 3. Attempt to create & write a temporary file to verify writability.
+///
+/// If any step fails the process will panic with a clear message containing:
+/// - The resolved directory path
+/// - The environment variable name `TSS_STORAGE_DIR`
+/// - The default path constant
 fn get_base_directory() -> PathBuf {
-    env::var("TSS_STORAGE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/var/lib/uomi/chains/uomi/tss"))
+    BASE_DIRECTORY
+        .get_or_init(|| {
+            let resolved: PathBuf = env::var("TSS_STORAGE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    // Prefer a runtime provided fallback base path if present.
+                    if let Some(fallback) = FALLBACK_BASE_PATH.get() {
+                        fallback.clone()
+                    } else {
+                        PathBuf::from(DEFAULT_TSS_STORAGE_DIR)
+                    }
+                });
+
+            // Ensure directory exists.
+            if let Err(e) = fs::create_dir_all(&resolved) {
+                panic!(
+                    "Failed to create TSS storage directory '{:?}'. Set env TSS_STORAGE_DIR or ensure default '{}' exists and is writable. Error: {}",
+                    resolved, DEFAULT_TSS_STORAGE_DIR, e
+                );
+            }
+
+            // Verify writability by creating then removing a temp file.
+            let test_file = resolved.join(".tss_write_test");
+            match File::create(&test_file).and_then(|mut f| f.write_all(b"ok")) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&test_file); // best-effort cleanup
+                }
+                Err(e) => {
+                    panic!(
+                        "TSS storage directory '{:?}' is not writable. Set env TSS_STORAGE_DIR to a writable path or fix permissions on default '{}'. Error: {}",
+                        resolved, DEFAULT_TSS_STORAGE_DIR, e
+                    );
+                }
+            }
+
+            resolved
+        })
+        .clone()
+}
+
+/// Sets a fallback base path for TSS storage (used when `TSS_STORAGE_DIR` is unset).
+/// This should be invoked early (e.g. during `setup_gossip`) before any storage access.
+/// Subsequent calls are ignored once set.
+pub fn set_tss_fallback_base_path(path: PathBuf) {
+    let _ = FALLBACK_BASE_PATH.set(path); // ignore if already set
 }
 
 pub fn store_file(filename: String, bytes: &[u8]) -> io::Result<()> {

@@ -33,6 +33,7 @@ pub fn setup_gossip<C, N, B, S, TP, RE>(
     keystore_container: KeystoreContainer,
     transaction_pool: Arc<TP>,
     registry: Option<Registry>,
+    _base_path: std::path::PathBuf,
     _: PhantomData<B>,
     __: PhantomData<RE>,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Error>

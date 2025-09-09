@@ -284,6 +284,8 @@ pub fn setup_gossip<C, N, B, S, TP, RE>(
     keystore_container: KeystoreContainer,
     transaction_pool: Arc<TP>,
     registry: Option<Registry>,
+    // New parameter: base path coming from node `config.base_path` (used as fallback storage root)
+    base_path: std::path::PathBuf,
     _: PhantomData<B>,
     __: PhantomData<RE>,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Error>
@@ -297,6 +299,11 @@ where
     RE: EncodeLike + Eq + Debug + Parameter + Sync + Send + Member,
 {
     let mut rng = rand::thread_rng();
+
+    // Set fallback base path for TSS storage before any storage access.
+    // Only effective if env var TSS_STORAGE_DIR not set and not already initialized.
+    // Use <base_path>/tss as fallback root so different chains remain isolated.
+    crate::dkghelpers::set_tss_fallback_base_path(base_path.join("tss"));
 
     let setup_gossip_pin = move || {
         let client = Arc::clone(&client);

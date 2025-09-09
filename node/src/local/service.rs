@@ -582,6 +582,8 @@ pub fn start_node(
     let is_authority = config.role.is_authority();
     let registry = config.prometheus_registry().cloned();
 
+    let base_path = config.base_path.config_dir(config.chain_spec.id()).clone();
+
     let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
         network: network.clone(),
         client: client.clone(),
@@ -743,6 +745,8 @@ pub fn start_node(
                 keystore_container,
                 transaction_pool,
                 registry,
+                // Provide base_path from node configuration as fallback for TSS storage
+                base_path,
                 PhantomData::<Block>,
                 PhantomData::<RuntimeEvent>,
             )

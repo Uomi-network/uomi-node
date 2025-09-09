@@ -269,30 +269,37 @@ pub fn start_node(
             std::process::exit(1);
         }
     };
-    // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
-    let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
-    if service_version != pallet_uomi_engine::consts::PALLET_VERSION {
-        log::error!("🚨 AI service version is different from uomiEngine pallet version. Please update the AI service to the same version of uomiEngine pallet.");
-        std::process::exit(1);
-    } else {
-        log::info!("✅ AI service version is the same of uomiEngine pallet version.");
+
+    // we skip this check altogether if the node is not an authority:
+    if !config.role.is_authority() {
+        log::info!("🔍 Skipping AI service version check (not an authority node).");
+
+        // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
+        let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
+        if service_version != pallet_uomi_engine::consts::PALLET_VERSION {
+            log::error!("🚨 AI service version is different from uomiEngine pallet version. Please update the AI service to the same version of uomiEngine pallet.");
+            std::process::exit(1);
+        } else {
+            log::info!("✅ AI service version is the same of uomiEngine pallet version.");
+        }
+        // Check if ai service details.system_valid is true
+        let service_system_valid = ai_status["details"]["system_valid"].as_bool().unwrap();
+        if !service_system_valid {
+            log::error!("🚨 AI service is not running on a valid system. Please check the AI service system requirements.");
+            std::process::exit(1);
+        } else {
+            log::info!("✅ AI service is running on a valid system.");
+        }
+        // Check if ai service details.cuda_available is true
+        let service_cuda_available = ai_status["details"]["cuda_available"].as_bool().unwrap();
+        if !service_cuda_available {
+            log::error!("🚨 AI service is not available to use CUDA. Please enable CUDA on the AI service.");
+            std::process::exit(1);
+        } else {
+            log::info!("✅ AI service is available to use CUDA.");
+        }
     }
-    // Check if ai service details.system_valid is true
-    let service_system_valid = ai_status["details"]["system_valid"].as_bool().unwrap();
-    if !service_system_valid {
-        log::error!("🚨 AI service is not running on a valid system. Please check the AI service system requirements.");
-        std::process::exit(1);
-    } else {
-        log::info!("✅ AI service is running on a valid system.");
-    }
-    // Check if ai service details.cuda_available is true
-    let service_cuda_available = ai_status["details"]["cuda_available"].as_bool().unwrap();
-    if !service_cuda_available {
-        log::error!("🚨 AI service is not available to use CUDA. Please enable CUDA on the AI service.");
-        std::process::exit(1);
-    } else {
-        log::info!("✅ AI service is available to use CUDA.");
-    }
+
 
     let ipfs_manager = Arc::new(IpfsManager::new().map_err(|e| ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e)))?);
     ipfs_manager.start_daemon().map_err(|e| ServiceError::Other(format!("Failed to start IPFS daemon: {}", e)))?;
@@ -576,6 +583,8 @@ pub fn start_node(
 
     let registry = config.prometheus_registry().cloned();
 
+    let base_path = config.base_path.config_dir(config.chain_spec.id()).clone();
+
     let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
         network: network.clone(),
         client: client.clone(),
@@ -737,6 +746,7 @@ pub fn start_node(
                 keystore_container,
                 transaction_pool,
                 registry,
+                base_path,
                 PhantomData::<Block>,
                 PhantomData::<pallet_tss::Event<Runtime>>
             ).unwrap(),
