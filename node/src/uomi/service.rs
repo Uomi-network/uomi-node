@@ -271,9 +271,7 @@ pub fn start_node(
     };
 
     // we skip this check altogether if the node is not an authority:
-    if !config.role.is_authority() {
-        log::info!("🔍 Skipping AI service version check (not an authority node).");
-
+    if config.role.is_authority() {
         // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
         let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
         if service_version != pallet_uomi_engine::consts::PALLET_VERSION {
@@ -298,6 +296,8 @@ pub fn start_node(
         } else {
             log::info!("✅ AI service is available to use CUDA.");
         }
+    } else {
+         log::info!("🔍 Skipping AI service version check (not an authority node).");
     }
 
 
