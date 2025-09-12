@@ -189,12 +189,7 @@ impl<T: Config> Pallet<T> {
                                 validators_to_exclude.push(assigned_validator);
                             }
                         }
-                        // add validators that already wrote outputs for this request
-                        for (out_validator, _) in NodesOutputs::<T>::iter_prefix(*request_id) {
-                            if !validators_to_exclude.contains(&out_validator) {
-                                validators_to_exclude.push(out_validator);
-                            }
-                        }
+
 
                         // Reassign the request to another validator
                         match
@@ -308,11 +303,7 @@ impl<T: Config> Pallet<T> {
                                     validators_to_exclude.push(assigned_validator);
                                 }
                             }
-                            for (out_validator, _) in NodesOutputs::<T>::iter_prefix(*request_id) {
-                                if !validators_to_exclude.contains(&out_validator) {
-                                    validators_to_exclude.push(out_validator);
-                                }
-                            }
+                            
 
                             // Reassign the request to another validator
                             match
@@ -369,11 +360,7 @@ impl<T: Config> Pallet<T> {
                                 validators_to_exclude.push(assigned_validator);
                             }
                         }
-                        for (out_validator, _) in NodesOutputs::<T>::iter_prefix(*request_id) {
-                            if !validators_to_exclude.contains(&out_validator) {
-                                validators_to_exclude.push(out_validator);
-                            }
-                        }
+                    
 
                         match
                             Self::opoc_assignment(
@@ -572,6 +559,19 @@ impl<T: Config> Pallet<T> {
                                 }
                             }
 
+
+                            // Build an exclude list: include the timed-out validator, any currently assigned validators for this
+                            // request, and any validators that already produced an output (answered). This avoids reassigning an
+                            // already-answered or already-assigned node when the validator pool is small.
+                            let mut validators_to_exclude = validators_with_empty_output.clone();;
+                            // add already assigned validators for this request
+                            for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
+                                if !validators_to_exclude.contains(&assigned_validator) {
+                                    validators_to_exclude.push(assigned_validator);
+                                }
+                            }
+                           
+
                             // Reassign the request to other validators
                             match
                                 Self::opoc_assignment(
@@ -582,7 +582,7 @@ impl<T: Config> Pallet<T> {
                                     &current_block,
                                     OpocLevel::Level1,
                                     validators_with_empty_output.len() as u32,
-                                    validators_with_empty_output,
+                                    validators_to_exclude,
                                     false
                                 )
                             {
