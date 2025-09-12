@@ -14,6 +14,20 @@ use pallet_staking::Pallet as Staking;
 use sp_staking::EraIndex;
 
 impl<T: Config> Pallet<T> {
+    // Build an exclude list starting from provided seeds and including
+    // any validators already assigned to the given request. Ensures uniqueness.
+    fn opoc_build_exclude_with_assigned(
+        request_id: &RequestId,
+        mut seeds: Vec<T::AccountId>,
+    ) -> Vec<T::AccountId> {
+        for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
+            if !seeds.contains(&assigned_validator) {
+                seeds.push(assigned_validator);
+            }
+        }
+        seeds
+    }
+
     // OPoC entry point
     pub fn opoc_run(current_block: BlockNumber) -> Result<
         (
@@ -181,14 +195,10 @@ impl<T: Config> Pallet<T> {
                         // Build an exclude list: include the timed-out validator, any currently assigned validators for this
                         // request, and any validators that already produced an output (answered). This avoids reassigning an
                         // already-answered or already-assigned node when the validator pool is small.
-                        let mut validators_to_exclude = Vec::<T::AccountId>::new();
-                        validators_to_exclude.push(validator.clone());
-                        // add already assigned validators for this request
-                        for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
-                            if !validators_to_exclude.contains(&assigned_validator) {
-                                validators_to_exclude.push(assigned_validator);
-                            }
-                        }
+                        let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
+                            &request_id,
+                            vec![validator.clone()]
+                        );
 
 
                         // Reassign the request to another validator
@@ -296,13 +306,10 @@ impl<T: Config> Pallet<T> {
                             }
 
                             // Build exclude list to avoid reassigning the same or already-answered validators
-                            let mut validators_to_exclude = Vec::<T::AccountId>::new();
-                            validators_to_exclude.push(validator.clone());
-                            for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
-                                if !validators_to_exclude.contains(&assigned_validator) {
-                                    validators_to_exclude.push(assigned_validator);
-                                }
-                            }
+                            let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
+                                &request_id,
+                                vec![validator.clone()]
+                            );
                             
 
                             // Reassign the request to another validator
@@ -353,13 +360,10 @@ impl<T: Config> Pallet<T> {
                         // When we have a minimum consensus of 2, we need to assign the request to other validators
                         // Assign the request to validators for opoc level 1
                         // Build exclude list to avoid assigning to validator(s) that already handled this request
-                        let mut validators_to_exclude = Vec::<T::AccountId>::new();
-                        validators_to_exclude.push(validator.clone());
-                        for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
-                            if !validators_to_exclude.contains(&assigned_validator) {
-                                validators_to_exclude.push(assigned_validator);
-                            }
-                        }
+                        let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
+                            &request_id,
+                            vec![validator.clone()]
+                        );
                     
 
                         match
@@ -563,13 +567,10 @@ impl<T: Config> Pallet<T> {
                             // Build an exclude list: include the timed-out validator, any currently assigned validators for this
                             // request, and any validators that already produced an output (answered). This avoids reassigning an
                             // already-answered or already-assigned node when the validator pool is small.
-                            let mut validators_to_exclude = validators_with_empty_output.clone();;
-                            // add already assigned validators for this request
-                            for (assigned_validator, _) in OpocAssignment::<T>::iter_prefix(*request_id) {
-                                if !validators_to_exclude.contains(&assigned_validator) {
-                                    validators_to_exclude.push(assigned_validator);
-                                }
-                            }
+                            let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
+                                &request_id,
+                                validators_with_empty_output.clone()
+                            );
                            
 
                             // Reassign the request to other validators
