@@ -1,253 +1,28 @@
-# Changelog for v0.3.0
+# Changelog for v0.3.1
 
 ## Changes
-- feat: add tss - new release minor release
-- chore: Merge pull request #20 from Uomi-network/hotfix/fix-signed-with-turing
-- feat(tss): enhance session management with outbound message queuing and flushing
-- feat(tss): add complete reshare session functionality in ClientManager and ClientWrapper
-- feat(tss): implement complete reshare session functionality with unsigned transaction support
-- feat(offchain): enhance opoc level detection with error handling and semaphore management
-- feat(tss): enhance DKG reshare session handling with old session ID mapping and participant preloading
-- feat(tss): enhance DKG reshare session handling with old session ID tracking
-- feat(tss): add unsigned variant for reshare DKG session and payload struct
-- fix(consts): update PALLET_VERSION to 6 for compatibility
-- fix(staking): set SlashDeferDuration to 0 for immediate penalty application
-- fix(consts): revert PALLET_VERSION to 5 for compatibility
-- fix(tss): enhance validator update logic to detect changes and handle missing IDs
-- fix(opoc): defer staking penalty application for timeouts to request finalization, ensuring accurate reward slashing
-- chore: Merge branch 'main' into hotfix/fix-signed-with-turing
-- fix(uomi): add MaxOffchainConcurrent configuration to limit concurrent offchain executions
-- fix(opoc): correct validator reference in reset of current era reward points during assignment
-- fix(opoc): reset staking era reward points for validators upon assignment, ensuring no payout for current era
-- fix(opoc): enhance validator assignment logic by excluding already assigned or timed-out validators
-- fix(tss): enhance unknown peer message handling by storing full SignedTssMessage for verification
-- fix(runtime): correct total era payout calculation by removing unnecessary UOMI multiplier
-- fix(runtime): simplify year zero balance calculations by using parentheses for clarity
-- fix(tss): add check for existing keys in Outputs before processing requests
-- fix(runtime): adjust year zero balance calculations to use UOMI multiplier
-- fix(runtime): update initial balance for year zero and add reminder for mainnet removal
-- feat(tss): enhance debug logging for signature creation and verification processes
-- feat(opoc): implement era points reset for validators and avoid double subtraction of rewards
-- feat(runtime): add OffenceReporter type to pallet_uomi_engine configuration
-- fix(tss): disambiguate OffenceReporter usage and optimize String conversion in no_std
-- chore: Merge remote-tracking branch 'origin/turing-feat/lock-not-working-nodes' into hotfix/fix-signed-with-turing
-- feat(engine): integrate offence reporting with pallet-offences and add related configurations
-- fix(tss): improve transaction hash handling to avoid double encoding and enhance logging
-- feat(tss): reintroduce deprecated extrinsics for legacy transaction decoding
-- feat(tss): add fail_multi_chain_transaction_unsigned function and payload for marking failed transactions
-- feat(tss): add tests for timeout handling of pending transactions in offchain logic
-- feat(tss): add timeout handling for pending multi-chain transactions with new payload
-- fix(tss): refine TSS offence reporting logic to ensure valid offence types are reported
-- feat(tss): enhance nonce management with gap filler sessions and payload structure
-- feat(tss): implement TSS offence reporting and slashing logic with new tests
-- fix(tss): clone session before storing in SigningSessions to prevent ownership issues
-- feat(tss): add nonce tracking and pending status types
-- feat: add support for Base chain in multi-chain RPC client
-- feat: add support for Base chain and update Ankr RPC URLs for Ethereum and Base
-- feat: enhance deduplication and logging for signing sessions and active participants
-- feat: enhance logging for key generation and signing phases, adding detailed diagnostics
-- fix: remove hardcoded action.from assignment in build_or_passthrough function
-- fix: enhance address derivation logic for actions, adding logging for better traceability
-- feat: revert spec and transaction versions to 1 for SubmitFsaTransactionPayload changes
-- feat: bump spec and transaction versions to 2 for SubmitFsaTransactionPayload changes
-- feat: update FsaTransactionRequests handling to use request_id for direct removal and adjust SubmitFsaTransactionPayload structure
-- feat: enhance migration from legacy to new SigningSession layout, adding request_id and restructuring FsaTransactionRequests
-- feat: implement request ID based linking and deduplication in TSS pallet, including migration from legacy storage
-- test: add tests for request ID deduplication and storage management in signing sessions
-- feat: integrate U256 request IDs into signing session management and update related storage mappings
-- test: update expected derived address in test case for consistency
-- fix: convert message hash to Vec before passing to ecdsa_create_sign_phase
-- feat: add keccak_256 hashing import for message processing
-- feat: hash message using keccak before signing in ecdsa_create_sign_phase
-- feat: add logging for RPC transaction submissions with session ID
-- feat: enhance RPC error logging with specific method prefixes for better traceability
-- fix: update rpc_gas_limit to be an Option in build_or_passthrough function
-- feat: update gas limit estimation in build_or_passthrough function
-- feat: enhance RPC logging with consistent prefixes for better traceability
-- test: add test for handling no requests in OPOC iteration
-- feat: add error handling for missing outputs in OPOC request processing
-- feat: enhance transaction handling by deriving sender address and adding dynamic gas estimation
-- feat: add unsigned FSA transaction submission and payload structure for offchain processing
-- test: enhance opoc request processing tests to verify data handling and last processed ID logic
-- feat: update OPOC request handling to use U256 for request IDs and add unsigned call for updating last processed request ID
-- fix: comment out session creation logging to prevent premature invocation during initialization
-- fix: improve error handling during output parsing and enhance logging for request failures
-- feat: prevent duplicate signing sessions and enhance CreateSigningSessionPayload with chain_id
-- feat: enhance multi-chain transaction support with detailed preimage handling and structured action processing
-- feat: Refactor transaction building in TSS pallet to improve clarity and modularity
-- fix: ensure session_exists checks reference to signing_id in add_and_initialize_signing_session
-- fix: prevent duplicate signing session initialization by checking session existence
-- feat: implement submit_signature_result function and associated payload for signature processing
-- fix: add mapping from signing session ID to DKG session ID for key material resolution
-- fix: refactor signing session handling to use distinct session IDs for improved clarity and functionality
-- fix: refactor extract_agg_key function for improved parsing and error handling of aggregated public key
-- fix: enhance DKG result handling by extracting aggregated public key from JSON with robust parsing
-- fix: improve diagnostics for bounded public key preparation and increase max public key size
-- fix: enhance TSS message handling with challenge-response mechanism and nonce binding
-- fix: enhance TSS announcement handling with replay protection and nonce binding
-- fix: standardize transaction pool trait bounds in wrapper and setup modules
-- fix: enhance logging for DKG result submission and increase deadline for slashed validators
-- fix: update transaction validity for DKG result submission and adjust session state check
-- fix: improve session state check to allow for additional states during DKG process
-- fix: improve session existence checks in message processing to prevent premature returns
-- fix: update logging for non-existent ECDSA session messages to indicate buffering
-- fix: increase session timeout to 15 minutes in session manager
-- feat: enhance logging and participant ID resolution in ECDSA message handling
-- fix: comment out signature reconstruction and verification logic in verify_signature function
-- fix: update participant handling to use stable validator IDs and improve identifier resolution in signing sessions
-- refactor: streamline message signing by utilizing centralized SigningService in verification
-- fix: comment out signature verification logic in verify_signature function
-- fix: update DKG session handling to use stable participant identifiers and improve validator ID mapping in tests
-- feat: implement P2P signing message handling and session management improvements
-- fix: enhance message processing to buffer unknown peers and request identification
-- fix: update TssMessageHandler and related components to include sender PeerId in message forwarding
-- fix: add mock implementation for TssInterface in test runtime
-- fix: enhance PeerId handling and error logging across message processing components
-- fix: improve error handling and logging for deserialization in MemoryStorage and DKG message processing
-- Merge pull request #12 from Widiskel/main
-- docs: correct typo in README.md adding dependencies section
-- Merge pull request #11 from Uomi-network/feat/tss-slash+signin-message
-- fix: skip processing for empty CIDs in CidsStatus iteration
-- fix: handle case when no local names are found for the most used version
-- fix: validate CID to ensure it is not empty
-- fix: skip processing for empty CIDs in CidsStatus iteration
-- fix: handle case when no local names are found for the most used version
-- fix: validate CID to ensure it is not empty
-- feat(tss): Update DKG session message retrieval to use signing session message
-- feat(tss): Add method to retrieve DKG session message for improved event handling
-- feat(tss): Enhance event handling by refactoring event processing and improving participant retrieval methods
-- feat(tss): Introduce MessageProcessor and SigningService for TSS message handling and signing
-- feat(tss): Refactor reshare phase logic for improved clarity and error handling
-- feat(tss): Refactor message handling in SessionManager for improved clarity and modularity
-- chore: Refactor TSS session manager tests to use updated session core structure
-- feat(tss): refactor setup_gossip function and move related logic to setup module
-- feat(tss): Refactor session management and introduce new components
-- chore: Refactor TSS Client and Gossip Modules
-- chore(tss): complete refactor
-- feat: Refactor forward_to_session_manager to accept SignedTssMessage
-- feat: Increase max wait blocks for transaction confirmation from 100 to 300
-- feat: Implement offchain transaction status tracking and retrieval in MultiChain pallet
-- feat: Add account balance retrieval for specified chain in MultiChainRpcClient
-- refactor: Clean up comments and adjust default retry mechanism setting in TSS message handling
-- feat: Implement retry mechanism for ECDSA message handling with configurable parameters
-- fix: Remove debug initialization of year_zero in EraPayout implementation
-- feat: Implement agent payout distribution logic in UOMIEraPayout
-- feat: Implement real multi-chain RPC client with error handling and transaction encoding
-- feat: Add Uomi support to SupportedChain enum and RPC methods
-- feat: Enhance FSA transaction handling with new storage and processing functions
-- chore: Merge branch 'feat/tss-wallet-creation' into feat/tss-slash
-- feat: Implement ReportTssOffence payload structure and processing for TSS offences
-- feat: Report InvalidCryptographicData offences for round1 and round2 verification failures in SessionManager
-- feat: Enhance error handling in ECDSAManager and report TSS offences
-- feat: Implement reporting of InvalidCryptographicData offences in SessionManager
-- feat: Enable TSS offence reporting functionality in SessionManager
-- feat: Refactor TssOffenceType encoding to a dedicated method
-- feat: Implement TSS offence reporting functionality in ClientManager
-- feat: Add TSS offence reporting functionality to runtime APIs
-- feat: Comment out TSS offence reporting functionality
-- feat: Add TSS offence reporting and slashing mechanism
-- feat: Implement TSS offence reporting and slashing mechanism
-- fix: Remove TODO and define threshold for agent wallet creation
-- fix: Implement MockTssInterface and update related configurations in tests and mock modules
-- feat: Add validators module for managing validator IDs and report counts
-- feat: Implement sessions module for managing DKG sessions and participant reporting
-- feat: Add missing Vec import in errors and payloads modules
-- feat: Refactor error handling and signature verification into separate modules
-- feat: Move crypto module to a separate file for better organization
-- feat: Add payloads module with various inherent and payload structures
-- feat: Add miniserde and update sp-runtime dependencies in Cargo.lock
-- feat: Add read_chain_state host function for offchain processing
-- feat: Implement multi-chain TSS pallet functionality with Ankr RPC integration
-- fix: Change UnsupportedActionType to use static str and clean up imports
-- fix: qwen_deepseek var
-- fix: Update import for BTreeMap and handle unsupported action type error
-- fix(tss): fixed tss whitelisted address
-- fix: version
-- feat: Add OPOC request processing and create signing session functionality
-- chore: Refactor and implement On-Chain Action Elaboration System (UIP-001)
-- feat: Add On-Chain Action Elaboration System proposal document
-- feat: Introduce On-Chain Action Elaboration System proposal document
-- chore: Revise README structure and enhance content for TSS implementation overview
-- feat: Update TSS interface to include threshold parameter for wallet creation and adjust pin_agent function accordingly
-- feat: Remove TODO comment for returning actual wallet address in TSS interface
-- feat: Add storage for previous validator set and handle era transitions for DKG resharing
-- feat: Use None origin for DKG session creation to bypass permission checks
-- feat: Implement TSS interface for wallet management in IPFS and TSS pallets
-- feat: Added cleanup of opoc blacklist storage every 100 blocks
-- feat: Make opoc to not consider blacklisted nodes for assignments
-- feat: Fix opoc reassign
-- feat: Fix opoc operations management
-- feat: Fix recursive assign of requests with empty output by adding nodes to exclude on re-assign request
-- feat: Readme update
-- feat: Removed chill mode on uomi engine
-- feat: Forced valid wasm execution to not return empty result
-- feat: Added management of error outputs for opoc level 2
-- feat: Added management of error outputs for opoc level 1
-- feat: Added management of error outputs for opoc level 0
-- feat: Renamed NodesErrors and NodesTimeouts to OpocErrors and OpocTimeouts + set RequestId as primary key and AccountId as secondary
-- feat: merge feat/opoc-level-in-assignments
-- Merge pull request #7 from Uomi-network/feat/report-tss-participants
-- Merge pull request #6 from Uomi-network/feat/opoc-level-in-assignments
-- fix: Initializes announcement message in TestNode
-- fix: Refactors TSS announcement logic
-- fix: Removes `std` feature from `pallet-session`
-- fix: Adds `pallet-session` to std feature
-- fix: Uses session pallet for validator retrieval
-- chore: Removes commented-out GossipHandler code
-- fix: Removes unnecessary conditional check
-- fix: Fixes type inference for large numbers
-- fix(tss): Delays era reset based on block number
-- fix(tss): Resets validator report counts at era end
-- feat: Handles messages from unknown peers
-- fix(tss): use a hardcoded path for key material
-- fix(tss): Avoids resending announcements to peers
-- feat(tss): add message expiration and allowance functions to TssValidator; integrate Prometheus registry in service setup
-- feat(tss): add message deduplication with time-based expiry to TssValidator
-- Revert "fix(tss): try to reduce the number of sent messages"
-- Revert "chore(tss): cleanup warnings"
-- chore(tss): cleanup warnings
-- fix(tss): try to reduce the number of sent messages
-- feat(tss): adds a dump/load memory storage feature
-- chore: cleanup warnings
-- chore(tss): clean up warnings anre unused
-- fix(tests): adds test coverage
-- fix(tests): amend unit tests
-- feat(tss): don't allow creating a key pair if there's less than 2/3 active validators involved
-- fix(tss): adds consensus for submitted DKG result + tests
-- fix(deadline): improve the deadline flow
-- fix(service): add is_authority
-- fix(tests): fix mock.rs
-- fix(report): changes how reports are reported
-- chore(tests): add missing dev dep
-- fix(client): runtime should receive extensions right before calling the API
-- fix(tss): avoid possible deadlock
-- fix(tss): unit tests are now working
-- fix(cargo): adding missing deps
-- feat(tss): introduce reports for bad participants
-- fix(paper): uses the actual rules from the paper for the number of assignees
-- fix: also check for the assignemnt to be at level0
-- fix: restore opoc_level checj
-- feat(opoc-level): adds an explicit field for the assignemnt level
-- fix: post merge fixes
-- chore: merge remote-tracking branch 'origin/turing-backup' into turing
-- chore(tss): change the env var for the TSS key material directory
-- fix(tss): loops until keys are available and then starts the actual pin
-- feat(turing): adds new inflation model
-- chore: clean warning
-- fix(tss): fixes wrong message handling
-- fix(turing): adds explicit signature check for offchain Call's
-- fix(turing): wrong order of ops
-- chore(turing): remove workaround IFs for finney network
-- chore(turing): remove logs
-- feat: Merged finney
-- feat: Update opoc_assignment_get_random_validators to not take accounts in chilling mode + added tests
-- feat: Added chilling storage on uomi-engine with set_chilling function to permit validators to set them on/off chill mode
-- chore: Merge main
-- feat: Added ai service check on startup
-- refactor: Cleanup finney chain
-- test: Test get_request_sender with new test agent agent4.wasm
-- feat: Added get_request_sender proxy function for agent
-- feat: Added address on Inputs storage
-- Merge branch 'feat/check-inherent' into turing
-- feat: activate check inherent
+- feat: new release
+- refactor: comment out timestamp validation logic in message verification
+- refactor: extract exclude list building logic into a separate function for clarity and reuse
+- refactor: streamline validator exclusion logic in OPoC request reassignment
+- refactor: conditionally check AI service status for authority nodes only
+- refactor: simplify AI service version check logic for authority nodes
+- feat: implement base path configuration for TSS storage and enhance directory validation
+- refactor: comment out timestamp validation and message expiration logic in TSS validator
+- fix: update multi-party-ecdsa dependency version to 0.1.3
+- refactor: remove fallback queue for online signing requests and related tests
+- feat: new smart contract addresses
+- fix: enhance ECDSA signing session management by queuing online requests until offline material is available
+- fix: implement gas estimation request structure and refactor gas estimation logic
+- fix: enhance gas estimation logging by including default values for missing fields
+- fix: add logging for gas estimation requests in MultiChainRpcClient
+- fix: remove early return for empty requests in transaction signing process
+- fix: improve participant index construction by using validator IDs or fallback to sequential indices
+- fix: handle empty requests by setting max_request_id to last_id_u256
+- fix: enable gas limit estimation for transactions when not provided
+- fix: comment out incorrect year_zero balance calculation for clarity
+- fix: update RPC URLs for supported chains in MultiChainRpcClient
+- chore: change log level from info to debug for RPC transaction and gas estimation logs
+- chore: change log level from info to debug for RPC calls and responses
+- chore: streamline error handling and improve logging verbosity in output processing
 
