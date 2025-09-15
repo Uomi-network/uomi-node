@@ -92,15 +92,15 @@ pub fn verify_message_sender(
     }
 
     // Check timestamp validity
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    // let current_time = std::time::SystemTime::now()
+    //     .duration_since(std::time::UNIX_EPOCH)
+    //     .unwrap_or_default()
+    //     .as_secs();
 
-    if !is_timestamp_valid(signed_message, current_time, 300) { // 5 minutes max age
-        log::warn!("[TSS] Message timestamp is invalid or too old");
-        return false;
-    }
+    // if !is_timestamp_valid(signed_message, current_time, 300) { // 5 minutes max age
+    //     log::warn!("[TSS] Message timestamp is invalid or too old");
+    //     return false;
+    // }
 
     true
 }

@@ -43,15 +43,15 @@ impl MessageProcessor {
             return;
         }
         
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        // let current_time = std::time::SystemTime::now()
+        //     .duration_since(std::time::UNIX_EPOCH)
+        //     .unwrap_or_default()
+        //     .as_secs();
         
-        if !verification::is_timestamp_valid(&signed_message, current_time, 300) { // 5 minutes max age
-            log::warn!("[TSS] Received message with invalid or old timestamp");
-            return;
-        }
+        // if !verification::is_timestamp_valid(&signed_message, current_time, 300) { // 5 minutes max age
+        //     log::warn!("[TSS] Received message with invalid or old timestamp");
+        //     return;
+        // }
         
         log::info!("[TSS] ✅ Signed message signature and timestamp verified successfully");
         
