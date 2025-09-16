@@ -38,7 +38,7 @@ use sp_runtime::app_crypto::Ss58Codec;
 use uomi_runtime::pallet_uomi_engine::crypto::CRYPTO_KEY_TYPE as UOMI;
 use sp_runtime::traits::Member;
 use sp_runtime::{
-    traits::{Block as BlockT, Hash as HashT, Header as HeaderT},
+    traits::{Block as BlockT, Hash as HashT, Header as HeaderT, SaturatedConversion},
 };
 
 use uomi_runtime::AccountId;
@@ -102,18 +102,13 @@ fn create_signed_announcement(
     announcement: &Option<TssMessage>,
     keystore_container: &KeystoreContainer,
     validator_key: &[u8],
+    block_number: u64,
 ) -> Option<SignedTssMessage> {
     let announcement_msg = announcement.as_ref()?;
-    
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    
     let mut payload = Vec::new();
     payload.extend_from_slice(&announcement_msg.encode());
     payload.extend_from_slice(validator_key);
-    payload.extend_from_slice(&current_time.to_le_bytes());
+    payload.extend_from_slice(&block_number.to_le_bytes());
     
     match keystore_container.keystore().sign_with(
         UOMI,
@@ -129,7 +124,7 @@ fn create_signed_announcement(
                         message: announcement_msg.clone(),
                         sender_public_key: validator_key[..32].try_into().unwrap(),
                         signature,
-                        timestamp: current_time,
+                        block_number: block_number,
                     })
                 }
                 Err(_) => {
@@ -245,6 +240,7 @@ fn create_gossip_handler<B, N, S>(
     peer_mapper: Arc<Mutex<PeerMapper>>,
     keystore: KeystorePtr,
     validator_public_key_array: [u8; 32],
+    get_block_number: Arc<dyn Fn() -> u64 + Send + Sync>,
 ) -> GossipHandler<B>
 where
     B: BlockT,
@@ -272,6 +268,7 @@ where
         gossip_handler_message_receiver,
         keystore,
         validator_public_key_array,
+        get_block_number,
     )
 }
 
@@ -328,16 +325,21 @@ where
             &mut rng,
         );
         
-        let signed_announcement = create_signed_announcement(
-            &announcement,
-            &keystore_container,
-            &validator_key_clone,
-        );
+        let signed_announcement = {
+            let block_number = client.info().best_number.saturated_into::<u64>();
+            create_signed_announcement(&announcement, &keystore_container, &validator_key_clone, block_number)
+        };
+
+        let get_block_number_validator = Arc::new({
+            let client = Arc::clone(&client);
+            move || client.info().best_number.saturated_into::<u64>()
+        });
 
         let gossip_validator = Arc::new(TssValidator::new(
             Duration::from_secs(120),
             announcement.clone(),
             signed_announcement,
+            get_block_number_validator,
         ));
 
         // Set up communication channels
@@ -371,6 +373,11 @@ where
             .expect("Validator key should be 32 bytes");
 
         // Create gossip handler
+        let get_block_number = Arc::new({
+            let client = Arc::clone(&client);
+            move || client.info().best_number.saturated_into::<u64>()
+        });
+
         let mut gossip_handler = create_gossip_handler::<B, _, _>(
             network.clone(),
             sync,
@@ -383,6 +390,7 @@ where
             peer_mapper.clone(),
             keystore_container.keystore(),
             validator_public_key_array,
+            get_block_number,
         );
 
         // Broadcast initial announcement if available

@@ -37,23 +37,15 @@ impl MessageProcessor {
             std::mem::discriminant(&signed_message.message),
             signed_message.sender_public_key);
         
-        // Verify the signature and timestamp
+        // Verify the signature and block number
         if !verification::verify_signature(&signed_message) {
             log::warn!("[TSS] Received message with invalid signature");
             return;
         }
         
-        // let current_time = std::time::SystemTime::now()
-        //     .duration_since(std::time::UNIX_EPOCH)
-        //     .unwrap_or_default()
-        //     .as_secs();
+    // Block-age validation is performed in the gossip validator stage.
         
-        // if !verification::is_timestamp_valid(&signed_message, current_time, 300) { // 5 minutes max age
-        //     log::warn!("[TSS] Received message with invalid or old timestamp");
-        //     return;
-        // }
-        
-        log::info!("[TSS] ✅ Signed message signature and timestamp verified successfully");
+    log::info!("[TSS] ✅ Signed message signature and block number verified successfully");
         
         // Extract the inner message and sender info
     let message = signed_message.message.clone();
@@ -156,7 +148,7 @@ impl MessageProcessor {
                 // Someone's asking about ourselves, we need to announce ourselves
                 log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);                
                 if let Some(mut announcement) = session_manager.announcement.clone() {
-                    // Inject the challenge nonce by re-signing announcement with nonce influencing outer signature (timestamp already helps).
+                    // Inject the challenge nonce by re-signing announcement with the nonce influencing the signature payload (along with block number).
                     // For now we simply log it; future work could bind challenge into inner announcement signature.
                     log::debug!("[TSS] Responding to GetInfo with challenge nonce {}", challenge_nonce);
                     // Send the announcement message to the sender
