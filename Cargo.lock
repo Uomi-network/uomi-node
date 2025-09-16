@@ -3547,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "finney-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -6225,7 +6225,7 @@ checksum = "b4ce301924b7887e9d637144fdade93f9dfff9b60981d4ac161db09720d39aa5"
 
 [[package]]
 name = "local-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",

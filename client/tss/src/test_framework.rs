@@ -126,6 +126,10 @@ impl<B: BlockT> ClientManager<B> for TestClientManager {
         Default::default()
     }
 
+    fn best_number(&self) -> <<B as BlockT>::Header as HeaderT>::Number {
+        Default::default()
+    }
+
     fn report_participants(
         &self,
         _hash: <<B as BlockT>::Header as HeaderT>::Hash, 
