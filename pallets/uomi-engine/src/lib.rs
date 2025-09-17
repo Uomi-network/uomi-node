@@ -481,16 +481,36 @@ pub mod pallet {
         }
 
 		fn on_finalize(_: BlockNumberFor<T>) {
-            // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
             let current_block_number = U256::from(0) + <frame_system::Pallet<T>>::block_number();
 
-            let divisor = if current_block_number > U256::from(450000) { U256::from(1000) } else { U256::from(100) };
+            if current_block_number > U256::from(consts::TURING_UPDATE_1_BLOCK) {
+                match Self::opoc_run(current_block_number) {
+                    Ok(operations) => {
+                        Self::opoc_store_operations(operations);
+                    },
+                    Err(error) => {
+                        log::error!("Error running opoc_run: {:?}", error);
+                    },
+                };
 
+                match Self::aimodelscalc_run(current_block_number) {
+                    Ok(operations) => {
+                        Self::aimodelscalc_store_operations(operations);
+                    },
+                    Err(error) => {
+                        log::error!("Error running aimodelscalc_run: {:?}", error);
+                    },
+                };
+            }
+
+            // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
+            let divisor = if current_block_number > U256::from(consts::TURING_UPDATE_1_BLOCK) { U256::from(1000) } else { U256::from(100) };
             if current_block_number % divisor == U256::zero() {
                 log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
                 OpocBlacklist::<T>::remove_all(None);
             }
 
+            // Reset validators' current era points at the end of each era to avoid overflow.
             Self::reset_validators_current_era_points_for_current_era().unwrap_or_else(|e| {
                 log::error!("Error resetting validators' current era points: {:?}", e);
             });
@@ -682,9 +702,12 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			ensure_none(origin)?;
             assert!(!InherentDidUpdate::<T>::exists(), "Inherent data must be updated only once in the block");
-			
-            Self::opoc_store_operations(opoc_operations)?;
-            Self::aimodelscalc_store_operations(aimodelscalc_operations)?;
+            
+            let current_block_number = U256::from(0) + <frame_system::Pallet<T>>::block_number();
+            if current_block_number <= U256::from(consts::TURING_UPDATE_1_BLOCK) {
+                Self::opoc_store_operations(opoc_operations)?;
+                Self::aimodelscalc_store_operations(aimodelscalc_operations)?;
+            }
 
 			InherentDidUpdate::<T>::set(true);
 			Ok(().into())
@@ -818,100 +841,111 @@ pub mod pallet {
         fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
 
-            let opoc_operations = match Self::opoc_run(current_block_number) {
-                Ok(operations) => {
-                    operations
-                },
-                Err(error) => {
-                    return None;
-                },
-            };
+            if current_block_number <= U256::from(consts::TURING_UPDATE_1_BLOCK) {
+                let opoc_operations = match Self::opoc_run(current_block_number) {
+                    Ok(operations) => {
+                        operations
+                    },
+                    Err(error) => {
+                        return None;
+                    },
+                };
 
-            let aimodelscalc_operations = match Self::aimodelscalc_run(current_block_number) {
-                Ok(operations) => {
-                    operations
-                },
-                Err(error) => {
-                    return None;
-                },
-            };
+                let aimodelscalc_operations = match Self::aimodelscalc_run(current_block_number) {
+                    Ok(operations) => {
+                        operations
+                    },
+                    Err(error) => {
+                        return None;
+                    },
+                };
 
-            Some(Call::set_inherent_data { 
-                opoc_operations,
-                aimodelscalc_operations
-            })
+                Some(Call::set_inherent_data { 
+                    opoc_operations,
+                    aimodelscalc_operations
+                })
+            } else {
+                Some(Call::set_inherent_data { 
+                    opoc_operations: (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
+                    aimodelscalc_operations: BTreeMap::new(),
+                })
+            }
         }
     
         fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
             let expected_block_number = current_block_number + 1;
 
-            match call {
-                Call::set_inherent_data { opoc_operations, aimodelscalc_operations } => {
-                    let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
-                        Ok(opoc_operations) => {
-                            opoc_operations
-                        },
-                        Err(error) => {
-                            log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
+            if current_block_number <= U256::from(consts::TURING_UPDATE_1_BLOCK) {
+                match call {
+                    Call::set_inherent_data { opoc_operations, aimodelscalc_operations } => {
+                        let expected_opoc_operations = match Self::opoc_run(expected_block_number) {
+                            Ok(opoc_operations) => {
+                                opoc_operations
+                            },
+                            Err(error) => {
+                                log::info!("UOMI-ENGINE: Failed to run OPoC on check_inherent. error: {:?}", error);
+                                return Err(InherentError::InvalidInherentValue);
+                            },
+                        };
+                        let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, opoc_timeouts_operations, opoc_errors_operations, outputs_operations) = opoc_operations;
+                        let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_opoc_timeouts_operations, expected_opoc_errors_operations, expected_outputs_operations) = expected_opoc_operations;
+                        
+                        if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
+                            log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
+                            log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
                             return Err(InherentError::InvalidInherentValue);
-                        },
-                    };
-                    let (opoc_blacklist_operations, opoc_assignment_operations, nodes_works_operations, opoc_timeouts_operations, opoc_errors_operations, outputs_operations) = opoc_operations;
-                    let (expected_opoc_blacklist_operations, expected_opoc_assignment_operations, expected_nodes_works_operations, expected_opoc_timeouts_operations, expected_opoc_errors_operations, expected_outputs_operations) = expected_opoc_operations;
-                    
-                    if opoc_blacklist_operations != &expected_opoc_blacklist_operations {
-                        log::info!("failed check opoc_blacklist_operations: {:?}", opoc_blacklist_operations);
-                        log::info!("expected_opoc_blacklist_operations: {:?}", expected_opoc_blacklist_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
-                    if opoc_assignment_operations != &expected_opoc_assignment_operations {
-                        log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
-                        log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
-                    if nodes_works_operations != &expected_nodes_works_operations {
-                        log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
-                        log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
-                    if opoc_timeouts_operations != &expected_opoc_timeouts_operations {
-                        log::info!("failed check opoc_timeouts_operations: {:?}", opoc_timeouts_operations);
-                        log::info!("expected_opoc_timeouts_operations: {:?}", expected_opoc_timeouts_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
-                    if outputs_operations != &expected_outputs_operations {
-                        log::info!("failed check outputs_operations: {:?}", outputs_operations);
-                        log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
-                    if opoc_errors_operations != &expected_opoc_errors_operations {
-                        log::info!("failed check opoc_errors_operations: {:?}", opoc_errors_operations);
-                        log::info!("expected_opoc_errors_operations: {:?}", expected_opoc_errors_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
-
-                    let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
-                        Ok(operations) => {
-                            operations
-                        },
-                        Err(error) => {
-                            log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
+                        }
+                        if opoc_assignment_operations != &expected_opoc_assignment_operations {
+                            log::info!("failed check opoc_assignment_operations: {:?}", opoc_assignment_operations);
+                            log::info!("expected_opoc_assignment_operations: {:?}", expected_opoc_assignment_operations);
                             return Err(InherentError::InvalidInherentValue);
-                        },
-                    };
-                    
-                    if expected_aimodelscalc_operations != *aimodelscalc_operations {
-                        log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
-                        log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
-                        return Err(InherentError::InvalidInherentValue);
-                    }
+                        }
+                        if nodes_works_operations != &expected_nodes_works_operations {
+                            log::info!("failed check nodes_works_operations: {:?}", nodes_works_operations);
+                            log::info!("expected_nodes_works_operations: {:?}", expected_nodes_works_operations);
+                            return Err(InherentError::InvalidInherentValue);
+                        }
+                        if opoc_timeouts_operations != &expected_opoc_timeouts_operations {
+                            log::info!("failed check opoc_timeouts_operations: {:?}", opoc_timeouts_operations);
+                            log::info!("expected_opoc_timeouts_operations: {:?}", expected_opoc_timeouts_operations);
+                            return Err(InherentError::InvalidInherentValue);
+                        }
+                        if outputs_operations != &expected_outputs_operations {
+                            log::info!("failed check outputs_operations: {:?}", outputs_operations);
+                            log::info!("expected_outputs_operations: {:?}", expected_outputs_operations);
+                            return Err(InherentError::InvalidInherentValue);
+                        }
+                        if opoc_errors_operations != &expected_opoc_errors_operations {
+                            log::info!("failed check opoc_errors_operations: {:?}", opoc_errors_operations);
+                            log::info!("expected_opoc_errors_operations: {:?}", expected_opoc_errors_operations);
+                            return Err(InherentError::InvalidInherentValue);
+                        }
 
-                    log::info!("UOMI-ENGINE: Checking inherent OK");
- 
-                    Ok(())
+                        let expected_aimodelscalc_operations = match Self::aimodelscalc_run(expected_block_number) {
+                            Ok(operations) => {
+                                operations
+                            },
+                            Err(error) => {
+                                log::info!("Failed to run AI models calc on check_inherent. error: {:?}", error);
+                                return Err(InherentError::InvalidInherentValue);
+                            },
+                        };
+                        
+                        if expected_aimodelscalc_operations != *aimodelscalc_operations {
+                            log::info!("failed check aimodelscalc_operations: {:?}", aimodelscalc_operations);
+                            log::info!("expected_aimodelscalc_operations: {:?}", expected_aimodelscalc_operations);
+                            return Err(InherentError::InvalidInherentValue);
+                        }
+
+                        log::info!("UOMI-ENGINE: Checking inherent OK");
+    
+                        Ok(())
+                    }
+                    _ => Ok(()),
                 }
-                _ => Ok(()),
+            } else {
+                Ok(())
             }
         }
         
