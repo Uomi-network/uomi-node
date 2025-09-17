@@ -1588,8 +1588,6 @@ impl<T: Config> Pallet<T> {
     pub(crate) fn reset_validator_current_era_points(validator: &T::AccountId) -> Result<(), &'static str> {
         // Get current era; if staking not yet started, skip
         let current_era = match <pallet_staking::CurrentEra<T>>::get() { Some(e) => e, None => return Ok(()) };
-        // Avoid repeating for same (era, validator)
-        if <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::contains_key(current_era, validator) { return Ok(()); }
         // Fetch era points structure (always exists after era start) and mutate in place.
         let mut era_points = <pallet_staking::ErasRewardPoints<T>>::get(current_era);
         if let Some(points_entry) = era_points.individual.get_mut(validator) {
@@ -1597,6 +1595,19 @@ impl<T: Config> Pallet<T> {
             era_points.total = era_points.individual.values().copied().sum();
             <pallet_staking::ErasRewardPoints<T>>::insert(current_era, era_points);
             <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::insert(current_era, validator, ());
+        }
+        Ok(())
+    }
+
+    // Get the list of ProcessedOpocTimeoutEraResets for the current era and zero out the validator points
+    pub(crate) fn reset_validators_current_era_points_for_current_era() -> Result<(), &'static str> {
+        // Get current era; if staking not yet started, skip
+        let current_era = match <pallet_staking::CurrentEra<T>>::get() { Some(e) => e, None => return Ok(())  };
+        let processed_validators: Vec<T::AccountId> = <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::iter_prefix(current_era)
+            .map(|(validator, _)| validator).collect();
+        for validator in processed_validators {
+            Self::reset_validator_current_era_points(&validator)?;
+            log::info!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
         }
         Ok(())
     }
