@@ -417,7 +417,7 @@ mod tests {
                 message: msg,
                 sender_public_key: node.session_manager.session_core.validator_key[..32].try_into().unwrap(),
                 signature: [0u8; 64], // dummy signature for tests
-                timestamp: 0, // dummy timestamp for tests
+                block_number: 0, // dummy block_number for tests
             };
             assert_eq!(
                 process_session_manager_message(&mut handler, signed_message).is_ok(),
@@ -521,7 +521,7 @@ mod tests {
                     message: msg,
                     sender_public_key: next_node.session_manager.session_core.validator_key[..32].try_into().unwrap(),
                     signature: [0u8; 64], // dummy signature for tests
-                    timestamp: 0, // dummy timestamp for tests
+                    block_number: 0, // dummy block_number for tests
                 };
                 assert_eq!(
                     process_session_manager_message(&mut handler, signed_message).is_ok(),
@@ -1486,10 +1486,7 @@ fn test_unknown_peer_handling() {
             message: announce_message,
             sender_public_key: node_b_pubkey[..32].try_into().unwrap(),
             signature: [0u8; 64], // dummy signature for tests
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            block_number: 0,
         };
         MessageProcessor::handle_gossip_message(&mut node_a.session_manager, signed_announce_message, None);
     } // Drop mutable borrow

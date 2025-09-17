@@ -17,19 +17,19 @@ pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
         }
     }
 
-    // Reconstruct the payload that was signed: message + sender_public_key + timestamp
+    // Reconstruct the payload that was signed: message + sender_public_key + block_number
     let mut payload = Vec::new();
     payload.extend_from_slice(&signed_message.message.encode());
     payload.extend_from_slice(&signed_message.sender_public_key);
-    payload.extend_from_slice(&signed_message.timestamp.to_le_bytes());
+    payload.extend_from_slice(&signed_message.block_number.to_le_bytes());
 
     // Debug logging to help identify the issue
     log::debug!(
-        "[TSS] Verifying signature - payload_len: {}, public_key: {:?}, signature: {:?}, timestamp: {}",
+    "[TSS] Verifying signature - payload_len: {}, public_key: {:?}, signature: {:?}, block_number: {}",
         payload.len(),
         hex::encode(&signed_message.sender_public_key),
         hex::encode(&signed_message.signature),
-        signed_message.timestamp
+    signed_message.block_number
     );
 
     // Verify the signature using sr25519
@@ -47,20 +47,17 @@ pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
             hex::encode(&signed_message.signature),
         );
     }
-    // TODO: restore after diagnostics
-    true
+    is_valid
 }
 
-/// Checks if the message timestamp is within acceptable bounds.
-pub fn is_timestamp_valid(signed_message: &SignedTssMessage, current_time: u64, max_age_seconds: u64) -> bool {
-    let message_age = if current_time >= signed_message.timestamp {
-        current_time - signed_message.timestamp
-    } else {
-        // Message is from the future, reject it
+/// Checks if the message block number is within acceptable bounds.
+pub fn is_block_number_valid(signed_message: &SignedTssMessage, current_block: u64, max_age_blocks: u64) -> bool {
+    if current_block < signed_message.block_number {
+        // Message from the future (higher block number) - reject
         return false;
-    };
-
-    message_age <= max_age_seconds
+    }
+    let age = current_block - signed_message.block_number;
+    age <= max_age_blocks
 }
 
 /// Creates a signed message using the keystore.
@@ -68,13 +65,14 @@ pub fn create_signed_message(
     message: TssMessage,
     validator_public_key: &[u8; 32],
     keystore: &KeystorePtr,
+    block_number: u64,
 ) -> Result<SignedTssMessage, String> {
     // Delegate to the centralized SigningService to avoid duplication
     let service = SigningService::new(keystore.clone(), *validator_public_key);
-    service.create_signed_message(message)
+    service.create_signed_message(message, block_number)
 }
 
-/// Verifies that a signed message is from the expected sender and has a valid signature and timestamp.
+/// Verifies that a signed message is from the expected sender and has a valid signature and block number.
 pub fn verify_message_sender(
     signed_message: &SignedTssMessage,
     expected_sender: &TSSPublic,
@@ -91,16 +89,7 @@ pub fn verify_message_sender(
         return false;
     }
 
-    // Check timestamp validity
-    // let current_time = std::time::SystemTime::now()
-    //     .duration_since(std::time::UNIX_EPOCH)
-    //     .unwrap_or_default()
-    //     .as_secs();
-
-    // if !is_timestamp_valid(signed_message, current_time, 300) { // 5 minutes max age
-    //     log::warn!("[TSS] Message timestamp is invalid or too old");
-    //     return false;
-    // }
+    // Block-number replay checks occur in the gossip validator.
 
     true
 }

@@ -5,6 +5,7 @@ use std::{
 };
 use sp_keystore::KeystorePtr;
 use sp_runtime::traits::Block as BlockT;
+use sp_runtime::SaturatedConversion;
 use sc_utils::mpsc::{TracingUnboundedReceiver, TracingUnboundedSender, TrySendError};
 use sc_network::PeerId;
 use frost_ed25519::Identifier;
@@ -153,7 +154,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     pub fn send_signed_message(&self, message: TssMessage) -> Result<(), String> {
         log::info!("[TSS] 📤 SessionManager CREATING SIGNED MESSAGE: {:?}", std::mem::discriminant(&message));
         
-        let signed_message = verification::create_signed_message(message, &self.auth_manager.validator_public_key, &self.auth_manager.keystore)?;
+    let block_number: u64 = self.client.best_number().saturated_into::<u64>();
+    let signed_message = verification::create_signed_message(message, &self.auth_manager.validator_public_key, &self.auth_manager.keystore, block_number)?;
         
         log::info!("[TSS] ✅ Signed message created successfully, sending to gossip handler");
         
@@ -491,10 +493,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> {
     fn send_signed_message(&mut self, message: TssMessage, recipient: PeerId) -> Result<(), String> {
         // Create a signed message using the centralized signing helper
+        let block_number: u64 = self.client.best_number().saturated_into::<u64>();
         let signed_message = verification::create_signed_message(
             message,
             &self.auth_manager.validator_public_key,
             &self.auth_manager.keystore,
+            block_number,
         )?;
         
         // Send via gossip channel - this will be handled by the gossip handler
@@ -505,10 +509,12 @@ impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> 
 
     fn broadcast_signed_message(&mut self, message: TssMessage) -> Result<(), String> {
         // Create a signed message using the centralized signing helper
+        let block_number: u64 = self.client.best_number().saturated_into::<u64>();
         let signed_message = verification::create_signed_message(
             message,
             &self.auth_manager.validator_public_key,
             &self.auth_manager.keystore,
+            block_number,
         )?;
         
         // Send via gossip channel - this will be handled by the gossip handler

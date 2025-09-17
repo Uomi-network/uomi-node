@@ -5,6 +5,7 @@ use crate::types::SessionId;
 
 pub trait ClientManager<B: BlockT> {
     fn best_hash(&self) -> <<B as BlockT>::Header as HeaderT>::Hash;
+    fn best_number(&self) -> <<B as BlockT>::Header as HeaderT>::Number;
     /// Fetch all validator IDs from the runtime as pairs of (validator_id, account_id)
     /// Default is empty; concrete clients can override.
     fn get_all_validator_ids(

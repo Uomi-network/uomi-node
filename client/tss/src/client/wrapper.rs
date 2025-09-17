@@ -71,6 +71,10 @@ where
         self.client.info().best_hash
     }
 
+    fn best_number(&self) -> <<B as BlockT>::Header as HeaderT>::Number {
+        self.client.info().best_number
+    }
+
     fn get_all_validator_ids(
         &self,
         hash: <<B as BlockT>::Header as HeaderT>::Hash,

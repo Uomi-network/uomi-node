@@ -45,6 +45,7 @@ pub struct GossipHandler<B: BlockT> {
     session_manager_to_gossip_rx: TracingUnboundedReceiver<SignedTssMessage>,
     gossip_handler_message_receiver: Receiver<TopicNotification>,
     signing_service: SigningService,
+    get_block_number: Arc<dyn Fn() -> u64 + Send + Sync>,
     // LRU-style replay cache for (peer_id_bytes, nonce)
     announce_replay_cache: VecDeque<(Vec<u8>, u16)>,
     announce_replay_set: HashSet<(Vec<u8>, u16)>,
@@ -59,6 +60,7 @@ impl<B: BlockT> GossipHandler<B> {
         gossip_handler_message_receiver: Receiver<TopicNotification>,
         keystore: KeystorePtr,
         validator_public_key: [u8; 32],
+        get_block_number: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         Self {
             gossip_engine,
@@ -67,6 +69,7 @@ impl<B: BlockT> GossipHandler<B> {
             session_manager_to_gossip_rx,
             gossip_handler_message_receiver,
             signing_service: SigningService::new(keystore, validator_public_key),
+            get_block_number,
             announce_replay_cache: VecDeque::with_capacity(512),
             announce_replay_set: HashSet::with_capacity(512),
         }
@@ -74,7 +77,8 @@ impl<B: BlockT> GossipHandler<B> {
 
     /// Create a signed message using the signing service
     fn create_signed_message(&self, message: TssMessage) -> Result<SignedTssMessage, String> {
-        self.signing_service.create_signed_message(message)
+        let block = (self.get_block_number)();
+        self.signing_service.create_signed_message(message, block)
     }
 }
 impl<B:BlockT> TssMessageHandler for GossipHandler<B> {

@@ -126,6 +126,10 @@ impl<B: BlockT> ClientManager<B> for TestClientManager {
         Default::default()
     }
 
+    fn best_number(&self) -> <<B as BlockT>::Header as HeaderT>::Number {
+        Default::default()
+    }
+
     fn report_participants(
         &self,
         _hash: <<B as BlockT>::Header as HeaderT>::Hash, 
@@ -302,7 +306,7 @@ impl TestNetwork {
                         message: msg.clone(),
                         sender_public_key: sender_validator_key,
                         signature: [0u8; 64], // dummy for tests
-                        timestamp: std::time::SystemTime::now()
+                        block_number: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
                             .as_secs(),
@@ -430,7 +434,7 @@ impl TestNode {
             message,
             sender_public_key: [0u8; 32], // dummy for tests
             signature: [0u8; 64], // dummy for tests
-            timestamp: std::time::SystemTime::now()
+            block_number: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
@@ -557,7 +561,7 @@ fn test_process_session_manager_message_dkg_round1() {
         message: TssMessage::DKGRound1(session_id, data.clone()),
         sender_public_key: [0u8; 32], // dummy sender key for tests
         signature: [0u8; 64], // dummy signature for tests
-        timestamp: 0, // dummy timestamp for tests
+        block_number: 0, // dummy block_number for tests
     };
 
     let result = process_session_manager_message(&mut handler, signed_message);
@@ -604,7 +608,7 @@ fn test_buffer_stores_peerid_bytes_for_dkg_round1() {
     let mut sender_pk = [0u8; 32];
     sender_pk.copy_from_slice(&b_validator_key[..32]);
 
-    // Timestamp must be recent to pass timestamp validation
+    // Block number must be recent to pass block-number validation
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -614,7 +618,7 @@ fn test_buffer_stores_peerid_bytes_for_dkg_round1() {
         message: TssMessage::DKGRound1(session_id, payload.clone()),
         sender_public_key: sender_pk,
         signature: [0u8; 64], // in tests this bypasses signature verification
-        timestamp: now,
+        block_number: now,
     };
 
     // Inject directly into A's SessionManager as if received from B

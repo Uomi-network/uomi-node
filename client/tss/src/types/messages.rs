@@ -62,8 +62,8 @@ pub struct SignedTssMessage {
     pub sender_public_key: [u8; 32],
     /// Message signature using sender's private key
     pub signature: [u8; 64],
-    /// Timestamp to prevent replay attacks
-    pub timestamp: u64,
+    /// Block number to prevent replay attacks (monotonic on-chain reference)
+    pub block_number: u64,
 }
 
 impl SignedTssMessage {}

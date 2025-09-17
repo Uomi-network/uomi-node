@@ -20,6 +20,7 @@ type TestBlock = GenericBlock<TestHeader, OpaqueExtrinsic>;
 struct DummyClient;
 impl ClientManager<TestBlock> for DummyClient {
     fn best_hash(&self) -> <TestBlock::Header as HeaderT>::Hash { H256::zero() }
+    fn best_number(&self) -> <TestBlock::Header as HeaderT>::Number { 0 }
     fn report_participants(&self, _h: <TestBlock::Header as HeaderT>::Hash, _s: SessionId, _i: Vec<[u8;32]>) -> Result<(), String> { Ok(()) }
     fn submit_dkg_result(&self, _h: <TestBlock::Header as HeaderT>::Hash, _s: SessionId, _k: Vec<u8>) -> Result<(), String> { Ok(()) }
     fn complete_reshare_session(&self, _h: <TestBlock::Header as HeaderT>::Hash, _s: SessionId) -> Result<(), String> { Ok(()) }
