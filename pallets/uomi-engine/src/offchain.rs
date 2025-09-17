@@ -53,7 +53,7 @@ struct CallAiResponseCleaned {
 impl<T: Config> Pallet<T> {
     /// Returns current number of active offchain executions.
     pub fn semaphore_status() -> u32 {
-    SEMAPHORE_COUNTER.load(Ordering::Relaxed)
+        SEMAPHORE_COUNTER.load(Ordering::Relaxed)
     }
 
     // Test-only helpers to safely manipulate the counter using the same

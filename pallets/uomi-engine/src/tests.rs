@@ -557,17 +557,25 @@ fn test_offchain_semaphore_blocks_when_full() {
         NodesWorks::<Test>::insert(validator.clone(), request_id1, true);
         NodesWorks::<Test>::insert(validator.clone(), request_id2, true);
 
-    // Emulate first worker acquiring the slot via test helper
-    assert!(TestingPallet::test_acquire_slot());
-    assert_eq!(TestingPallet::semaphore_status(), 1);
+    // Emulate workers acquiring slots up to the limit of 5
+    for i in 1..=5 {
+        assert!(TestingPallet::test_acquire_slot());
+        assert_eq!(TestingPallet::semaphore_status(), i);
+    }
 
-    // Second acquire should fail because max = 1
+    // Sixth acquire should fail because max = 5
     assert!(!TestingPallet::test_acquire_slot());
-    assert_eq!(TestingPallet::semaphore_status(), 1);
+    assert_eq!(TestingPallet::semaphore_status(), 5);
 
-    // Release slot and ensure counter returns to 0
+    // Release one slot and ensure counter decreases to 4
     TestingPallet::test_release_slot();
-    assert_eq!(TestingPallet::semaphore_status(), 0);
+    assert_eq!(TestingPallet::semaphore_status(), 4);
+
+    // Release all remaining slots and ensure counter returns to 0
+    for i in (0..4).rev() {
+        TestingPallet::test_release_slot();
+        assert_eq!(TestingPallet::semaphore_status(), i);
+    }
 
     // No transactions expected here because we didn't invoke offchain_worker logic; test is about counter semantics only.
     });

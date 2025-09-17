@@ -70,7 +70,7 @@ parameter_types! {
     pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
     pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
     pub const ExpectedBlockTime: u64 = 6_000;
-        pub const TestMaxOffchainConcurrent: u32 = 1;
+        pub const TestMaxOffchainConcurrent: u32 = 5;
 }
 
 pub struct IpfsWrapper;
