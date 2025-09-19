@@ -135,7 +135,7 @@ polkadot-runtime-common = { workspace = true, features = ["std"], optional = tru
 
 # try-runtime
 frame-try-runtime = { workspace = true, features = ["std"], optional = true }
-try-runtime-cli = { workspace = true, optional = true }
+try-runtime-cli = { git = "https://github.com/paritytech/try-runtime-cli", tag = "v0.6.2", optional = true }
 
 # evm-tracing
 moonbeam-rpc-primitives-debug = { workspace = true, features = ["std"], optional = true }
@@ -181,7 +181,6 @@ try-runtime = [
 	"local-runtime/try-runtime",
 	"finney-runtime/try-runtime",
 	"uomi-runtime/try-runtime",
-	"try-runtime-cli/try-runtime",
 	"uomi-primitives/try-runtime",
 	"frame-system/try-runtime",
 	"frame-try-runtime/try-runtime",
