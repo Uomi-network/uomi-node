@@ -151,7 +151,7 @@ substrate-prometheus-endpoint = { git = "https://github.com/paritytech/polkadot-
 pallet-transaction-payment-rpc = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
 substrate-frame-rpc-system = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
 sc-cli = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
-try-runtime-cli = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
+try-runtime-cli = { git = "https://github.com/paritytech/try-runtime-cli", tag = "v0.6.2" }
 frame-benchmarking-cli = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.9.0" }
 ipfs-manager = { path = "./client/ipfs-manager" }
 tss = { path = "./client/tss" }
