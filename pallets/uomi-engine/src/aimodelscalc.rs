@@ -84,7 +84,8 @@ impl<T: Config> Pallet<T> {
         let dobby3_1_8b: Data = b"SentientAGI/Dobby-Mini-Unhinged-Llama-3.1-8B".to_vec().try_into().unwrap();
         let sana_1600m: Data = b"Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers".to_vec().try_into().unwrap();
         let qwen_deepseek: Data = b"deepseek-ai/DeepSeek-R1-0528-Qwen3-8B".to_vec().try_into().unwrap();
-
+ 
+ 
         let mut version_2 = BTreeMap::new();
         version_2.insert(AiModelKey::from(1), qwen2_5.clone());
         map.insert(2 as u32, version_2);
