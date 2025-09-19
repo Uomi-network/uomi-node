@@ -212,7 +212,7 @@ impl RetryMechanism {
 
         let our_index = {
             let mut peer_mapper = peer_mapper.lock().unwrap();
-            let peer_id = sc_network::PeerId::from_bytes(&self.local_peer_id).ok()?;
+            let peer_id = sc_network_types::PeerId::from_bytes(&self.local_peer_id).ok()?;
             peer_mapper
                 .get_id_from_peer_id(&session_id, &peer_id)
                 .map(|id| id.to_string())

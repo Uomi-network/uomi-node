@@ -13,7 +13,7 @@ mod tests {
 
     use frost_ed25519::Identifier;
     use rand::Rng;
-    use sc_network::PeerId;
+    use sc_network_types::PeerId;
 
     // Helper function to generate session ID for testing
     fn _generate_test_session_id() -> SessionId {

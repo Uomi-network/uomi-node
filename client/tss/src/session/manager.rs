@@ -7,7 +7,7 @@ use sp_keystore::KeystorePtr;
 use sp_runtime::traits::Block as BlockT;
 use sp_runtime::SaturatedConversion;
 use sc_utils::mpsc::{TracingUnboundedReceiver, TracingUnboundedSender, TrySendError};
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use frost_ed25519::Identifier;
 use futures::{select, StreamExt, FutureExt};
 use sc_network::utils::interval;

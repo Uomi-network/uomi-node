@@ -1,13 +1,13 @@
 # Third party packages
 
-This directory contatins packages from third-party vendors reused in Uomi Network.
+This directory contatins packages from third-party vendors reused in Astar Network.
 
 ### Why not fork?
 
 As a way to protect code from **unexpected changes** and **release from third-party project
 internal dependencies** a directory used instead of repository fork.
 
-When porting changes from the external vendor projects into uomi repo,
+When porting changes from the external vendor projects into astar repo,
 changes will be visible as part of the difference introduced by PR. This ensures we don't
 introduce any unintentional changes without being aware of them.
 

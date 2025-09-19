@@ -1,5 +1,5 @@
 use crate::types::{PublicKey, Signature};
-use sp_core::ecdsa;
+use sp_core::{ecdsa, ByteArray};
 use sp_runtime::traits::Verify;
 
 pub trait SignatureVerification<PublicKey> {
@@ -15,14 +15,25 @@ impl SignatureVerification<PublicKey> for Verifier {
             Ok(bytes) => bytes,
             Err(_) => return false, // Public key must be exactly 33 bytes
         };
-        let pubkey = ecdsa::Public(pubkey_bytes);
+        let pubkey = ecdsa::Public::from_full(&pubkey_bytes);
+
+        if pubkey.is_err() {
+            return false; // Invalid public key
+        }
+        let pubkey = pubkey.unwrap();
 
         // Convert Signature to [u8; 65] for ECDSA signature
         let signature_bytes: [u8; 65] = match sig.as_slice().try_into() {
             Ok(bytes) => bytes,
             Err(_) => return false, // Signature must be exactly 65 bytes
         };
-        let signature = ecdsa::Signature(signature_bytes);
+        let signature = ecdsa::Signature::from_slice(&signature_bytes);
+
+        if signature.is_err() {
+            return false; // Invalid signature
+        }
+        let signature = signature.unwrap();
+        
 
         // Verify the signature; it hashes the message internally with blake2_256
         signature.verify(message, &pubkey)
