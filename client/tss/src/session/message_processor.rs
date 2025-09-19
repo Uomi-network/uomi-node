@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use sp_core::{sr25519, ByteArray};
 use sp_io::crypto::sr25519_verify;
 

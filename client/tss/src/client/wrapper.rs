@@ -294,7 +294,7 @@ pub(crate) fn keystore_sign_payload<P: Encode>(
         .as_slice()
         .try_into()
         .map_err(|_| "Invalid sr25519 signature length".to_string())?;
-    let sr_sig = sr25519::Signature(arr);
+    let sr_sig = sp_core::sr25519::Signature::from_raw(arr);
     Ok(sr_sig.into())
 }
 

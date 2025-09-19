@@ -7,7 +7,8 @@ use std::{
 use log::info;
 use codec::{Compact, Decode, Encode, EncodeLike, Error};
 
-use sc_network::{PeerId, ObservedRole};
+use sc_network::{ObservedRole};
+use sc_network_types::PeerId;
 use sc_network_gossip::{Validator, ValidatorContext, ValidationResult};
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT, Hash as HashT};
 

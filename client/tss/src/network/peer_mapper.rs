@@ -1,5 +1,5 @@
 use crate::types::{SessionId, TSSParticipant, TSSPublic};
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use frost_ed25519::Identifier;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -358,9 +358,9 @@ pub fn run() -> Result<()> {
             runner.run_node_until_exit(|config| async move {
                 log::info!("🧠 Uomi engine active, starting to process requests");
                 if config.chain_spec.is_uomi() {
-                    return uomi::start_node(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
+                    return uomi::start_node::<sc_network::NetworkWorker<_, _>>(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
                 } else {
-                    return local::start_node(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
+                    return local::start_node::<sc_network::NetworkWorker<_, _>>(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
                 }
 
             })

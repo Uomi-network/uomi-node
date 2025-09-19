@@ -9,7 +9,7 @@ use sp_runtime::traits::Block as BlockT;
 use std::sync::MutexGuard;
 use uomi_runtime::pallet_tss::TssOffenceType;
 use crate::dkghelpers::Storage;
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use crate::session::signing_state_manager::SigningSessionState; // Reuse signing session states for ECDSA observability
 
 impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {

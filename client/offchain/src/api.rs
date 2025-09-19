@@ -22,7 +22,8 @@ use crate::NetworkProvider;
 use codec::{Decode, Encode};
 use futures::Future;
 pub use http::SharedClient;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{Multiaddr};
+use sc_network_types::PeerId;
 use sp_core::{
 	offchain::{
 		self, HttpError, HttpRequestId, HttpRequestStatus, OpaqueMultiaddr, OpaqueNetworkState,
@@ -56,7 +57,7 @@ impl offchain::Externalities for Api {
 	fn network_state(&self) -> Result<OpaqueNetworkState, ()> {
 		let external_addresses = self.network_provider.external_addresses();
 
-		let state = NetworkState::new(self.network_provider.local_peer_id(), external_addresses);
+		let state = NetworkState::new(self.network_provider.local_peer_id().into(), external_addresses);
 		Ok(OpaqueNetworkState::from(state))
 	}
 

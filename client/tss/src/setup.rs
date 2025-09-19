@@ -25,8 +25,9 @@ use sc_service::{KeystoreContainer, TransactionPool};
 use sp_core::{sr25519, ByteArray};
 use sc_client_api::{BlockchainEvents, HeaderBackend};
 use sc_network::{
-    NetworkSigner, NetworkStateInfo, NotificationService, PeerId, ProtocolName
+    NetworkSigner, NetworkStateInfo, NotificationService, ProtocolName
 };
+use sc_network_types::PeerId;
 use sc_network_gossip::{
     GossipEngine, Network, Syncing, TopicNotification,
 };

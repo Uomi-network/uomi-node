@@ -19,10 +19,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use fp_evm::PrecompileHandle;
-use sp_core::{ecdsa, ConstU32};
+use sp_core::{ecdsa, ConstU32, ByteArray};
 use sp_std::marker::PhantomData;
 use sp_std::prelude::*;
-
 use precompile_utils::prelude::*;
 
 #[cfg(test)]
@@ -64,7 +63,7 @@ impl<Runtime: pallet_evm::Config> SubstrateEcdsaPrecompile<Runtime> {
         // Parse signature
         let signature_opt = ecdsa::Signature::from_slice(&signature_bytes[..]);
 
-        let signature = if let Some(sig) = signature_opt {
+        let signature = if let Ok(sig) = signature_opt {
             sig
         } else {
             // Return `false` if signature length is wrong

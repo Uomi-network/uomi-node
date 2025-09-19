@@ -1,7 +1,7 @@
 use codec::{Decode, Encode};
 use sc_utils::mpsc::{TracingUnboundedSender, TracingUnboundedReceiver, TrySendError};
 use sp_keystore::{KeystorePtr};
-use sc_network::{PeerId};
+use sc_network_types::{PeerId};
 use std::{
     collections::{btree_map::Keys, VecDeque, HashSet},
     pin::Pin,

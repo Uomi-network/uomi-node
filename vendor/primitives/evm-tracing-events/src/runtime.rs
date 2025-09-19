@@ -324,4 +324,3 @@ pub fn opcodes_string(opcode: Opcode) -> Vec<u8> {
     };
     out.as_bytes().to_vec()
 }
-

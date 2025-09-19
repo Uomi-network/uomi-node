@@ -1,5 +1,5 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}};
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 
 use crate::{
     types::{SessionId, SessionData, TSSParticipant, TSSPublic, SessionError},

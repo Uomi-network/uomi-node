@@ -3,7 +3,7 @@ use crate::{
     types::{SessionId},
     SessionManager,
 };
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use sp_runtime::traits::Block as BlockT;
 use std::vec::Vec;
 use log::info;
