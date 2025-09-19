@@ -167,11 +167,13 @@ impl<T: Config> Pallet<T> {
         // Run the wasm and store the output data
         match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id, opoc_level) {
             Ok(output_data) => {
-                let mut final_output_data = output_data.clone();
-                // To avoid storing empty data, we force the output data to be at least 1 byte
-                if final_output_data == Data::default() {
-                    final_output_data = Data::try_from(vec![0u8]).unwrap_or_default();
-                }
+                let final_output_data = output_data.clone();
+
+                // NOTE: This code has been removed because it was causing issues with new slashing mechanism. Check if it's all ok in production, then consider removing this.
+                // // To avoid storing empty data, we force the output data to be at least 1 byte
+                // if final_output_data == Data::default() {
+                //     final_output_data = Data::try_from(vec![0u8]).unwrap_or_default();
+                // }
 
                 // Store the output data
                 Self::offchain_store_output_data(&request_id, &final_output_data).unwrap_or_else(|e| {
