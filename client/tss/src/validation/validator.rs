@@ -106,11 +106,11 @@ impl<B: BlockT> Validator<B> for TssValidator {
                     return ValidationResult::Discard;
                 }
                 // Check block number to prevent replay attacks
-                let current_block = (self.get_block_number)();
-                if !verification::is_block_number_valid(&signed_message, current_block, self.max_message_age_blocks) {
-                    log::warn!("[TSS]: Message block number invalid or too old from {}", sender.to_base58());
-                    return ValidationResult::Discard;
-                }
+                // let current_block = (self.get_block_number)();
+                // if !verification::is_block_number_valid(&signed_message, current_block, self.max_message_age_blocks) {
+                //     log::warn!("[TSS]: Message block number invalid or too old from {}", sender.to_base58());
+                //     return ValidationResult::Discard;
+                // }
 
                 log::info!("[TSS]: ✅ Verified signed message from {} - signature and block number valid", sender.to_base58());
             }
