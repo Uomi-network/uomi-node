@@ -2077,9 +2077,9 @@ impl<T: Config> Pallet<T> {
             //     log::error!("[TSS] Failed to report offence to offences pallet: {:?}", e);
             // } else {
             //     // Emit per-offender slashed event (actual slashing managed by offences pallet / staking economic logic)
-            //     for (acc, _) in id_tuples.into_iter() {
-            //         Self::deposit_event(Event::ValidatorSlashed(acc, offence_type.clone(), session_id));
-            //     }
+                for (acc, _) in id_tuples.into_iter() {
+                    Self::deposit_event(Event::ValidatorSlashed(acc, offence_type.clone(), session_id));
+                }
             // }
             PendingTssOffences::<T>::remove(session_id);
         }
