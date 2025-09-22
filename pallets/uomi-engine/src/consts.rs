@@ -13,4 +13,3 @@ pub const MAX_BLOCKS_TO_WAIT_NODE_UPDATE:u32 = 100;
 // This is the maximum number of retries for a request before considering it as failed for agent problems.
 pub const MAX_REQUEST_RETRIES:u32 = 5; // NOTE: This is a temporary value, it should be considered the best value to use in production.
 
-pub const TURING_UPDATE_1_BLOCK:u32 = 530000; // HARDCODED FOR TURING TESTNET
