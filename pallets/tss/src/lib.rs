@@ -2073,14 +2073,14 @@ impl<T: Config> Pallet<T> {
             };
             // Report to staking offences pallet
             // Use the TSS pallet's OffenceReporter (disambiguate vs engine pallet)
-            if let Err(e) = <T as pallet::Config>::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
-                log::error!("[TSS] Failed to report offence to offences pallet: {:?}", e);
-            } else {
-                // Emit per-offender slashed event (actual slashing managed by offences pallet / staking economic logic)
-                for (acc, _) in id_tuples.into_iter() {
-                    Self::deposit_event(Event::ValidatorSlashed(acc, offence_type.clone(), session_id));
-                }
-            }
+            // if let Err(e) = <T as pallet::Config>::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
+            //     log::error!("[TSS] Failed to report offence to offences pallet: {:?}", e);
+            // } else {
+            //     // Emit per-offender slashed event (actual slashing managed by offences pallet / staking economic logic)
+            //     for (acc, _) in id_tuples.into_iter() {
+            //         Self::deposit_event(Event::ValidatorSlashed(acc, offence_type.clone(), session_id));
+            //     }
+            // }
             PendingTssOffences::<T>::remove(session_id);
         }
         Ok(())

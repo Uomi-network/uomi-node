@@ -672,11 +672,11 @@ pub mod pallet {
                         validator_set_count,
                         offenders: tuples.clone(),
                     };
-                    if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
-                        log::error!("[ENGINE] Report offence failed: {:?}", e);
-                    } else {
-                        for (acc, _) in tuples.into_iter() { Self::deposit_event(Event::EngineValidatorSlashed { offender: acc, offence_type: off_type, request_id: rid }); }
-                    }
+                    // if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
+                    //     log::error!("[ENGINE] Report offence failed: {:?}", e);
+                    // } else {
+                    //     for (acc, _) in tuples.into_iter() { Self::deposit_event(Event::EngineValidatorSlashed { offender: acc, offence_type: off_type, request_id: rid }); }
+                    // }
                 }
             }
             Ok(())
