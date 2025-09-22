@@ -675,8 +675,10 @@ pub mod pallet {
                     // if let Err(e) = T::OffenceReporter::report_offence(vec![reporter.clone()], offence) {
                     //     log::error!("[ENGINE] Report offence failed: {:?}", e);
                     // } else {
+                    if frame_system::Pallet::<T>::block_number() > consts::TURING_UPDATE_1_BLOCK.into() {
+                        log::info!("[ENGINE] Reported offence: {:?}, request_id: {:?}, reporter: {:?}, offenders: {:?}", off_type, rid, reporter, tuples.iter().map(|(acc, _)| acc).collect::<Vec<_>>());
                         for (acc, _) in tuples.into_iter() { Self::deposit_event(Event::EngineValidatorSlashed { offender: acc, offence_type: off_type, request_id: rid }); }
-                    // }
+                    }
                 }
             }
             Ok(())
