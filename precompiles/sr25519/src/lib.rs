@@ -19,8 +19,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use fp_evm::PrecompileHandle;
-use sp_core::ConstU32;
-use sp_core::{crypto::UncheckedFrom, sr25519, H256, ByteArray};
+use sp_core::{crypto::UncheckedFrom, sr25519, H256};
+use sp_core::{ByteArray, ConstU32};
 use sp_std::marker::PhantomData;
 
 use precompile_utils::prelude::*;
