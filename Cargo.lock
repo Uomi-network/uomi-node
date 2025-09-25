@@ -3547,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "finney-runtime"
-version = "0.3.3"
+version = "0.3.5"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -6225,7 +6225,7 @@ checksum = "b4ce301924b7887e9d637144fdade93f9dfff9b60981d4ac161db09720d39aa5"
 
 [[package]]
 name = "local-runtime"
-version = "0.3.3"
+version = "0.3.5"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
@@ -16692,7 +16692,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uomi"
-version = "0.3.3"
+version = "0.3.5"
 dependencies = [
  "async-trait",
  "clap",
@@ -16824,7 +16824,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.3.3"
+version = "0.3.5"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",

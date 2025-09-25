@@ -164,21 +164,9 @@ impl ProvideInherent for MockInherentDataProvider {
     const INHERENT_IDENTIFIER: InherentIdentifier = pallet_uomi_engine::consts::PALLET_INHERENT_IDENTIFIER;
 
     fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
-        let opoc_operations = match Self::opoc_run() {
-			Ok(opoc_operations) => {
-				log::info!("OPoC operations: {:?}", opoc_operations);
-				opoc_operations
-			},
-			Err(error) => {
-				log::info!("Failed to run OPoC. error: {:?}", error);
-				return None;
-			},
-		};
-        let aimodelscalc_operations = Self::aimodelscalc_run();
-
         Some(Call::set_inherent_data { 
-			opoc_operations,
-            aimodelscalc_operations
+            opoc_operations: (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
+            aimodelscalc_operations: BTreeMap::new(),
         })
     }
 
