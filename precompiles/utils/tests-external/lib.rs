@@ -1,28 +1,32 @@
-// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 // This file is part of Frontier.
+
+// Copyright (c) Moonsong Labs.
+// Copyright (C) Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
+
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Copyright (c) 2019-2022 Moonsong Labs.
-// Copyright (c) 2023 Parity Technologies (UK) Ltd.
+// 	http://www.apache.org/licenses/LICENSE-2.0
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![cfg(test)]
+
+// #[precompile_utils::precompile] need this
+extern crate alloc;
 
 use std::{cell::RefCell, rc::Rc};
 
 // Substrate
-use frame_support::{construct_runtime, parameter_types, traits::Everything, weights::Weight};
+use frame_support::{
+	construct_runtime, derive_impl, parameter_types, traits::Everything, weights::Weight,
+};
 use sp_core::{H160, H256, U256};
 use sp_runtime::{
 	traits::{BlakeTwo256, IdentityLookup},
@@ -58,6 +62,7 @@ parameter_types! {
 	pub const SS58Prefix: u8 = 42;
 }
 
+#[derive_impl(frame_system::config_preludes::TestDefaultConfig as frame_system::DefaultConfig)]
 impl frame_system::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type BaseCallFilter = Everything;
@@ -65,6 +70,7 @@ impl frame_system::Config for Runtime {
 	type BlockLength = ();
 	type RuntimeOrigin = RuntimeOrigin;
 	type RuntimeCall = RuntimeCall;
+	type RuntimeTask = RuntimeTask;
 	type Nonce = u64;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
@@ -82,12 +88,6 @@ impl frame_system::Config for Runtime {
 	type SS58Prefix = SS58Prefix;
 	type OnSetCode = ();
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
-	type RuntimeTask = RuntimeTask;
-    type SingleBlockMigrations = ();
-    type MultiBlockMigrator = ();
-    type PreInherents = ();
-    type PostInherents = ();
-    type PostTransactions = ();
 }
 
 parameter_types! {
@@ -95,15 +95,15 @@ parameter_types! {
 }
 impl pallet_balances::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type RuntimeFreezeReason = RuntimeFreezeReason;
 	type WeightInfo = ();
 	type Balance = Balance;
 	type DustRemoval = ();
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
-	type ReserveIdentifier = [u8; 4];
-	type RuntimeHoldReason = RuntimeHoldReason;
-	type FreezeIdentifier = ();
-	type RuntimeFreezeReason = ();
+	type ReserveIdentifier = [u8; 8];
+	type FreezeIdentifier = RuntimeFreezeReason;
 	type MaxLocks = ();
 	type MaxReserves = ();
 	type MaxFreezes = ();
@@ -214,7 +214,7 @@ pub type Precompiles<R> = PrecompileSetBuilder<
 	),
 >;
 
-pub type PrecompileCall = MockPrecompileCall;
+pub type PCall = MockPrecompileCall;
 
 const MAX_POV_SIZE: u64 = 5 * 1024 * 1024;
 
@@ -226,6 +226,7 @@ parameter_types! {
 		let block_gas_limit = BlockGasLimit::get().min(u64::MAX.into()).low_u64();
 		block_gas_limit.saturating_div(MAX_POV_SIZE)
 	};
+	pub SuicideQuickClearLimit: u32 = 0;
 }
 
 impl pallet_evm::Config for Runtime {
@@ -247,7 +248,7 @@ impl pallet_evm::Config for Runtime {
 	type OnCreate = ();
 	type FindAuthor = ();
 	type GasLimitPovSizeRatio = GasLimitPovSizeRatio;
-	type SuicideQuickClearLimit = ConstU32<0>;
+	type SuicideQuickClearLimit = SuicideQuickClearLimit;
 	type Timestamp = Timestamp;
 	type WeightInfo = pallet_evm::weights::SubstrateWeight<Runtime>;
 }
@@ -287,7 +288,7 @@ fn precompiles() -> Precompiles<Runtime> {
 fn default_checks_succeed_when_called_by_eoa() {
 	ExtBuilder::default().build().execute_with(|| {
 		precompiles()
-			.prepare_test(Alice, H160::from_low_u64_be(1), PrecompileCall::success {})
+			.prepare_test(Alice, H160::from_low_u64_be(1), PCall::success {})
 			.with_subcall_handle(|Subcall { .. }| panic!("there should be no subcall"))
 			.execute_returns(())
 	})
@@ -300,7 +301,7 @@ fn default_checks_revert_when_called_by_precompile() {
 			.prepare_test(
 				H160::from_low_u64_be(1),
 				H160::from_low_u64_be(1),
-				PrecompileCall::success {},
+				PCall::success {},
 			)
 			.with_subcall_handle(|Subcall { .. }| panic!("there should be no subcall"))
 			.execute_reverts(|r| r == b"Function not callable by precompiles")
@@ -316,7 +317,7 @@ fn default_checks_revert_when_called_by_contract() {
 		);
 
 		precompiles()
-			.prepare_test(Alice, H160::from_low_u64_be(1), PrecompileCall::success {})
+			.prepare_test(Alice, H160::from_low_u64_be(1), PCall::success {})
 			.with_subcall_handle(|Subcall { .. }| panic!("there should be no subcall"))
 			.execute_reverts(|r| r == b"Function not callable by smart contracts")
 	})
@@ -326,7 +327,7 @@ fn default_checks_revert_when_called_by_contract() {
 fn default_checks_revert_when_doing_subcall() {
 	ExtBuilder::default().build().execute_with(|| {
 		precompiles()
-			.prepare_test(Alice, H160::from_low_u64_be(1), PrecompileCall::subcall {})
+			.prepare_test(Alice, H160::from_low_u64_be(1), PCall::subcall {})
 			.with_subcall_handle(|Subcall { .. }| panic!("there should be no subcall"))
 			.execute_reverts(|r| r == b"subcalls disabled for this precompile")
 	})
@@ -341,7 +342,7 @@ fn callable_by_contract_works() {
 		);
 
 		precompiles()
-			.prepare_test(Alice, H160::from_low_u64_be(2), PrecompileCall::success {})
+			.prepare_test(Alice, H160::from_low_u64_be(2), PCall::success {})
 			.with_subcall_handle(|Subcall { .. }| panic!("there should be no subcall"))
 			.execute_returns(())
 	})
@@ -354,7 +355,7 @@ fn callable_by_precompile_works() {
 			.prepare_test(
 				H160::from_low_u64_be(3),
 				H160::from_low_u64_be(3),
-				PrecompileCall::success {},
+				PCall::success {},
 			)
 			.with_subcall_handle(|Subcall { .. }| panic!("there should be no subcall"))
 			.execute_returns(())
@@ -368,7 +369,7 @@ fn subcalls_works_when_allowed() {
 		{
 			let subcall_occured = Rc::clone(&subcall_occured);
 			precompiles()
-				.prepare_test(Alice, H160::from_low_u64_be(4), PrecompileCall::subcall {})
+				.prepare_test(Alice, H160::from_low_u64_be(4), PCall::subcall {})
 				.with_subcall_handle(move |Subcall { .. }| {
 					*subcall_occured.borrow_mut() = true;
 					SubcallOutput::succeed()

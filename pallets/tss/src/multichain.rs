@@ -26,6 +26,7 @@ use sp_runtime::offchain::{http, Duration, Timestamp};
 use sp_std::str;
 use ethereum_types::{H160, H256, U256};
 use rlp::RlpStream;
+use scale_info::prelude::vec;
 
 /// Supported blockchain networks
 #[derive(Debug, Clone, PartialEq, Eq)]

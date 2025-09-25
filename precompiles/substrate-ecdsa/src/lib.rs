@@ -19,9 +19,10 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use fp_evm::PrecompileHandle;
-use sp_core::{ecdsa, ConstU32, ByteArray};
+use sp_core::{ecdsa, ByteArray, ConstU32};
 use sp_std::marker::PhantomData;
 use sp_std::prelude::*;
+
 use precompile_utils::prelude::*;
 
 #[cfg(test)]

@@ -1,21 +1,20 @@
-// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 // This file is part of Frontier.
+
+// Copyright (c) Moonsong Labs.
+// Copyright (C) Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: Apache-2.0
+
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Copyright (c) 2019-2022 Moonsong Labs.
-// Copyright (c) 2023 Parity Technologies (UK) Ltd.
+// 	http://www.apache.org/licenses/LICENSE-2.0
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 pub mod account;
 pub mod execution;
@@ -32,71 +31,71 @@ pub use solidity::{check_precompile_implements_solidity_interfaces, compute_sele
 use fp_evm::Log;
 
 pub fn decode_revert_message(encoded: &[u8]) -> &[u8] {
-    let encoded_len = encoded.len();
-    // selector 4 + offset 32 + string length 32
-    if encoded_len > 68 {
-        let message_len = encoded[36..68].iter().sum::<u8>();
-        if encoded_len >= 68 + message_len as usize {
-            return &encoded[68..68 + message_len as usize];
-        }
-    }
-    b"decode_revert_message: error"
+	let encoded_len = encoded.len();
+	// selector 4 + offset 32 + string length 32
+	if encoded_len > 68 {
+		let message_len = encoded[36..68].iter().sum::<u8>();
+		if encoded_len >= 68 + message_len as usize {
+			return &encoded[68..68 + message_len as usize];
+		}
+	}
+	b"decode_revert_message: error"
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrettyLog(Log);
 
 impl core::fmt::Debug for PrettyLog {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
-        let bytes = self
-            .0
-            .data
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<Vec<String>>()
-            .join("");
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+		let bytes = self
+			.0
+			.data
+			.iter()
+			.map(|b| format!("{:02X}", b))
+			.collect::<Vec<String>>()
+			.join("");
 
-        let message = String::from_utf8(self.0.data.clone()).ok();
+		let message = String::from_utf8(self.0.data.clone()).ok();
 
-        f.debug_struct("Log")
-            .field("address", &self.0.address)
-            .field("topics", &self.0.topics)
-            .field("data", &bytes)
-            .field("data_utf8", &message)
-            .finish()
-    }
+		f.debug_struct("Log")
+			.field("address", &self.0.address)
+			.field("topics", &self.0.topics)
+			.field("data", &bytes)
+			.field("data_utf8", &message)
+			.finish()
+	}
 }
 
 /// Panics if an event is not found in the system log of events
 #[macro_export]
 macro_rules! assert_event_emitted {
-    ($event:expr) => {
-        match &$event {
-            e => {
-                assert!(
-                    $crate::mock::events().iter().find(|x| *x == e).is_some(),
-                    "Event {:?} was not found in events: \n {:?}",
-                    e,
-                    $crate::mock::events()
-                );
-            }
-        }
-    };
+	($event:expr) => {
+		match &$event {
+			e => {
+				assert!(
+					$crate::mock::events().iter().find(|x| *x == e).is_some(),
+					"Event {:?} was not found in events: \n {:?}",
+					e,
+					$crate::mock::events()
+				);
+			}
+		}
+	};
 }
 
 // Panics if an event is found in the system log of events
 #[macro_export]
 macro_rules! assert_event_not_emitted {
-    ($event:expr) => {
-        match &$event {
-            e => {
-                assert!(
-                    $crate::mock::events().iter().find(|x| *x == e).is_none(),
-                    "Event {:?} was found in events: \n {:?}",
-                    e,
-                    $crate::mock::events()
-                );
-            }
-        }
-    };
+	($event:expr) => {
+		match &$event {
+			e => {
+				assert!(
+					$crate::mock::events().iter().find(|x| *x == e).is_none(),
+					"Event {:?} was found in events: \n {:?}",
+					e,
+					$crate::mock::events()
+				);
+			}
+		}
+	};
 }

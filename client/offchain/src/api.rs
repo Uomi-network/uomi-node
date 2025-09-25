@@ -22,7 +22,7 @@ use crate::NetworkProvider;
 use codec::{Decode, Encode};
 use futures::Future;
 pub use http::SharedClient;
-use libp2p::{Multiaddr};
+use sc_network::Multiaddr;
 use sc_network_types::PeerId;
 use sp_core::{
 	offchain::{
@@ -57,7 +57,7 @@ impl offchain::Externalities for Api {
 	fn network_state(&self) -> Result<OpaqueNetworkState, ()> {
 		let external_addresses = self.network_provider.external_addresses();
 
-		let state = NetworkState::new(self.network_provider.local_peer_id().into(), external_addresses);
+		let state = NetworkState::new(self.network_provider.local_peer_id(), external_addresses);
 		Ok(OpaqueNetworkState::from(state))
 	}
 
@@ -230,6 +230,7 @@ mod tests {
 
 	pub(super) struct TestNetwork();
 
+	#[async_trait::async_trait]
 	impl NetworkPeers for TestNetwork {
 		fn set_authorized_peers(&self, _peers: HashSet<PeerId>) {
 			unimplemented!();
@@ -301,6 +302,10 @@ mod tests {
 
 		fn peer_role(&self, _peer_id: PeerId, _handshake: Vec<u8>) -> Option<ObservedRole> {
 			None
+		}
+
+		async fn reserved_peers(&self) -> Result<Vec<PeerId>, ()> {
+			unimplemented!();
 		}
 	}
 

@@ -1,7 +1,7 @@
 [package]
-description = "Substrate offchain workers"
+description = "Substrate offchain workers (polkadot v1.15.0)"
 name = "sc-offchain"
-version = "29.0.0"
+version = "39.0.0"
 license = "GPL-3.0-or-later WITH Classpath-exception-2.0"
 authors.workspace = true
 edition.workspace = true
@@ -9,49 +9,64 @@ homepage = "https://substrate.io"
 repository.workspace = true
 readme = "README.md"
 
+[lints]
+workspace = true
+
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
-array-bytes = { workspace = true }
-bytes = "1.1"
-codec = { package = "parity-scale-codec", version = "3.6.1", features = ["derive"] }
-fnv = "1.0.6"
+array-bytes = { workspace = true, default-features = true }
+bytes = { workspace = true, default-features = true }
+codec = { features = ["derive"], workspace = true, default-features = true }
+fnv = { workspace = true }
 futures = { workspace = true }
-futures-timer = "3.0.2"
-hyper = { version = "0.14.16", features = ["http2", "stream"] }
-hyper-rustls = { version = "0.24.0", features = ["http2"] }
-libp2p = "0.51.4"
-num_cpus = "1.13"
+futures-timer = { workspace = true }
+hyperv14 = { features = ["http2", "stream"], workspace = true, default-features = true }
+hyper-rustls = { features = ["http2"], workspace = true }
+num_cpus = { workspace = true }
 once_cell = { workspace = true }
-parking_lot = { workspace = true }
-rand = { workspace = true }
-threadpool = "1.7"
-tracing = { workspace = true }
-sc-client-api = { workspace = true }
-sc-network = { workspace = true }
-sc-network-common = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.11.0", default-features = false }
-sc-network-types = { workspace = true }
-sc-transaction-pool-api = { workspace = true }
-sc-utils = { workspace = true }
-sp-api = { workspace = true }
-sp-core = { workspace = true }
-sp-offchain = { workspace = true }
-sp-runtime = { workspace = true }
-sp-keystore = { workspace = true }
-sp-externalities = { workspace = true }
-log = { workspace = true }
+parking_lot = { workspace = true, default-features = true }
+rand = { workspace = true, default-features = true }
+threadpool = { workspace = true }
+tracing = { workspace = true, default-features = true }
+sc-client-api.workspace = true
+sc-client-api.default-features = true
+sc-network.workspace = true
+sc-network.default-features = true
+sc-network-common.workspace = true
+sc-network-common.default-features = true
+sc-network-types.workspace = true
+sc-network-types.default-features = true
+sc-transaction-pool-api.workspace = true
+sc-transaction-pool-api.default-features = true
+sc-utils.workspace = true
+sc-utils.default-features = true
+sp-api.workspace = true
+sp-api.default-features = true
+sp-core.workspace = true
+sp-core.default-features = true
+sp-offchain.workspace = true
+sp-offchain.default-features = true
+sp-runtime.workspace = true
+sp-runtime.default-features = true
+sp-keystore.workspace = true
+sp-keystore.default-features = true
+sp-externalities.workspace = true
+sp-externalities.default-features = true
+log = { workspace = true, default-features = true }
 
 [dev-dependencies]
-lazy_static = "1.4.0"
-tokio = { workspace = true }
-sc-block-builder = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.11.0", default-features = false }
+async-trait = { workspace = true }
+lazy_static = { workspace = true }
+tokio = { workspace = true, default-features = true }
+sc-block-builder = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2407", default-features = false }
 sc-client-db = { workspace = true }
 sc-transaction-pool = { workspace = true }
 sc-transaction-pool-api = { workspace = true }
 sp-consensus = { workspace = true }
 sp-tracing = { workspace = true }
-substrate-test-runtime-client = { git = "https://github.com/paritytech/polkadot-sdk", branch = "release-polkadot-v1.11.0", default-features = false }
+substrate-test-runtime-client = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2407", default-features = false }
 
 [features]
 default = []
