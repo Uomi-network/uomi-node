@@ -712,7 +712,7 @@ fn test_offchain_run_wasm_function_with_get_request_sender() {
 //////////////////////////////////////////////////////////////////////////////////
 
 #[test]
-fn test_inherent_opoc_no_assignment() {
+fn test_on_finalize_opoc_no_assignment() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -765,7 +765,7 @@ fn test_inherent_opoc_no_assignment() {
 }
 
 #[test]
-fn test_inherent_opoc_no_assignment_without_validators_available() {
+fn test_on_finalize_opoc_no_assignment_without_validators_available() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -809,7 +809,7 @@ fn test_inherent_opoc_no_assignment_without_validators_available() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_no_timeout() {
+fn test_on_finalize_opoc_level_0_no_timeout() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -868,7 +868,7 @@ fn test_inherent_opoc_level_0_no_timeout() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_timeout() {
+fn test_on_finalize_opoc_level_0_timeout() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -925,7 +925,7 @@ fn test_inherent_opoc_level_0_timeout() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_completed() {
+fn test_on_finalize_opoc_level_0_completed() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -989,7 +989,7 @@ fn test_inherent_opoc_level_0_completed() {
 }
 
 #[test] // This test is for the unsecure case, where the nft_required_consensus is 1
-fn test_inherent_opoc_level_0_completed_unsecure() {
+fn test_on_finalize_opoc_level_0_completed_unsecure() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -1058,7 +1058,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
+fn test_on_finalize_opoc_level_0_completed_with_infinite_wasm() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -1125,7 +1125,7 @@ fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
 }
 
 #[test]
-fn test_inherent_opoc_level_1_no_timeouts() {
+fn test_on_finalize_opoc_level_1_no_timeouts() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1192,7 +1192,7 @@ fn test_inherent_opoc_level_1_no_timeouts() {
 }
 
 #[test]
-fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the execution of the opoc of level 1, one of the selected validators has a timeout
+fn test_on_finalize_opoc_level_1_some_timeouts() { // Case where during the execution of the opoc of level 1, one of the selected validators has a timeout
     make_logger();
         
     new_test_ext().execute_with(|| {
@@ -1280,7 +1280,7 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
 }
 
 #[test] // This test is for the case when all the validators have the same output
-fn test_inherent_opoc_level_1_completed_valid() {
+fn test_on_finalize_opoc_level_1_completed_valid() {
     make_logger();
         
     new_test_ext().execute_with(|| {
@@ -1354,7 +1354,7 @@ fn test_inherent_opoc_level_1_completed_valid() {
 }
 
 #[test] // This test is for a case when one node on opoc level 1 has a different output than the others
-fn test_inherent_opoc_level_1_completed_invalid() {
+fn test_on_finalize_opoc_level_1_completed_invalid() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1418,7 +1418,7 @@ fn test_inherent_opoc_level_1_completed_invalid() {
 }
 
 #[test] // This test is for a case when one node on opoc level 1 has a empty output
-fn test_inherent_opoc_level_1_completed_empty() {
+fn test_on_finalize_opoc_level_1_completed_empty() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1487,7 +1487,7 @@ fn test_inherent_opoc_level_1_completed_empty() {
 
 
 #[test]
-fn test_inherent_opoc_level_2_completed() {
+fn test_on_finalize_opoc_level_2_completed() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1567,7 +1567,7 @@ fn test_inherent_opoc_level_2_completed() {
 }
 
 #[test]
-fn test_inherent_in_block() {
+fn test_on_finalize_in_block() {
     make_logger();
     
     new_test_ext().execute_with(|| {
