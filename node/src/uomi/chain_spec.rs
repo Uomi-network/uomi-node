@@ -36,7 +36,7 @@ use pallet_im_online::sr25519::AuthorityId as ImOnlineId;
 type AccountPublic = <Signature as Verify>::Signer;
 
 
-pub type ChainSpec = sc_service::GenericChainSpec<uomi_runtime::RuntimeGenesisConfig>;
+pub type ChainSpec = sc_service::GenericChainSpec<Option<()>>;
 
 /// Helper function to generate a crypto pair from seed
 fn get_from_seed<TPublic: Public>(seed: &str) -> <TPublic::Pair as Pair>::Public {
@@ -72,7 +72,7 @@ pub fn mainnet_config() -> ChainSpec {
     let mut properties = serde_json::map::Map::new();
     properties.insert("tokenSymbol".into(), "UOMI".into());
     properties.insert("tokenDecimals".into(), 18.into());
-    ChainSpec::builder(wasm_binary_unwrap(), None)
+    ChainSpec::builder(wasm_binary_unwrap(), Default::default())
         .with_name("Uomi")
         .with_id("uomi")
         .with_chain_type(ChainType::Live)
@@ -169,7 +169,7 @@ fn mainnet_genesis(
         evm: EVMConfig {
             // We need _some_ code inserted at the precompile address so that
             // the evm will actually call the address.
-            accounts: Precompiles::used_addresses()
+            accounts: Precompiles::used_addresses_h160()
                 .map(|addr| {
                     (
                         addr,

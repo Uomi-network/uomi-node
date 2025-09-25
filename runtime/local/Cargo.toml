@@ -102,6 +102,7 @@ pallet-nomination-pools = { workspace = true }
 pallet-nomination-pools-runtime-api = { workspace = true }
 static_assertions = "1.1"
 pallet-staking-runtime-api = { workspace = true }
+pallet-delegated-staking = { workspace = true }
 
 
 # Moonbeam tracing

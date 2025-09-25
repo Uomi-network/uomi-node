@@ -717,7 +717,6 @@ impl pallet_staking::Config for Runtime {
     type Currency = Balances;
     type CurrencyBalance = Balance;
     type UnixTime = Timestamp;
-    type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
     type CurrencyToVote = U128CurrencyToVote;
     type ElectionProvider = ElectionProviderMultiPhase;
     type GenesisElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
@@ -741,6 +740,7 @@ impl pallet_staking::Config for Runtime {
     type EventListeners = ();
     type BenchmarkingConfig = StakingBenchmarkingConfig;
     type WeightInfo = pallet_staking::weights::SubstrateWeight<Self>;
+	type DisablingStrategy = pallet_staking::UpToLimitDisablingStrategy;
 }
 
 parameter_types! {
@@ -1036,6 +1036,7 @@ impl pallet_contracts::Config for Runtime {
     type Currency = Balances;
     type RuntimeEvent = RuntimeEvent;
     type RuntimeCall = RuntimeCall;
+	type MaxTransientStorageSize = ConstU32<{ 1 * 1024 * 1024 }>;
     /// The safest default is to allow no calls at all.
     ///
     /// Runtimes should whitelist dispatchables that are allowed to be called from contracts
@@ -1487,13 +1488,8 @@ impl pallet_treasury::Config<MainTreasuryInst> for Runtime {
     type RuntimeEvent = RuntimeEvent;
 
     // Two origins which can either approve or reject the spending proposal
-    type ApproveOrigin = EnsureRootOrTwoThirdsMainCouncil;
     type RejectOrigin = EnsureRootOrTwoThirdsMainCouncil;
 
-    type OnSlash = Treasury;
-    type ProposalBond = ProposalBond;
-    type ProposalBondMinimum = ConstU128<{ 10 * UOMI }>;
-    type ProposalBondMaximum = ConstU128<{ 100 * UOMI }>;
     type SpendPeriod = ConstU32<{ 1 * MINUTES }>;
 
     // We don't do periodic burns of the treasury
@@ -1527,13 +1523,8 @@ impl pallet_treasury::Config<CommunityTreasuryInst> for Runtime {
     type RuntimeEvent = RuntimeEvent;
 
     // Two origins which can either approve or reject the spending proposal
-    type ApproveOrigin = EnsureRootOrTwoThirdsCommunityCouncil;
     type RejectOrigin = EnsureRootOrTwoThirdsCommunityCouncil;
 
-    type OnSlash = CommunityTreasury;
-    type ProposalBond = ProposalBond;
-    type ProposalBondMinimum = ConstU128<{ 10 * UOMI }>;
-    type ProposalBondMaximum = ConstU128<{ 100 * UOMI }>;
     type SpendPeriod = ConstU32<{ 1 * MINUTES }>;
 
     // We don't do periodic burns of the community treasury
@@ -1611,6 +1602,24 @@ impl Convert<sp_core::U256, Balance> for U256ToBalance {
     }
 }
 
+
+parameter_types! {
+	pub const DelegatedStakingPalletId: PalletId = PalletId(*b"py/dlstk");
+	pub const SlashRewardFraction: Perbill = Perbill::from_percent(1);
+}
+
+
+impl pallet_delegated_staking::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type PalletId = DelegatedStakingPalletId;
+	type Currency = Balances;
+	type OnSlash = ();
+	type SlashRewardFraction = SlashRewardFraction;
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type CoreStaking = Staking;
+}
+
+
 impl pallet_nomination_pools::Config for Runtime {
     type WeightInfo = ();
     type RuntimeEvent = RuntimeEvent;
@@ -1619,7 +1628,8 @@ impl pallet_nomination_pools::Config for Runtime {
     type RewardCounter = FixedU128;
     type BalanceToU256 = BalanceToU256;
     type U256ToBalance = U256ToBalance;
-    type Staking = Staking;
+	type StakeAdapter =
+		pallet_nomination_pools::adapter::DelegateStake<Self, Staking, DelegatedStaking>;
     type PostUnbondingPoolsWindow = PostUnbondPoolsWindow;
     type MaxMetadataLen = ConstU32<256>;
     type MaxUnbonding = ConstU32<8>;
@@ -1684,7 +1694,8 @@ construct_runtime!(
         Historical: pallet_session_historical = 121,
         Staking: pallet_staking = 122,
 
-        Tss: pallet_tss = 123
+        Tss: pallet_tss = 123,
+        DelegatedStaking: pallet_delegated_staking = 124,
 
     }
 );
@@ -1834,6 +1845,21 @@ impl_runtime_apis! {
         fn balance_to_points(pool_id: pallet_nomination_pools::PoolId, new_funds: Balance) -> Balance {
             NominationPools::api_balance_to_points(pool_id, new_funds)
         }
+        fn pool_pending_slash(pool_id:pallet_nomination_pools::PoolId) -> Balance {
+			NominationPools::api_pool_pending_slash(pool_id)
+		}
+
+		fn member_pending_slash(member: AccountId) -> Balance {
+			NominationPools::api_member_pending_slash(member)
+		}
+
+		fn pool_needs_delegate_migration(pool_id:pallet_nomination_pools::PoolId) -> bool {
+			NominationPools::api_pool_needs_delegate_migration(pool_id)
+		}
+
+		fn member_needs_delegate_migration(member: AccountId) -> bool {
+			NominationPools::api_member_needs_delegate_migration(member)
+		}
     }
 
     impl sp_api::Metadata<Block> for Runtime {
@@ -1993,6 +2019,9 @@ impl_runtime_apis! {
         fn eras_stakers_page_count(era: sp_staking::EraIndex, account: AccountId) -> sp_staking::Page {
             Staking::api_eras_stakers_page_count(era, account)
         }
+        fn pending_rewards(era: sp_staking::EraIndex, account: AccountId) -> bool {
+			Staking::api_pending_rewards(era, account)
+		}
     }
 
     impl pallet_transaction_payment_rpc_runtime_api::TransactionPaymentApi<Block, Balance> for Runtime {
@@ -2278,6 +2307,9 @@ impl_runtime_apis! {
                 pallet_ethereum::CurrentBlock::<Runtime>::get(),
                 pallet_ethereum::CurrentTransactionStatuses::<Runtime>::get()
             )
+        }
+        fn initialize_pending_block(header: &<Block as BlockT>::Header) {
+            Executive::initialize_block(header);
         }
     }
 
