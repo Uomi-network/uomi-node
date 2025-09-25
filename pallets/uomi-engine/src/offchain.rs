@@ -15,6 +15,46 @@ use core::sync::atomic::{AtomicU32, Ordering};
 // AtomicU32 is Sync and const-initializable, so we can use a plain static without unsafe.
 static SEMAPHORE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+// In-memory (process-local) set of request ids currently being handled by this node's
+// offchain workers. This implements a simple queue/lock to avoid multiple offchain
+// executions on the same node from picking the same request concurrently.
+//
+// CRITICAL: this is std-only and does not create any on-chain storage.
+
+#[cfg(feature = "std")]
+use std::sync::{OnceLock, RwLock};
+
+#[cfg(feature = "std")]
+use std::collections::HashSet;
+
+#[cfg(feature = "std")]
+static HANDLED_REQUESTS: OnceLock<RwLock<HashSet<RequestId>>> = OnceLock::new();
+
+#[cfg(feature = "std")]
+fn mark_request_handling(request_id: RequestId) -> bool {
+    let lock = HANDLED_REQUESTS.get_or_init(|| RwLock::new(HashSet::new()));
+    let mut w = lock.write().unwrap();
+    w.insert(request_id)
+}
+
+#[cfg(feature = "std")]
+fn unmark_request_handling(request_id: RequestId) {
+    let lock = HANDLED_REQUESTS.get_or_init(|| RwLock::new(HashSet::new()));
+    let mut w = lock.write().unwrap();
+    w.remove(&request_id);
+}
+
+// RAII guard to ensure we unmark request when the handling scope ends.
+#[cfg(feature = "std")]
+struct RequestHandlingGuard(RequestId);
+
+#[cfg(feature = "std")]
+impl Drop for RequestHandlingGuard {
+    fn drop(&mut self) {
+        unmark_request_handling(self.0.clone());
+    }
+}
+
 use crate::OpocLevel;
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
@@ -123,13 +163,42 @@ impl<T: Config> Pallet<T> {
             }
         }
 
-        // Find the request with less expiration block number to execute
-        let (request_id, (expiration_block_number, _opoc_level)) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
-        if request_id == RequestId::default() {
-            // Unlock the semaphore (decrement counter)
+        // We'll attempt to find a request up to MAX_INPUTS_MANAGED_PER_BLOCK times,
+        // skipping ones that are already being handled by this process (in-memory).
+        let mut request_id: RequestId = RequestId::default();
+        let mut expiration_block_number: BlockNumber = Default::default();
+        let mut opoc_level_tmp: OpocLevel = OpocLevel::Level0;
+
+        // Get the sorted list of candidates and pick the first one we can mark.
+        let candidates = Self::offchain_find_requests_sorted_by_expiration(&account_id);
+        if candidates.is_empty() {
             SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
             return Ok(());
         }
+
+        let mut found = false;
+        for (rid, (exp_bn, opl)) in candidates.into_iter() {
+            #[cfg(feature = "std")]
+            {
+                if !mark_request_handling(rid.clone()) {
+                    continue;
+                }
+            }
+            request_id = rid;
+            expiration_block_number = exp_bn;
+            opoc_level_tmp = opl;
+            found = true;
+            break;
+        }
+
+        if !found {
+            SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
+            return Ok(());
+        }
+
+        // Ensure the request is unmarked when we exit this function.
+        #[cfg(feature = "std")]
+        let _request_guard = RequestHandlingGuard(request_id.clone());
 
         // Load request data from Inputs storage
         let (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
@@ -196,8 +265,17 @@ impl<T: Config> Pallet<T> {
     }
 
     fn offchain_find_request_with_min_expiration_block_number(account_id: &T::AccountId) -> (RequestId, (BlockNumber,OpocLevel)) {
-        let mut opoc_assignments = Vec::<(RequestId, (BlockNumber, OpocLevel))>::new();
-        let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
+        // Delegate to the list-based finder and return the first entry (or default)
+        let list = Self::offchain_find_requests_sorted_by_expiration(account_id);
+        if list.is_empty() {
+            return (Default::default(), Default::default());
+        }
+        list[0]
+    }
+
+    fn offchain_find_requests_sorted_by_expiration(account_id: &T::AccountId) -> sp_std::vec::Vec<(RequestId, (BlockNumber, OpocLevel))> {
+        let mut opoc_assignments = sp_std::vec::Vec::<(RequestId, (BlockNumber, OpocLevel))>::new();
+        let inputs = Inputs::<T>::iter().collect::<sp_std::vec::Vec<_>>();
 
         for (request_id, _) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
 
@@ -217,20 +295,14 @@ impl<T: Config> Pallet<T> {
             let opoc_assignement_data = OpocAssignment::<T>::get(*request_id, &account_id);
 
             // Add the request_id and expiration_block_number to the opoc_assignment vector
-            opoc_assignments.push((*request_id, opoc_assignement_data));//TODO LUCA SISTEMARE
+            opoc_assignments.push((*request_id, opoc_assignement_data));
 
-        }
-
-        // Return zero if no opoc_assignments has been found
-        if opoc_assignments.is_empty() {
-            return (Default::default(), Default::default());
         }
 
         // Sort opoc_assignments by expiration block number
         opoc_assignments.sort_by(|a, b| a.1.0.cmp(&b.1.0));
 
-        // Return first request
-        opoc_assignments[0]
+        opoc_assignments
     }
 
     fn offchain_load_wasm_from_nft_id(nft_id: &NftId, nft_file_cid: &Cid) -> Result<Vec<u8>, DispatchError> {
@@ -777,5 +849,42 @@ impl<T: Config> Pallet<T> {
             Some(data) => Ok(data.to_vec()),
             None => Err(DispatchError::Other("Chain state not found")),
         }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod offchain_tests {
+    use super::*;
+    use sp_core::U256;
+
+    #[test]
+    fn test_mark_unmark_request_handling() {
+        let rid = RequestId::default();
+        // ensure clean state
+        unmark_request_handling(rid.clone());
+        assert!(mark_request_handling(rid.clone())); // inserted
+        assert!(!mark_request_handling(rid.clone())); // already present
+        unmark_request_handling(rid.clone());
+        assert!(mark_request_handling(rid.clone())); // re-insert
+        unmark_request_handling(rid.clone());
+        assert!(mark_request_handling(rid.clone()));
+        // final cleanup
+        unmark_request_handling(rid);
+    }
+
+    #[test]
+    fn test_request_handling_guard_raii() {
+        let rid = RequestId::from(U256::from(123u32));
+        // ensure clean state
+        unmark_request_handling(rid.clone());
+        assert!(mark_request_handling(rid.clone()));
+        {
+            // entering scope should not allow another mark
+            let _guard = RequestHandlingGuard(rid.clone());
+            assert!(!mark_request_handling(rid.clone()));
+        }
+        // after scope drop, should be unmarked
+        assert!(mark_request_handling(rid.clone()));
+        unmark_request_handling(rid);
     }
 }
