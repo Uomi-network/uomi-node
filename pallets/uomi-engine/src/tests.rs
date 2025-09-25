@@ -10,7 +10,7 @@ use frame_support::{
     assert_ok,
     inherent::ProvideInherent,
     pallet_prelude::InherentData,
-    traits::{Currency, OffchainWorker},
+    traits::{Currency, OffchainWorker, OnFinalize, OnInitialize},
     BoundedVec,
 };
 use log::LevelFilter;
@@ -928,7 +928,7 @@ fn test_inherent_opoc_level_0_completed() {
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -946,7 +946,7 @@ fn test_inherent_opoc_level_0_completed() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
 
         // Insert the output for the first validator
@@ -954,11 +954,13 @@ fn test_inherent_opoc_level_0_completed() {
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
         
         // After the execution of the inherent, the OpocAssignment storage should contain nft_required_consensus assignment for the request_id 1
         let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
