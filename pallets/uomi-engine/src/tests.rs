@@ -10,7 +10,7 @@ use frame_support::{
     assert_ok,
     inherent::ProvideInherent,
     pallet_prelude::InherentData,
-    traits::{Currency, OffchainWorker},
+    traits::{Currency, OffchainWorker, OnFinalize, OnInitialize},
     BoundedVec,
 };
 use log::LevelFilter;
@@ -712,7 +712,7 @@ fn test_offchain_run_wasm_function_with_get_request_sender() {
 //////////////////////////////////////////////////////////////////////////////////
 
 #[test]
-fn test_inherent_opoc_no_assignment() {
+fn test_on_finalize_opoc_no_assignment() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -743,11 +743,13 @@ fn test_inherent_opoc_no_assignment() {
 
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(0);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(2);
         
         // After the execution of the inherent, should exist 1 assignment for the request_id 1 and the validator
         let (opoc_assignment, level) = OpocAssignment::<Test>::get(request_id, validator.clone());
@@ -763,7 +765,7 @@ fn test_inherent_opoc_no_assignment() {
 }
 
 #[test]
-fn test_inherent_opoc_no_assignment_without_validators_available() {
+fn test_on_finalize_opoc_no_assignment_without_validators_available() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -772,6 +774,7 @@ fn test_inherent_opoc_no_assignment_without_validators_available() {
 
         // Set current block
         System::set_block_number(1);
+        let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
         let request_id: U256 = U256::from(1);
@@ -788,11 +791,13 @@ fn test_inherent_opoc_no_assignment_without_validators_available() {
 
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(0);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(2);
         
         // After the execution of the inherent, the OpocAssignment storage should contain 0 assignment for the request_id 1
         let opoc_assignment = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -804,7 +809,7 @@ fn test_inherent_opoc_no_assignment_without_validators_available() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_no_timeout() {
+fn test_on_finalize_opoc_level_0_no_timeout() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -837,11 +842,13 @@ fn test_inherent_opoc_level_0_no_timeout() {
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(0);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(2);
         
         // After the execution of the inherent, the OpocAssignment storage should contain 1 assignment for the request_id 1 and the first validator
         let (opoc_assignment, level) = OpocAssignment::<Test>::get(request_id, validators[0].clone());
@@ -861,7 +868,7 @@ fn test_inherent_opoc_level_0_no_timeout() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_timeout() {
+fn test_on_finalize_opoc_level_0_timeout() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -872,7 +879,7 @@ fn test_inherent_opoc_level_0_timeout() {
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -888,17 +895,19 @@ fn test_inherent_opoc_level_0_timeout() {
             empty_cid.clone(),
         ));
 
-        // Insert an assignment for the first validator
+        // Insert an assignment for the first validator with an expired block number
         OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0));
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
         
         // After the execution of the inherent, the OpocAssignment storage should contain 1 assignment for the request_id 1
         let opoc_assignment = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -916,7 +925,7 @@ fn test_inherent_opoc_level_0_timeout() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_completed() {
+fn test_on_finalize_opoc_level_0_completed() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -928,7 +937,7 @@ fn test_inherent_opoc_level_0_completed() {
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -946,7 +955,7 @@ fn test_inherent_opoc_level_0_completed() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
 
         // Insert the output for the first validator
@@ -954,11 +963,13 @@ fn test_inherent_opoc_level_0_completed() {
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
         
         // After the execution of the inherent, the OpocAssignment storage should contain nft_required_consensus assignment for the request_id 1
         let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -978,7 +989,7 @@ fn test_inherent_opoc_level_0_completed() {
 }
 
 #[test] // This test is for the unsecure case, where the nft_required_consensus is 1
-fn test_inherent_opoc_level_0_completed_unsecure() {
+fn test_on_finalize_opoc_level_0_completed_unsecure() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -990,7 +1001,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -1008,7 +1019,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
 
         // Insert the output for the first validator
@@ -1016,11 +1027,13 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
 
         // storage Outputs should contain the output of the request
         let outputs = Outputs::<Test>::get(request_id);
@@ -1045,7 +1058,7 @@ fn test_inherent_opoc_level_0_completed_unsecure() {
 }
 
 #[test]
-fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
+fn test_on_finalize_opoc_level_0_completed_with_infinite_wasm() {
     make_logger();
     
     new_test_ext().execute_with(|| {
@@ -1056,7 +1069,7 @@ fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -1074,7 +1087,7 @@ fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
         ));
 
         // Insert an assignment for the first validator
-        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
+        OpocAssignment::<Test>::insert(U256::from(1), validators[0].clone(), (U256::from(current_block_number), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validators[0].clone(), request_id, true);
 
         // Insert the output for the first validator (empty_bounded_vec because the wasm is infinite)
@@ -1082,11 +1095,13 @@ fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
         
         // After the execution of the inherent, the OpocAssignment storage should contain 1 assignment for the request_id 1
         // This is because the request should be re-assigned to the other validators
@@ -1110,72 +1125,74 @@ fn test_inherent_opoc_level_0_completed_with_infinite_wasm() {
 }
 
 #[test]
-fn test_inherent_opoc_level_1_no_timeouts() {
+fn test_on_finalize_opoc_level_1_no_timeouts() {
   make_logger();
     
   new_test_ext().execute_with(|| {
-      let empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
-      let empty_cid = Cid::default();
-      let stake = 10_000_000_000_000_000_000;
-      let num_validators = 10;
-      let validators = create_validators(num_validators, stake);
-          
-      // Set current block
-      System::set_block_number(3);
-      let current_block_number = System::block_number();
+    let empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
+    let empty_cid = Cid::default();
+    let stake = 10_000_000_000_000_000_000;
+    let num_validators = 10;
+    let validators = create_validators(num_validators, stake);
+        
+    // Set current block
+    System::set_block_number(2);
+    let current_block_number = System::block_number();
 
-      // Insert an input on the Inputs storage
-      let request_id: U256 = U256::from(1);
-      let nft_required_consensus = U256::from(5);
-      Inputs::<Test>::insert(request_id, (
-          U256::zero(),
-          H160::repeat_byte(0xAA),
-          U256::zero(),
-          nft_required_consensus,
-          U256::from(25), // nft_execution_max_time
-          empty_cid.clone(),
-          empty_bounded_vec.clone(),
-          empty_cid.clone(),
-      ));
+    // Insert an input on the Inputs storage
+    let request_id: U256 = U256::from(1);
+    let nft_required_consensus = U256::from(5);
+    Inputs::<Test>::insert(request_id, (
+        U256::zero(),
+        H160::repeat_byte(0xAA),
+        U256::zero(),
+        nft_required_consensus,
+        U256::from(25), // nft_execution_max_time
+        empty_cid.clone(),
+        empty_bounded_vec.clone(),
+        empty_cid.clone(),
+    ));
 
-      // Insert an assignment for the first validator
-      OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
-      // Insert the output for the first validator
-      NodesOutputs::<Test>::insert(request_id, validators[4].clone(), empty_bounded_vec.clone());
+    // Insert an assignment for the first validator
+    OpocAssignment::<Test>::insert(U256::from(1), validators[4].clone(), (U256::from(current_block_number - 1), OpocLevel::Level0)); 
+    // Insert the output for the first validator
+    NodesOutputs::<Test>::insert(request_id, validators[4].clone(), empty_bounded_vec.clone());
 
-      // Insert an assignment for the other 4 validators
-      for i in 0..4 {
-          OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
-          NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
-      }
+    // Insert an assignment for the other 4 validators
+    for i in 0..4 {
+        OpocAssignment::<Test>::insert(U256::from(1), validators[i].clone(), (U256::from(current_block_number + 1), OpocLevel::Level1));
+        NodesWorks::<Test>::insert(validators[i].clone(), request_id, true);
+    }
+    
+    let inherent_data = InherentData::new();
+    let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
+    assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
+    assert!(TestingPallet::is_inherent(&inherent_call));
+    let runtime_call: RuntimeCall = inherent_call.into();
+    assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+    TestingPallet::on_finalize(current_block_number);
+    System::set_block_number(3);
       
-      let inherent_data = InherentData::new();
-      let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-      System::set_block_number(2);
-      assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
-      assert!(TestingPallet::is_inherent(&inherent_call));
-      let runtime_call: RuntimeCall = inherent_call.into();
-      assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
-      
-      // After the execution of the inherent, the OpocAssignment storage should contain nft_required_consensus assignment for the request_id 1
-      let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
-      assert_eq!(opoc_assignments.len() as u32, nft_required_consensus.as_u32());
-      // After the execution of the inherent, the NodesWorks storage should contain nft_required_consensus - 1 assignments
-      let nodes_works_number = NodesWorks::<Test>::iter().collect::<Vec<_>>();
-      assert_eq!(nodes_works_number.len() as u32, nft_required_consensus.as_u32() - 1);
-      // All the opoc_assignments except one should have the expiration block number set to the current block number + 1
-      let mut opoc_assignments_with_valid_expirations = 0;
-      for (opoc_assignment, _opoc_level) in opoc_assignments {
-          if opoc_assignment == U256::from(current_block_number + 1) {
-              opoc_assignments_with_valid_expirations += 1;
-          }
-      }
-      assert_eq!(opoc_assignments_with_valid_expirations, nft_required_consensus.as_u32() - 1);
+    // After the execution of the inherent, the OpocAssignment storage should contain nft_required_consensus assignment for the request_id 1
+    let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+    assert_eq!(opoc_assignments.len() as u32, nft_required_consensus.as_u32());
+    // After the execution of the inherent, the NodesWorks storage should contain nft_required_consensus - 1 assignments
+    let nodes_works_number = NodesWorks::<Test>::iter().collect::<Vec<_>>();
+    assert_eq!(nodes_works_number.len() as u32, nft_required_consensus.as_u32() - 1);
+    // All the opoc_assignments except one should have the expiration block number set to the current block number + 1
+    let mut opoc_assignments_with_valid_expirations = 0;
+    for (opoc_assignment, _opoc_level) in opoc_assignments {
+        if opoc_assignment == U256::from(current_block_number + 1) {
+            opoc_assignments_with_valid_expirations += 1;
+        }
+    }
+    assert_eq!(opoc_assignments_with_valid_expirations, nft_required_consensus.as_u32() - 1);
   });
 }
 
 #[test]
-fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the execution of the opoc of level 1, one of the selected validators has a timeout
+fn test_on_finalize_opoc_level_1_some_timeouts() { // Case where during the execution of the opoc of level 1, one of the selected validators has a timeout
     make_logger();
         
     new_test_ext().execute_with(|| {
@@ -1186,7 +1203,7 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -1220,11 +1237,13 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
 
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
         
         // After the execution of the inherent, the OpocAssignment storage should contain nft_required_consensus assignment for the request_id 1
         let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -1261,7 +1280,7 @@ fn test_inherent_opoc_level_1_some_timeouts() { // Case where during the executi
 }
 
 #[test] // This test is for the case when all the validators have the same output
-fn test_inherent_opoc_level_1_completed_valid() {
+fn test_on_finalize_opoc_level_1_completed_valid() {
     make_logger();
         
     new_test_ext().execute_with(|| {
@@ -1274,7 +1293,7 @@ fn test_inherent_opoc_level_1_completed_valid() {
         let validators = create_validators(num_validators, stake);
             
         // Set current block
-        System::set_block_number(3);
+        System::set_block_number(2);
         let current_block_number = System::block_number();
 
         // Insert an input on the Inputs storage
@@ -1304,11 +1323,13 @@ fn test_inherent_opoc_level_1_completed_valid() {
         
         let inherent_data = InherentData::new();
         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        System::set_block_number(2);
         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
         assert!(TestingPallet::is_inherent(&inherent_call));
         let runtime_call: RuntimeCall = inherent_call.into();
         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+        TestingPallet::on_finalize(current_block_number);
+        System::set_block_number(3);
         
         // storage Outputs should contain the output of the request
         let outputs = Outputs::<Test>::get(request_id);
@@ -1333,7 +1354,7 @@ fn test_inherent_opoc_level_1_completed_valid() {
 }
 
 #[test] // This test is for a case when one node on opoc level 1 has a different output than the others
-fn test_inherent_opoc_level_1_completed_invalid() {
+fn test_on_finalize_opoc_level_1_completed_invalid() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1347,7 +1368,7 @@ fn test_inherent_opoc_level_1_completed_invalid() {
     let validators = create_validators(num_validators, stake);
 
     // Set current block
-    System::set_block_number(3);
+    System::set_block_number(2);
     let current_block_number = System::block_number();
 
     // Insert an input on the Inputs storage
@@ -1382,11 +1403,13 @@ fn test_inherent_opoc_level_1_completed_invalid() {
     
     let inherent_data = InherentData::new();
     let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-    System::set_block_number(2);
     assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
     assert!(TestingPallet::is_inherent(&inherent_call));
     let runtime_call: RuntimeCall = inherent_call.into();
     assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+    TestingPallet::on_finalize(current_block_number);
+    System::set_block_number(3);
       
     //check if opoc assignment has nft_required_consensus elements
     let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -1395,7 +1418,7 @@ fn test_inherent_opoc_level_1_completed_invalid() {
 }
 
 #[test] // This test is for a case when one node on opoc level 1 has a empty output
-fn test_inherent_opoc_level_1_completed_empty() {
+fn test_on_finalize_opoc_level_1_completed_empty() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1409,7 +1432,7 @@ fn test_inherent_opoc_level_1_completed_empty() {
     let validators = create_validators(num_validators, stake);
 
     // Set current block
-    System::set_block_number(3);
+    System::set_block_number(2);
     let current_block_number = System::block_number();
 
     // Insert an input on the Inputs storage
@@ -1444,11 +1467,13 @@ fn test_inherent_opoc_level_1_completed_empty() {
     
     let inherent_data = InherentData::new();
     let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-    System::set_block_number(2);
     assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
     assert!(TestingPallet::is_inherent(&inherent_call));
     let runtime_call: RuntimeCall = inherent_call.into();
     assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+
+    TestingPallet::on_finalize(current_block_number);
+    System::set_block_number(3);
       
     //check if opoc assignment has 5 elements
     let opoc_assignments: Vec<(U256, OpocLevel)> = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
@@ -1462,7 +1487,7 @@ fn test_inherent_opoc_level_1_completed_empty() {
 
 
 #[test]
-fn test_inherent_opoc_level_2_completed() {
+fn test_on_finalize_opoc_level_2_completed() {
   make_logger();
     
   new_test_ext().execute_with(|| {
@@ -1476,7 +1501,7 @@ fn test_inherent_opoc_level_2_completed() {
     let different_bounded_vec = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3, 7, 5]).expect("Vector exceeds the bound");
 
     // Set current block
-    System::set_block_number(3);
+    System::set_block_number(2);
     let current_block_number = System::block_number();
 
     // Insert an input on the Inputs storage
@@ -1508,12 +1533,13 @@ fn test_inherent_opoc_level_2_completed() {
     
     let inherent_data = InherentData::new();
     let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-    System::set_block_number(2);
     assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
     assert!(TestingPallet::is_inherent(&inherent_call));
     let runtime_call: RuntimeCall = inherent_call.into();
     assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
-      
+    
+    TestingPallet::on_finalize(current_block_number);
+    System::set_block_number(3);
 
     // storage Outputs should contain the output of the request generated from the majority of validators
     let outputs = Outputs::<Test>::get(request_id);
@@ -1541,7 +1567,7 @@ fn test_inherent_opoc_level_2_completed() {
 }
 
 #[test]
-fn test_inherent_in_block() {
+fn test_on_finalize_in_block() {
     make_logger();
     
     new_test_ext().execute_with(|| {

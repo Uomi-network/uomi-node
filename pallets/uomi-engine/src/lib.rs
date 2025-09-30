@@ -483,25 +483,23 @@ pub mod pallet {
 		fn on_finalize(_: BlockNumberFor<T>) {
             let current_block_number = U256::from(0) + <frame_system::Pallet<T>>::block_number();
 
-        
-                match Self::opoc_run(current_block_number) {
-                    Ok(operations) => {
-                        Self::opoc_store_operations(operations);
-                    },
-                    Err(error) => {
-                        log::error!("Error running opoc_run: {:?}", error);
-                    },
-                };
+            match Self::opoc_run(current_block_number) {
+                Ok(operations) => {
+                    Self::opoc_store_operations(operations);
+                },
+                Err(error) => {
+                    log::error!("Error running opoc_run: {:?}", error);
+                },
+            };
 
-                match Self::aimodelscalc_run(current_block_number) {
-                    Ok(operations) => {
-                        Self::aimodelscalc_store_operations(operations);
-                    },
-                    Err(error) => {
-                        log::error!("Error running aimodelscalc_run: {:?}", error);
-                    },
-                };
-  
+            match Self::aimodelscalc_run(current_block_number) {
+                Ok(operations) => {
+                    Self::aimodelscalc_store_operations(operations);
+                },
+                Err(error) => {
+                    log::error!("Error running aimodelscalc_run: {:?}", error);
+                },
+            };
 
             // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
             let divisor = U256::from(1000);
@@ -688,11 +686,13 @@ pub mod pallet {
     // Calls are the dispatchable functions that can be called by users and offchain workers.
     #[pallet::call]
     impl<T: Config> Pallet<T> {
+
+        // NOTE: Set inherent data is not used anymore, but kept for reference.
 		#[pallet::call_index(0)]
 		#[pallet::weight((500_000, DispatchClass::Mandatory))]
 		pub fn set_inherent_data(
 			origin: OriginFor<T>,
-            opoc_operations: (
+            _opoc_operations: (
                 BTreeMap<T::AccountId, bool>,
                 BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
                 BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
@@ -700,13 +700,11 @@ pub mod pallet {
                 BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
                 BTreeMap<RequestId, (Data, u32, u32, U256)>
             ),
-            aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
+            _aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
 		) -> DispatchResultWithPostInfo {
 			ensure_none(origin)?;
             assert!(!InherentDidUpdate::<T>::exists(), "Inherent data must be updated only once in the block");
             
-         
-
 			InherentDidUpdate::<T>::set(true);
 			Ok(().into())
 		}
@@ -830,6 +828,7 @@ pub mod pallet {
     }
 
     // Inherent functions are used to execute code at the beginning of each block.
+    // NOTE: Inherent are not used anymore, but the structure is kept for future use.
     #[pallet::inherent]
     impl<T: Config> ProvideInherent for Pallet<T> {
         type Call = Call<T>;
@@ -837,23 +836,14 @@ pub mod pallet {
         const INHERENT_IDENTIFIER: InherentIdentifier = consts::PALLET_INHERENT_IDENTIFIER;
     
         fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
-            let current_block_number = frame_system::Pallet::<T>::block_number().into();
-
-         
-
-                Some(Call::set_inherent_data { 
-                    opoc_operations: (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
-                    aimodelscalc_operations: BTreeMap::new(),
-                })
-            
+            Some(Call::set_inherent_data { 
+                opoc_operations: (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
+                aimodelscalc_operations: BTreeMap::new(),
+            })
         }
     
-        fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
-            let current_block_number = frame_system::Pallet::<T>::block_number().into();
-            let expected_block_number = current_block_number + 1;
-
-                Ok(())
-            
+        fn check_inherent(_call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
+            Ok(())
         }
         
         fn is_inherent(call: &Self::Call) -> bool {
