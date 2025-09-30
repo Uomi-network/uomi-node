@@ -319,14 +319,14 @@ fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
     // Read semaphore status and be sure no offchain execution is running
-    let semaphore = TestingPallet::semaphore_status();
+    let semaphore = TestingPallet::test_semaphore_status();
     assert_eq!(semaphore, 0u32);
 
         // Run the offchain worker
         TestingPallet::offchain_worker(current_block_number);
 
     // Read semaphore status and be sure no offchain execution is running
-    let semaphore = TestingPallet::semaphore_status();
+    let semaphore = TestingPallet::test_semaphore_status();
     assert_eq!(semaphore, 0u32);
 
         // Verify transactions in the pool
@@ -560,21 +560,21 @@ fn test_offchain_semaphore_blocks_when_full() {
     // Emulate workers acquiring slots up to the limit of 5
     for i in 1..=5 {
         assert!(TestingPallet::test_acquire_slot());
-        assert_eq!(TestingPallet::semaphore_status(), i);
+        assert_eq!(TestingPallet::test_semaphore_status(), i);
     }
 
     // Sixth acquire should fail because max = 5
     assert!(!TestingPallet::test_acquire_slot());
-    assert_eq!(TestingPallet::semaphore_status(), 5);
+    assert_eq!(TestingPallet::test_semaphore_status(), 5);
 
     // Release one slot and ensure counter decreases to 4
     TestingPallet::test_release_slot();
-    assert_eq!(TestingPallet::semaphore_status(), 4);
+    assert_eq!(TestingPallet::test_semaphore_status(), 4);
 
     // Release all remaining slots and ensure counter returns to 0
     for i in (0..4).rev() {
         TestingPallet::test_release_slot();
-        assert_eq!(TestingPallet::semaphore_status(), i);
+        assert_eq!(TestingPallet::test_semaphore_status(), i);
     }
 
     // No transactions expected here because we didn't invoke offchain_worker logic; test is about counter semantics only.
