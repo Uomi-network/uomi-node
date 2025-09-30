@@ -1607,7 +1607,7 @@ impl<T: Config> Pallet<T> {
             .map(|(validator, _)| validator).collect();
         for validator in processed_validators {
             Self::reset_validator_current_era_points(&validator)?;
-            log::info!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
+            log::debug!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
         }
         Ok(())
     }
