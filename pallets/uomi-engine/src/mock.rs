@@ -70,7 +70,7 @@ parameter_types! {
     pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
     pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
     pub const ExpectedBlockTime: u64 = 6_000;
-        pub const TestMaxOffchainConcurrent: u32 = 5;
+    pub const TestMaxOffchainConcurrent: u32 = 5; // NOTE: This config is not used anymore, but kept for retro-compatibility.
 }
 
 pub struct IpfsWrapper;
@@ -379,7 +379,7 @@ impl pallet_uomi_engine::Config for Test {
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
-    type MaxOffchainConcurrent = TestMaxOffchainConcurrent;
+    type MaxOffchainConcurrent = TestMaxOffchainConcurrent; // NOTE: This config is not used anymore, but kept for retro-compatibility.
     type OffenceReporter = TestOffenceReporter;
 }
 

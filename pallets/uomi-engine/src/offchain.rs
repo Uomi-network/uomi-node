@@ -9,8 +9,139 @@ use sp_std::{
 };
 use sp_core::Get;
 use scale_info::prelude::string::String;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-// TODO: Dichiarazione del semaforo
+// Semaphore implementation to limit the executions of requests in parallel
+const SEMAPHORE_ARRAY_REPEAT_VALUE: SemaphoreAtomicSlot = SemaphoreAtomicSlot::new();
+const SEMAPHORE_MAX_SLOTS: usize = 5; // Maximum number of concurrent requests
+static SEMAPHORE_SLOTS: [SemaphoreAtomicSlot; SEMAPHORE_MAX_SLOTS] = [
+    SEMAPHORE_ARRAY_REPEAT_VALUE; SEMAPHORE_MAX_SLOTS
+];
+#[derive(Debug)]
+struct SemaphoreAtomicSlot {
+    // U256 is represented as 4 x u64
+    part0: AtomicU64,
+    part1: AtomicU64,
+    part2: AtomicU64,
+    part3: AtomicU64,
+    in_use: AtomicU64, // 0 = free, 1 = occupied
+}
+
+impl SemaphoreAtomicSlot {
+    const fn new() -> Self {
+        Self {
+            part0: AtomicU64::new(0),
+            part1: AtomicU64::new(0),
+            part2: AtomicU64::new(0),
+            part3: AtomicU64::new(0),
+            in_use: AtomicU64::new(0),
+        }
+    }
+
+    fn try_set(&self, request_id: U256) -> bool {
+        // Attempt to acquire the slot atomically
+        if self.in_use.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+            return false;
+        }
+
+        // Convert U256 to 4 u64 parts
+        let bytes = request_id.0;
+        self.part0.store(bytes[0], Ordering::Relaxed);
+        self.part1.store(bytes[1], Ordering::Relaxed);
+        self.part2.store(bytes[2], Ordering::Relaxed);
+        self.part3.store(bytes[3], Ordering::Relaxed);
+
+        true
+    }
+
+    fn clear(&self) {
+        self.part0.store(0, Ordering::Relaxed);
+        self.part1.store(0, Ordering::Relaxed);
+        self.part2.store(0, Ordering::Relaxed);
+        self.part3.store(0, Ordering::Relaxed);
+        self.in_use.store(0, Ordering::Release);
+    }
+
+    fn matches(&self, request_id: U256) -> bool {
+        if self.in_use.load(Ordering::Acquire) == 0 {
+            return false;
+        }
+
+        let bytes = request_id.0;
+        self.part0.load(Ordering::Relaxed) == bytes[0] &&
+        self.part1.load(Ordering::Relaxed) == bytes[1] &&
+        self.part2.load(Ordering::Relaxed) == bytes[2] &&
+        self.part3.load(Ordering::Relaxed) == bytes[3]
+    }
+
+    fn is_in_use(&self) -> bool {
+        self.in_use.load(Ordering::Acquire) == 1
+    }
+}
+
+/// Attempts to add a request_id to the semaphore
+/// Returns true if added successfully, false otherwise
+pub fn semaphore_try_to_add(request_id: U256) -> bool {
+    // First check if the request_id is already present
+    for slot in &SEMAPHORE_SLOTS[0..SEMAPHORE_MAX_SLOTS] {
+        if slot.matches(request_id) {
+            return false; // Already running
+        }
+    }
+
+    // Look for a free slot and acquire it
+    for slot in &SEMAPHORE_SLOTS[0..SEMAPHORE_MAX_SLOTS] {
+        if slot.try_set(request_id) {
+            return true;
+        }
+    }
+
+    false // No slot available
+}
+
+/// Removes a request_id from the semaphore
+pub fn semaphore_remove(request_id: U256) {
+    for slot in &SEMAPHORE_SLOTS {
+        if slot.matches(request_id) {
+            slot.clear();
+            return;
+        }
+    }
+}
+
+/// Checks if a request_id is running
+pub fn semaphore_is_running(request_id: U256) -> bool {
+    for slot in &SEMAPHORE_SLOTS {
+        if slot.matches(request_id) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Counts how many requests are currently running
+pub fn semaphore_counter() -> usize {
+    SEMAPHORE_SLOTS.iter()
+        .filter(|slot| slot.is_in_use())
+        .count()
+}
+
+/// Show all the request_ids currently running (for debug purposes)
+pub fn semaphore_list() -> Vec<U256> {
+    let mut running_requests = Vec::new();
+    for slot in &SEMAPHORE_SLOTS {
+        if slot.is_in_use() {
+            let part0 = slot.part0.load(Ordering::Relaxed);
+            let part1 = slot.part1.load(Ordering::Relaxed);
+            let part2 = slot.part2.load(Ordering::Relaxed);
+            let part3 = slot.part3.load(Ordering::Relaxed);
+            let request_id = U256([part0, part1, part2, part3]);
+            running_requests.push(request_id);
+        }
+    }
+    running_requests
+}
+// --- End semaphore implementation ---
 
 use crate::OpocLevel;
 use crate::{
@@ -50,26 +181,20 @@ struct CallAiResponseCleaned {
 impl<T: Config> Pallet<T> {
     // Test-only helpers
     #[cfg(test)]
-    pub fn test_acquire_slot() -> bool {
-        // let max = <T as Config>::MaxOffchainConcurrent::get();
-        // let mut current = SEMAPHORE_COUNTER.load(Ordering::Relaxed);
-        // loop {
-        //     if current >= max { return false; }
-        //     match SEMAPHORE_COUNTER.compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed) {
-        //         Ok(_) => return true,
-        //         Err(v) => current = v,
-        //     }
-        // }
-        true
+    pub fn test_semaphore_try_to_add(request_id: &RequestId) -> bool {
+        semaphore_try_to_add(*request_id)
     }
     #[cfg(test)]
-    pub fn test_release_slot() {
-        // SEMAPHORE_COUNTER.fetch_sub(1, Ordering::Release);
+    pub fn test_semaphore_remove(request_id: &RequestId) {
+        semaphore_remove(*request_id);
     }
     #[cfg(test)]
-    pub fn test_semaphore_status() -> u32 {
-        // SEMAPHORE_COUNTER.load(Ordering::Relaxed)
-        1 as u32
+    pub fn test_semaphore_counter() -> u32 {
+        semaphore_counter() as u32
+    }
+    #[cfg(test)]
+    pub fn test_semaphore_list() -> Vec<U256> {
+        semaphore_list()
     }
 
     // Offchain worker entry point
@@ -99,18 +224,16 @@ impl<T: Config> Pallet<T> {
 
     #[cfg(feature = "std")]
     fn offchain_run_agents(account_id: &T::AccountId) -> DispatchResult {
-        // Try to acquire a slot in the semaphore counter. If the number of
-        // concurrent executions is >= configured max, skip execution.
-        let max = <T as Config>::MaxOffchainConcurrent::get();
-        // TODO: Verificare se si è già raggiunto il max con il semaforo, se si si esce
-
         // Find the request with less expiration block number to execute
         let (request_id, (expiration_block_number, _opoc_level)) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
             return Ok(());
         }
 
-        // TODO: Mettere request_id nel semaforo
+        if !semaphore_try_to_add(request_id) {
+            // Unable to acquire a slot in the semaphore, skip this request for now
+            return Ok(());
+        }
 
         // Load request data from Inputs storage
         let (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
@@ -125,7 +248,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Remove request_id from the semaphore
-                // TODO: Rimuovere request_id dal semaforo
+                semaphore_remove(request_id);
                 return Ok(());
             }
         };
@@ -140,7 +263,7 @@ impl<T: Config> Pallet<T> {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Remove request_id from the semaphore
-                // TODO: Rimuovere request_id dal semaforo
+                semaphore_remove(request_id);
                 return Ok(());
             },
         };
@@ -149,12 +272,6 @@ impl<T: Config> Pallet<T> {
         match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id, opoc_level) {
             Ok(output_data) => {
                 let final_output_data = output_data.clone();
-
-                // NOTE: This code has been removed because it was causing issues with new slashing mechanism. Check if it's all ok in production, then consider removing this.
-                // // To avoid storing empty data, we force the output data to be at least 1 byte
-                // if final_output_data == Data::default() {
-                //     final_output_data = Data::try_from(vec![0u8]).unwrap_or_default();
-                // }
 
                 // Store the output data
                 Self::offchain_store_output_data(&request_id, &final_output_data).unwrap_or_else(|e| {
@@ -171,7 +288,7 @@ impl<T: Config> Pallet<T> {
         }
 
         // Remove request_id from the semaphore
-        // TODO: Rimuovere request_id dal semaforo
+        semaphore_remove(request_id);
 
         Ok(())
     }
@@ -181,6 +298,10 @@ impl<T: Config> Pallet<T> {
         let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
 
         for (request_id, _) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
+            // Be sure is not already running on the semaphore
+            if semaphore_is_running(*request_id) {
+                continue;
+            }
 
             // Check if the request is assigned to the validator by checking if the request_id is in the OpocAssignment storage
             let has_opoc_assignment = OpocAssignment::<T>::contains_key(*request_id, &account_id);

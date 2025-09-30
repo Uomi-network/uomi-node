@@ -318,16 +318,16 @@ fn test_offchain_worker_uomi_whitepaper_chat_agent_fail() {
         OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(current_block_number + 1), OpocLevel::Level0)); // NOTE: We set the expiration block number to the previous block so we simulate that the assignment is expired but the output is available
         NodesWorks::<Test>::insert(validator.clone(), request_id, true);
 
-    // Read semaphore status and be sure no offchain execution is running
-    let semaphore = TestingPallet::test_semaphore_status();
-    assert_eq!(semaphore, 0u32);
+        // Read semaphore status and be sure no offchain execution is running
+        let semaphore = TestingPallet::test_semaphore_counter();
+        assert_eq!(semaphore, 0u32);
 
         // Run the offchain worker
         TestingPallet::offchain_worker(current_block_number);
 
-    // Read semaphore status and be sure no offchain execution is running
-    let semaphore = TestingPallet::test_semaphore_status();
-    assert_eq!(semaphore, 0u32);
+        // Read semaphore status and be sure no offchain execution is running
+        let semaphore = TestingPallet::test_semaphore_counter();
+        assert_eq!(semaphore, 0u32);
 
         // Verify transactions in the pool
         let state_read = state.read();
@@ -557,27 +557,27 @@ fn test_offchain_semaphore_blocks_when_full() {
         NodesWorks::<Test>::insert(validator.clone(), request_id1, true);
         NodesWorks::<Test>::insert(validator.clone(), request_id2, true);
 
-    // Emulate workers acquiring slots up to the limit of 5
-    for i in 1..=5 {
-        assert!(TestingPallet::test_acquire_slot());
-        assert_eq!(TestingPallet::test_semaphore_status(), i);
-    }
+        // Emulate workers acquiring slots up to the limit of 5
+        for i in 1..=5 {
+            assert!(TestingPallet::test_semaphore_try_to_add(&U256::from(i)));
+            assert_eq!(TestingPallet::test_semaphore_counter(), i);
+        }
 
-    // Sixth acquire should fail because max = 5
-    assert!(!TestingPallet::test_acquire_slot());
-    assert_eq!(TestingPallet::test_semaphore_status(), 5);
+        // Sixth acquire should fail because max = 5
+        assert!(!TestingPallet::test_semaphore_try_to_add(&U256::from(6)));
+        assert_eq!(TestingPallet::test_semaphore_counter(), 5);
 
-    // Release one slot and ensure counter decreases to 4
-    TestingPallet::test_release_slot();
-    assert_eq!(TestingPallet::test_semaphore_status(), 4);
+        // Release one slot and ensure counter decreases to 4
+        TestingPallet::test_semaphore_remove(&U256::from(1));
+        assert_eq!(TestingPallet::test_semaphore_counter(), 4);
 
-    // Release all remaining slots and ensure counter returns to 0
-    for i in (0..4).rev() {
-        TestingPallet::test_release_slot();
-        assert_eq!(TestingPallet::test_semaphore_status(), i);
-    }
+        // Release all remaining slots and ensure counter returns to 0
+        for i in (0..4).rev() {
+            TestingPallet::test_semaphore_remove(&U256::from(i + 2));
+            assert_eq!(TestingPallet::test_semaphore_counter(), i);
+        }
 
-    // No transactions expected here because we didn't invoke offchain_worker logic; test is about counter semantics only.
+        // No transactions expected here because we didn't invoke offchain_worker logic; test is about counter semantics only.
     });
 }
 
