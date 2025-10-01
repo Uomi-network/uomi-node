@@ -184,6 +184,30 @@ pub mod pallet {
             inference_index: u32, // The inference index.
             inference_proof: Data, // The inference proof.
         },
+        NodesWorksAdd {
+            account_id: T::AccountId, // The account ID of the validator.
+            request_id: RequestId, // The request ID.
+        },
+        NodesWorksRemove {
+            account_id: T::AccountId, // The account ID of the validator.
+            request_id: RequestId, // The request ID.
+        },
+        OpocTimeoutsAdd {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        },
+        OpocTimeoutsRemove {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        },
+        OpocErrorsAdd {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        },
+        OpocErrorsRemove {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        },
         // --- Offence reporting (structure only, no logic yet) ---
         EngineOffenceReported {
             offence_type: EngineOffenceType, // Type of offence
