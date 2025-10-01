@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES, BN_HARDFIX_2}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
 // Helper trait imports for accessing staking internals
@@ -242,6 +242,7 @@ impl<T: Config> Pallet<T> {
                             // Clean all timeouts for the request
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
+                                &mut opoc_blacklist_operations,
                                 &request_id
                             );
 
@@ -496,6 +497,7 @@ impl<T: Config> Pallet<T> {
                             // Clean all timeouts for the request
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
+                                &mut opoc_blacklist_operations,
                                 &request_id
                             );
 
@@ -1549,9 +1551,17 @@ impl<T: Config> Pallet<T> {
     // NOTE: It should remove all the timeouts stored in opoc_timeouts_operations, then it should add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
     fn opoc_timeouts_operations_clean(
         opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
+        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
         request_id: &RequestId
     ) -> bool {
+        let mut accounts_restored: Vec<T::AccountId> = Vec::new();
+
         // remove all the timeouts stored in opoc_timeouts_operations
+        if let Some(timeouts) = opoc_timeouts_operations.get(request_id) {
+            for (validator, _is_timeout) in timeouts.iter() {
+                accounts_restored.push(validator.clone());
+            }
+        }
         opoc_timeouts_operations.remove(request_id);
 
         // add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
@@ -1559,8 +1569,17 @@ impl<T: Config> Pallet<T> {
         let mut timeouts = BTreeMap::<T::AccountId, bool>::new();
         for (validator, _is_timeout) in storage_timeouts_for_request_id {
             timeouts.insert(validator.clone(), false);
+            accounts_restored.push(validator.clone());
         }
         opoc_timeouts_operations.insert(request_id.clone(), timeouts);
+
+        // remove the accounts restored from the opoc blacklist operations
+        let current_block_number = <frame_system::Pallet<T>>::block_number();
+        if current_block_number >= BN_HARDFIX_2.into() {
+            for account in accounts_restored {
+                Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &account);
+            }
+        }
 
         true
     }
