@@ -1,21 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 // This file is part of Frontier.
-//
-// Copyright (c) 2019-2022 Moonsong Labs.
-// Copyright (c) 2023 Parity Technologies (UK) Ltd.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use pallet_evm::AddressMapping;
 use scale_info::TypeInfo;
@@ -108,81 +92,78 @@ impl sp_runtime::traits::Convert<H160, MockAccount> for MockAccount {
 
 #[macro_export]
 macro_rules! mock_account {
-	($name:ident, $convert:expr) => {
-		pub struct $name;
-		mock_account!(# $name, $convert);
-	};
-	($name:ident ( $($field:ty),* ), $convert:expr) => {
-		pub struct $name($(pub $field),*);
-		mock_account!(# $name, $convert);
-	};
-	(# $name:ident, $convert:expr) => {
-		impl From<$name> for MockAccount {
-			fn from(value: $name) -> MockAccount {
-				$convert(value)
-			}
-		}
+    ($name:ident, $convert:expr) => {
+        pub struct $name;
+        mock_account!(# $name, $convert);
+    };
+    ($name:ident ( $($field:ty),* ), $convert:expr) => {
+        pub struct $name($(pub $field),*);
+        mock_account!(# $name, $convert);
+    };
+    (# $name:ident, $convert:expr) => {
+        impl From<$name> for MockAccount {
+            #[allow(clippy::redundant_closure_call)]
+            fn from(value: $name) -> MockAccount {
+                $convert(value)
+            }
+        }
 
-		impl From<$name> for sp_core::H160 {
-			fn from(value: $name) -> sp_core::H160 {
-				MockAccount::from(value).into()
-			}
-		}
+        impl From<$name> for sp_core::H160 {
+            fn from(value: $name) -> sp_core::H160 {
+                MockAccount::from(value).into()
+            }
+        }
 
-		impl From<$name> for sp_core::H256 {
-			fn from(value: $name) -> sp_core::H256 {
-				MockAccount::from(value).into()
-			}
-		}
-	};
+        impl From<$name> for sp_core::H256 {
+            fn from(value: $name) -> sp_core::H256 {
+                MockAccount::from(value).into()
+            }
+        }
+    };
 }
+
+// === Accounts ===
 
 mock_account!(Zero, |_| MockAccount::zero());
 mock_account!(Alice, |_| H160::repeat_byte(0xAA).into());
 mock_account!(Bob, |_| H160::repeat_byte(0xBB).into());
 mock_account!(Charlie, |_| H160::repeat_byte(0xCC).into());
 mock_account!(David, |_| H160::repeat_byte(0xDD).into());
-
 mock_account!(Precompile1, |_| MockAccount::from_u64(1));
-
 mock_account!(CryptoAlith, |_| H160::from(hex_literal::hex!(
     "f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac"
-))
-.into());
+)).into());
 mock_account!(CryptoBaltathar, |_| H160::from(hex_literal::hex!(
     "3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0"
-))
-.into());
+)).into());
 mock_account!(CryptoCarleth, |_| H160::from(hex_literal::hex!(
     "798d4Ba9baf0064Ec19eB4F0a1a45785ae9D6DFc"
-))
-.into());
+)).into());
 
 mock_account!(
     AddressInPrefixedSet(u32, u128),
     |value: AddressInPrefixedSet| {
         let prefix: u32 = value.0;
         let index: u128 = value.1;
+        let mut addr = [0u8; 20];
+        addr[0..4].copy_from_slice(&prefix.to_be_bytes());
 
-        let mut buffer = Vec::with_capacity(20); // 160 bits
+        // FIX: salin 16 byte indeks penuh (hindari out-of-bounds)
+        let index_bytes = index.to_be_bytes(); // [u8;16]
+        addr[4..20].copy_from_slice(&index_bytes);
 
-        buffer.extend_from_slice(&prefix.to_be_bytes());
-        buffer.extend_from_slice(&index.to_be_bytes());
-
-        assert_eq!(buffer.len(), 20, "address buffer should have len of 20");
-
-        H160::from_slice(&buffer).into()
+        MockAccount(H160::from(addr))
     }
 );
+
+// === Secret keys (test fixtures) ===
 
 pub fn alith_secret_key() -> [u8; 32] {
     hex_literal::hex!("5fb92d6e98884f76de468fa3f6278f8807c48bebc13595d45af5bdc4da702133")
 }
-
 pub fn baltathar_secret_key() -> [u8; 32] {
     hex_literal::hex!("8075991ce870b93a8870eca0c0f91913d12f47948ca0fd25b49c6fa7cdbeee8b")
 }
-
 pub fn charleth_secret_key() -> [u8; 32] {
     hex_literal::hex!("0b6e18cafb6ed99687ec547bd28139cafdd2bffe70e6b688025de6b445aa5c5b")
 }
