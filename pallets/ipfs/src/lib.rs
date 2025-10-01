@@ -8,6 +8,7 @@ mod tests;
 mod ipfs;
 mod storages;
 pub mod types;
+pub mod migrations;
 
 pub use pallet::*;
 
@@ -15,6 +16,8 @@ use frame_support::pallet_prelude::DispatchClass;
 
 use sp_std::{ vec, vec::Vec };
 use core::fmt::Debug;
+use frame_support::traits::GetStorageVersion;
+use frame_support::pallet_prelude::StorageVersion;
 use frame_support::{
     inherent::{ InherentData, InherentIdentifier, IsFatalError, ProvideInherent },
     parameter_types,
@@ -214,7 +217,7 @@ pub mod pallet {
     }
 
     #[pallet::storage]
-    pub type CidReferenceCount<T: Config> = StorageMap
+    pub type CidReferenceCount<T: Config> = StorageMap<
         _,
         Blake2_128Concat,
         Cid,
@@ -249,7 +252,10 @@ pub mod pallet {
     >;
 
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(PhantomData<T>);
+
+    pub const STORAGE_VERSION: StorageVersion = StorageVersion::new(2); 
 
     // Errors
     #[pallet::error]
@@ -404,7 +410,7 @@ pub mod pallet {
 
             if CidsStatus::<T>::contains_key(&cid) {
                 CidsStatus::<T>::mutate(&cid, |(expires_at, _usable_from)| {
-                    if (new_expires_at.into() > *expires_at) {
+                    if new_expires_at.into() > *expires_at {
                         *expires_at = new_expires_at.into();
                     } else {
                         *expires_at = expires_at.clone();

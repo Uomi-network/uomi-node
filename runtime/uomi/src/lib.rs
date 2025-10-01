@@ -1737,7 +1737,9 @@ pub type Executive = frame_executive::Executive<
 >;
 
 // Add pallet_tss storage migrations here. Each element must implement OnRuntimeUpgrade.
-pub type Migrations = ();
+pub type Migrations = (
+    pallet_ipfs::migrations::InitializeCidReferenceCount<Runtime>,
+);
 //     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
 // );
 
