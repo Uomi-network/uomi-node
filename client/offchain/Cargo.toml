@@ -60,13 +60,13 @@ log = { workspace = true, default-features = true }
 async-trait = { workspace = true }
 lazy_static = { workspace = true }
 tokio = { workspace = true, default-features = true }
-sc-block-builder = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2407", default-features = false }
+sc-block-builder = { workspace = true, default-features = false }
 sc-client-db = { workspace = true }
 sc-transaction-pool = { workspace = true }
 sc-transaction-pool-api = { workspace = true }
 sp-consensus = { workspace = true }
 sp-tracing = { workspace = true }
-substrate-test-runtime-client = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2407", default-features = false }
+substrate-test-runtime-client = { workspace = true, default-features = false }
 
 [features]
 default = []
