@@ -1027,8 +1027,16 @@ impl<T: Config> Pallet<T> {
             for (request_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     NodesWorks::<T>::insert(account_id, request_id, is_assigned);
+                    Self::deposit_event(Event::NodesWorksAdd {
+                        account_id: account_id.clone(),
+                        request_id: request_id.clone(),
+                    });
                 } else {
                     NodesWorks::<T>::remove(account_id, request_id);
+                    Self::deposit_event(Event::NodesWorksRemove {
+                        account_id: account_id.clone(),
+                        request_id: request_id.clone(),
+                    });
                 }
             }
         }
@@ -1038,8 +1046,16 @@ impl<T: Config> Pallet<T> {
             for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
+                    Self::deposit_event(Event::OpocTimeoutsAdd {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    });
                 } else {
                     OpocTimeouts::<T>::remove(request_id, account_id);
+                    Self::deposit_event(Event::OpocTimeoutsRemove {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    });
                 }
             }
         }
@@ -1049,8 +1065,16 @@ impl<T: Config> Pallet<T> {
             for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     OpocErrors::<T>::insert(request_id, account_id, is_assigned);
+                    Self::deposit_event(Event::OpocErrorsAdd {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    });
                 } else {
                     OpocErrors::<T>::remove(request_id, account_id);
+                    Self::deposit_event(Event::OpocErrorsRemove {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    });
                 }
             }
         }
