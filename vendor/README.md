@@ -1,6 +1,6 @@
 # Third party packages
 
-This directory contatins packages from third-party vendors reused in Astar Network.
+This directory contatins packages from third-party vendors reused in Uomi Network.
 
 ### Why not fork?
 

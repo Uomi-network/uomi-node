@@ -130,8 +130,8 @@ impl RuntimeEvent {
                 result: match result {
                     Ok(_) => Ok(()),
                     Err(capture) => match capture {
-                        evm::Capture::Exit(e) => Err(Capture::Exit(e.clone())),
-                        evm::Capture::Trap(t) => Err(Capture::Trap(opcodes_string(*t))),
+                        evm_runtime::Capture::Exit(e) => Err(Capture::Exit(e.clone())),
+                        evm_runtime::Capture::Trap(t) => Err(Capture::Trap(opcodes_string(*t))),
                     },
                 },
                 return_value: return_value.to_vec(),

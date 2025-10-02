@@ -18,8 +18,11 @@ pub struct IpfsPrecompile<T>(PhantomData<T>);
 #[precompile_utils::precompile]
 impl<R> IpfsPrecompile<R>
     where
-        R: pallet_evm::Config + pallet_ipfs::Config,
-        R::AccountId: IsType<sp_core::crypto::AccountId32>
+        R: pallet_evm::Config + pallet_ipfs::Config + frame_system::Config,
+        R::AccountId: IsType<sp_core::crypto::AccountId32>,
+        <R as frame_system::Config>::RuntimeCall: sp_runtime::traits::Dispatchable,
+        <<R as frame_system::Config>::RuntimeCall as sp_runtime::traits::Dispatchable>::RuntimeOrigin: From<Option<R::AccountId>>,
+        <R as pallet_evm::Config>::AddressMapping: AddressMapping<R::AccountId>
 {
     #[precompile::public("pin_agent(bytes,uint256,uint8)")]
     fn pin_agent(
@@ -54,7 +57,7 @@ impl<R> IpfsPrecompile<R>
 
         // Prepare the call to the pallet using the converted account ID as origin
         let dispatch_result: DispatchResult = pallet_ipfs::Pallet::<R>::pin_agent(
-            frame_system::RawOrigin::Signed(caller_account_id).into(),
+            Some(caller_account_id).into(),
             bounded_cid,
             nft_id,
             threshold
@@ -104,7 +107,7 @@ impl<R> IpfsPrecompile<R>
 
         // Prepare the call to the pallet using the converted account ID as origin
         let dispatch_result: DispatchResult = pallet_ipfs::Pallet::<R>::pin_file(
-            frame_system::RawOrigin::Signed(caller_account_id).into(),
+            Some(caller_account_id).into(),
             bounded_cid,
             block_number
         );

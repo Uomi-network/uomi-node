@@ -16,7 +16,9 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use ethereum::{TransactionV0 as LegacyTransaction, TransactionV2 as Transaction};
+// Integrate ethereum 0.18.x TransactionV3 (adds EIP-7702) as the canonical Transaction type.
+// Older API versions (<=6) used TransactionV2. We bump to version 7 to reflect this change.
+use ethereum::{TransactionV0 as LegacyTransaction, TransactionV3 as Transaction};
 use ethereum_types::{H160, H256, U256};
 use parity_scale_codec::{Decode, Encode};
 use sp_std::vec::Vec;
@@ -30,7 +32,7 @@ sp_api::decl_runtime_apis! {
     // In order to be able to use ApiExt as part of the RPC handler logic we need to be always
     // above the version that exists on chain for this Api, even if this Api is only meant
     // to be used overridden.
-    #[api_version(6)]
+    #[api_version(7)]
     pub trait DebugRuntimeApi {
         #[changed_in(5)]
         fn trace_transaction(
@@ -73,6 +75,7 @@ sp_api::decl_runtime_apis! {
             max_priority_fee_per_gas: Option<U256>,
             nonce: Option<U256>,
             access_list: Option<Vec<(H160, Vec<H256>)>>,
+            authorization_list: Option<Vec<(H160, Vec<u8>)>>,
         ) -> Result<(), sp_runtime::DispatchError>;
     }
 }

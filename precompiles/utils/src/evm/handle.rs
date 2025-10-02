@@ -32,7 +32,7 @@ pub trait PrecompileHandleExt: PrecompileHandle {
 	fn record_db_read<Runtime: pallet_evm::Config>(
 		&mut self,
 		data_max_encoded_len: usize,
-	) -> Result<(), evm::ExitError>;
+	) -> Result<(), fp_evm::ExitError>;
 
 	/// Record cost of a log manually.
 	/// This can be useful to record log costs early when their content have static size.
@@ -56,8 +56,15 @@ impl<T: PrecompileHandle> PrecompileHandleExt for T {
 	fn record_db_read<Runtime: pallet_evm::Config>(
 		&mut self,
 		data_max_encoded_len: usize,
-	) -> Result<(), evm::ExitError> {
-		self.record_cost(crate::prelude::RuntimeHelper::<Runtime>::db_read_gas_cost())?;
+	) -> Result<(), fp_evm::ExitError> {
+		// First record the intrinsic db read gas cost. Convert potential evm::ExitError manually.
+		self
+			.record_cost(crate::prelude::RuntimeHelper::<Runtime>::db_read_gas_cost())
+			.map_err(|e| match e {
+				// Map common variants; default to OutOfGas if variant set differs across versions.
+				// This avoids needing From impls between two ExitError enums from different crates.
+				_ => fp_evm::ExitError::Other("record_cost".into()),
+			})?;
 		// TODO: record ref time when precompile will be benchmarked
 		self.record_external_cost(None, Some(data_max_encoded_len as u64), None)
 	}

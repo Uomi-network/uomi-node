@@ -135,16 +135,19 @@ polkadot-runtime-common = { workspace = true, features = ["std"], optional = tru
 
 # try-runtime
 frame-try-runtime = { workspace = true, features = ["std"], optional = true }
-try-runtime-cli = { git = "https://github.com/paritytech/try-runtime-cli", tag = "v0.6.2", optional = true }
+try-runtime-cli = { workspace = true, optional = true }
 
 # evm-tracing
 moonbeam-rpc-primitives-debug = { workspace = true, features = ["std"], optional = true }
-moonbeam-rpc-primitives-txpool = { workspace = true, features = ["std"], optional = true }
+## Removed: moonbeam-rpc-primitives-txpool (deprecated)
 
 moonbeam-primitives-ext = { workspace = true }
 moonbeam-rpc-debug = { workspace = true, optional = true }
 moonbeam-rpc-trace = { workspace = true, optional = true }
-moonbeam-rpc-txpool = { workspace = true, optional = true }
+## Removed: moonbeam-rpc-txpool
+
+# Cumulus host functions (for storage proof size reclaim etc.)
+cumulus-primitives-proof-size-hostfunction = { workspace = true }
 
 [build-dependencies]
 polkadot-cli = { workspace = true, optional = true }
@@ -195,11 +198,10 @@ try-runtime = [
 evm-tracing = [
 	"moonbeam-rpc-debug",
 	"moonbeam-rpc-primitives-debug",
-	"moonbeam-rpc-primitives-txpool",
 	"moonbeam-rpc-trace",
-	"moonbeam-rpc-txpool",
 	"local-runtime/evm-tracing",
 	"finney-runtime/evm-tracing",
 	"uomi-runtime/evm-tracing",
+	# Removed: moonbeam-rpc-txpool
 ]
 manual-seal = ["sc-consensus-manual-seal"]

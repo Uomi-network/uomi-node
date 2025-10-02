@@ -564,6 +564,12 @@ where
         if let Some(block) = reference_block {
             let transactions = block.transactions;
             if let Some(transaction) = transactions.get(index) {
+                // EIP-7702 gating: only reject if runtime API version < 7 (no support).
+                if trace_api_version < 7 && matches!(transaction, ethereum::TransactionV3::EIP7702(_)) {
+                    return Err(internal_err(
+                        "EIP-7702 transactions require DebugRuntimeApi version >= 7".to_string(),
+                    ));
+                }
                 let f = || -> RpcResult<_> {
                     let result = if trace_api_version >= 5 {
                         // The block is initialized inside "trace_transaction"
@@ -587,8 +593,7 @@ where
                         } else {
                             // Pre-london update, legacy transactions.
                             match transaction {
-                                ethereum::TransactionV2::Legacy(tx) =>
-                                {
+                                ethereum::TransactionV3::Legacy(tx) => {
                                     #[allow(deprecated)]
                                     api.trace_transaction_before_version_4(
                                         parent_block_hash,
@@ -596,10 +601,14 @@ where
                                         &tx,
                                     )
                                 }
+                                ethereum::TransactionV3::EIP7702(_) => {
+                                    return Err(internal_err(
+                                        "EIP-7702 transactions are not supported on pre-London runtimes".to_string(),
+                                    ))
+                                }
                                 _ => {
                                     return Err(internal_err(
-                                        "Bug: pre-london runtime expects legacy transactions"
-                                            .to_string(),
+                                        "Bug: pre-london runtime expects legacy transactions".to_string(),
                                     ))
                                 }
                             }
@@ -750,6 +759,7 @@ where
             data,
             nonce,
             access_list,
+            authorization_list,
             ..
         } = call_params;
 
@@ -824,6 +834,7 @@ where
                             .map(|item| (item.address, item.storage_keys))
                             .collect(),
                     ),
+                    authorization_list.map(|list| list.into_iter().map(|(addr, bytes)| (addr, bytes.0)).collect()),
                 )
                 .map_err(|e| internal_err(format!("Runtime api access error: {:?}", e)))?
                 .map_err(|e| internal_err(format!("DispatchError: {:?}", e)))?;

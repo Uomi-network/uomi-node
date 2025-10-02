@@ -129,6 +129,7 @@ impl<T> From<DiscriminantResult<T>> for IsPrecompileResult {
 pub enum PrecompileKind {
 	Single(H160),
 	Prefixed(Vec<u8>),
+	Multiple(Vec<H160>),
 }
 
 #[derive(Debug, Clone)]
@@ -416,15 +417,15 @@ impl<'a, H: PrecompileHandle> PrecompileHandle for RestrictiveHandle<'a, H> {
 	fn call(
 		&mut self,
 		address: H160,
-		transfer: Option<evm::Transfer>,
+		transfer: Option<fp_evm::Transfer>,
 		input: Vec<u8>,
 		target_gas: Option<u64>,
 		is_static: bool,
-		context: &evm::Context,
-	) -> (evm::ExitReason, Vec<u8>) {
+		context: &fp_evm::Context,
+	) -> (fp_evm::ExitReason, Vec<u8>) {
 		if !self.allow_subcalls {
 			return (
-				evm::ExitReason::Revert(evm::ExitRevert::Reverted),
+				fp_evm::ExitReason::Revert(fp_evm::ExitRevert::Reverted),
 				crate::solidity::revert::revert_as_bytes("subcalls disabled for this precompile"),
 			);
 		}
@@ -433,7 +434,7 @@ impl<'a, H: PrecompileHandle> PrecompileHandle for RestrictiveHandle<'a, H> {
 			.call(address, transfer, input, target_gas, is_static, context)
 	}
 
-	fn record_cost(&mut self, cost: u64) -> Result<(), evm::ExitError> {
+	fn record_cost(&mut self, cost: u64) -> Result<(), fp_evm::ExitError> {
 		self.handle.record_cost(cost)
 	}
 
@@ -446,7 +447,7 @@ impl<'a, H: PrecompileHandle> PrecompileHandle for RestrictiveHandle<'a, H> {
 		address: H160,
 		topics: Vec<H256>,
 		data: Vec<u8>,
-	) -> Result<(), evm::ExitError> {
+	) -> Result<(), fp_evm::ExitError> {
 		self.handle.log(address, topics, data)
 	}
 
@@ -458,9 +459,7 @@ impl<'a, H: PrecompileHandle> PrecompileHandle for RestrictiveHandle<'a, H> {
 		self.handle.input()
 	}
 
-	fn context(&self) -> &evm::Context {
-		self.handle.context()
-	}
+	fn context(&self) -> &fp_evm::Context { self.handle.context() }
 
 	fn is_static(&self) -> bool {
 		self.handle.is_static()
@@ -483,6 +482,10 @@ impl<'a, H: PrecompileHandle> PrecompileHandle for RestrictiveHandle<'a, H> {
 	fn refund_external_cost(&mut self, ref_time: Option<u64>, proof_size: Option<u64>) {
 		self.handle.refund_external_cost(ref_time, proof_size)
 	}
+
+	fn origin(&self) -> H160 { self.handle.origin() }
+
+	fn is_contract_being_constructed(&self, address: H160) -> bool { self.handle.is_contract_being_constructed(address) }
 }
 
 /// Allows to know if a precompile is active or not.
@@ -716,7 +719,7 @@ where
 				Ok(mut recursion_level_map) => {
 					let recursion_level = match recursion_level_map.get_mut(&code_address) {
 						Some(recursion_level) => recursion_level,
-						None => return Some(Err(revert("Couldn't retreive precompile nesting"))),
+						None => return Some(Err(revert("Couldn't retrieve precompile nesting"))),
 					};
 
 					*recursion_level -= 1;
@@ -828,6 +831,68 @@ impl<A> IsActivePrecompile for RevertPrecompile<A> {
 	fn is_active_precompile(&self, _address: H160, _gas: u64) -> IsPrecompileResult {
 		IsPrecompileResult::Answer {
 			is_precompile: true,
+			extra_cost: 0,
+		}
+	}
+}
+
+/// Precompiles that were removed from a precompile set.
+/// Still considered precompiles but are inactive and always revert.
+pub struct RemovedPrecompilesAt<A>(PhantomData<A>);
+impl<A> PrecompileSetFragment for RemovedPrecompilesAt<A>
+where
+	A: Get<Vec<H160>>,
+{
+	#[inline(always)]
+	fn new() -> Self {
+		Self(PhantomData)
+	}
+
+	#[inline(always)]
+	fn execute<R: pallet_evm::Config>(
+		&self,
+		handle: &mut impl PrecompileHandle,
+	) -> Option<PrecompileResult> {
+		if A::get().contains(&handle.code_address()) {
+			Some(Err(revert("Removed precompile")))
+		} else {
+			None
+		}
+	}
+
+	#[inline(always)]
+	fn is_precompile(&self, address: H160, _gas: u64) -> IsPrecompileResult {
+		IsPrecompileResult::Answer {
+			is_precompile: A::get().contains(&address),
+			extra_cost: 0,
+		}
+	}
+
+	#[inline(always)]
+	fn used_addresses(&self) -> Vec<H160> {
+		A::get()
+	}
+
+	fn summarize_checks(&self) -> Vec<PrecompileCheckSummary> {
+		vec![PrecompileCheckSummary {
+			name: None,
+			precompile_kind: PrecompileKind::Multiple(A::get()),
+			recursion_limit: Some(0),
+			accept_delegate_call: true,
+			callable_by_smart_contract: "Reverts in all cases".into(),
+			callable_by_precompile: "Reverts in all cases".into(),
+		}]
+	}
+}
+
+impl<A> IsActivePrecompile for RemovedPrecompilesAt<A>
+where
+	Self: PrecompileSetFragment,
+{
+	#[inline(always)]
+	fn is_active_precompile(&self, _address: H160, _gas: u64) -> IsPrecompileResult {
+		IsPrecompileResult::Answer {
+			is_precompile: false,
 			extra_cost: 0,
 		}
 	}
@@ -1085,7 +1150,7 @@ impl<R: pallet_evm::Config, P: PrecompileSetFragment> PrecompileSetBuilder<R, P>
 	}
 
 	/// Return the list of mapped addresses contained in this PrecompileSet.
-	pub fn used_addresses() -> impl Iterator<Item = R::AccountId> {
+	pub fn used_addresses() -> impl Iterator<Item = pallet_evm::AccountIdOf<R>> {
 		Self::used_addresses_h160().map(R::AddressMapping::into_account_id)
 	}
 

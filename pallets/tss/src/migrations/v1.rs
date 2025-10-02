@@ -2,7 +2,7 @@ use frame_support::traits::{OnRuntimeUpgrade, GetStorageVersion, Get};
 use frame_support::{weights::Weight, storage_alias, Blake2_128Concat, BoundedVec};
 use frame_support::pallet_prelude::{OptionQuery, ValueQuery};
 use crate::pallet::{Pallet, SigningSession};
-use sp_core::U256;
+use ethereum_types::U256;
 use codec::{Decode, Encode};
 use sp_runtime::RuntimeDebug;
 use scale_info::TypeInfo;

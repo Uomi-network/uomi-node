@@ -93,8 +93,10 @@ pub mod pallet {
         /// It's essentially a proxy call that can be made by arbitrary origin type.
         #[pallet::call_index(0)]
         #[pallet::weight({
-			let di = call.get_dispatch_info();
-			(T::WeightInfo::execute_call().saturating_add(di.weight), di.class)
+            let di = call.get_dispatch_info();
+            // Substrate DispatchInfo no longer has a flat `weight` field; combine call & extension weights.
+            let total = di.call_weight.saturating_add(di.extension_weight);
+            (T::WeightInfo::execute_call().saturating_add(total), di.class)
 		})]
         pub fn execute_call(
             origin: OriginFor<T>,
