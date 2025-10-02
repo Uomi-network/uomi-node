@@ -28,6 +28,7 @@ use frame_support::{
         Get,
         IsType,
         MaxEncodedLen,
+        DecodeWithMemTracking,
         OptionQuery,
         RuntimeDebug,
         StorageDoubleMap,
@@ -53,6 +54,7 @@ use frame_system::{
         CreateSignedTransaction,
         SendUnsignedTransaction,
         SignedPayload,
+        CreateInherent,
         Signer,
         SigningTypes,
     },
@@ -123,7 +125,7 @@ impl IsFatalError for InherentError {
     }
 }
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, DecodeWithMemTracking)]
 #[scale_info(skip_type_params(T))]
 pub struct PinPayload<Public> {
     to_save: Vec<(Cid, (ExpirationBlockNumber, UsableFromBlockNumber))>,
@@ -163,6 +165,7 @@ pub mod pallet {
     pub trait Config: frame_system::Config +
         pallet_staking::Config +
         pallet_session::Config +
+        CreateInherent<Call<Self>> +
         CreateSignedTransaction<Call<Self>> +
         Debug
     {
@@ -201,7 +204,7 @@ pub mod pallet {
         },
     }
 
-    #[derive(Encode, Decode, Clone, PartialEq, Eq, TypeInfo, Debug)]
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, TypeInfo, Debug, MaxEncodedLen, DecodeWithMemTracking)]
     pub enum IpfsOperation {
         Pin,
         Unpin,

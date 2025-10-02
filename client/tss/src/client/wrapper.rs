@@ -232,7 +232,7 @@ where
     TP: TransactionPool<Block = B> + LocalTransactionPool<Block = B> + Send + Sync + 'static,
 {
     fn submit_unsigned(&self, call: RuntimeCall) -> Result<(), String> {
-        let xt = UncheckedExtrinsic::new_unsigned(call.into());
+        let xt = UncheckedExtrinsic::new_bare(call.into());
         let best_hash = self.client.info().best_hash;
         // convert to block extrinsic type
         let encoded = xt.encode();

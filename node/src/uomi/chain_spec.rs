@@ -159,6 +159,7 @@ fn mainnet_genesis(
                 .cloned()
                 .map(|k| (k, 100_000_000_000 * UOMI))
                 .collect(),
+            dev_accounts: None,
         },
         vesting: VestingConfig { vesting: vec![] },
         babe: BabeConfig {
@@ -228,6 +229,7 @@ fn mainnet_genesis(
 					)
 				})
 				.collect::<Vec<_>>(),
+            non_authority_keys: vec![],
 		},
 		staking: StakingConfig {
 			validator_count: initial_authorities.len() as u32,

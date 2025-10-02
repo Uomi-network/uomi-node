@@ -36,7 +36,7 @@ use frame_support::{
     inherent::{InherentData, InherentIdentifier, IsFatalError, ProvideInherent},
     pallet_prelude::{
         DispatchError, DispatchResultWithPostInfo, Hooks, InvalidTransaction, IsType, 
-        MaxEncodedLen, Member, RuntimeDebug, StorageDoubleMap, StorageMap, 
+        MaxEncodedLen, Member, RuntimeDebug, StorageDoubleMap, StorageMap, DecodeWithMemTracking,
         TransactionPriority, TransactionSource, TransactionValidity, ValidTransaction, 
         ValidateUnsigned, ValueQuery, 
     },
@@ -46,7 +46,7 @@ use frame_support::{
 };
 use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
-    ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
+    ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, CreateInherent, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
 };
 use pallet_ipfs::{
     self,
@@ -81,7 +81,7 @@ pub enum InherentError {
     InvalidInherentValue,
 }
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, Default, Copy)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, Default, Copy, DecodeWithMemTracking)]
 pub enum OpocLevel {
     #[default] Level0,
     Level1,
@@ -118,6 +118,7 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config
         + CreateSignedTransaction<Call<Self>>
+        + CreateInherent<Call<Self>>
         + session::Config<ValidatorId = <Self as frame_system::Config>::AccountId>
         + pallet_session::historical::Config
         + pallet_offences::Config
@@ -243,7 +244,7 @@ pub mod pallet {
     // Max engine requests scanned per block for majority-output disagreement.
     parameter_types! { pub const MaxEngineRequestConsensusScans: u32 = 25; }
 
-    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen)]
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
     #[repr(u8)]
     pub enum EngineOffenceType {
         /// Validator failed to provide required output within the allowed time window

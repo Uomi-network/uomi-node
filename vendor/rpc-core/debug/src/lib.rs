@@ -58,6 +58,10 @@ pub struct TraceCallParams {
     /// EIP-2718 type
     #[serde(rename = "type")]
     pub transaction_type: Option<U256>,
+    /// EIP-7702 authorization list (placeholder structure until full support). Each entry encodes
+    /// an authorized address plus arbitrary bytes (e.g. signature / payload). Upstream Moonbeam
+    /// uses a richer structure; adapt later when semantics are finalized.
+    pub authorization_list: Option<Vec<(H160, Bytes)>>,
 }
 
 #[rpc(server)]

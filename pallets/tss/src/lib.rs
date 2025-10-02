@@ -46,7 +46,7 @@ pub use pallet::*;
 use sp_std::vec;
 use sp_std::vec::Vec;
 use types::{SessionId, NftId};
-use sp_core::U256;
+use ethereum_types::U256;
 pub use payloads::*;
 pub use errors::*;
 pub use utils::*;
@@ -104,7 +104,7 @@ impl TssWeightInfo for () { // temporary placeholder until benchmarks are added
 
 
 /// A struct for the payload of the ReportTssOffence call
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, DecodeWithMemTracking)]
 pub struct ReportTssOffencePayload<T: Config> {
     pub offence_type: TssOffenceType,
     pub session_id: SessionId,
@@ -122,7 +122,7 @@ impl<T: SigningTypes + Config> SignedPayload<T> for ReportTssOffencePayload<T> {
 pub const CRYPTO_KEY_TYPE: KeyTypeId = KeyTypeId(*b"tss-");
 
 /// TSS offence types
-#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen)]
+#[derive(RuntimeDebug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen, DecodeWithMemTracking)]
 pub enum TssOffenceType {
     /// Validator failed to participate in DKG session
     DkgNonParticipation,
@@ -166,7 +166,7 @@ impl TssOffenceType {
 #[frame_support::pallet]
 pub mod pallet {
 
-    use frame_system::offchain::{AppCrypto, CreateSignedTransaction};
+    use frame_system::offchain::{AppCrypto, CreateSignedTransaction, CreateInherent};
     use sp_runtime::traits::IdentifyAccount;
 
     use crate::types::{MaxMessageSize, NftId, PublicKey, Signature};
@@ -227,6 +227,7 @@ pub mod pallet {
     + pallet_session::Config<ValidatorId = <Self as frame_system::Config>::AccountId>
     + pallet_session::historical::Config
     + CreateSignedTransaction<Call<Self>> 
+    + CreateInherent<Call<Self>>
     + pallet_offences::Config
 
     {
@@ -252,7 +253,7 @@ pub mod pallet {
     }
 
 
-    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Debug, PartialEq, Eq, Clone, Copy, PartialOrd)]
+    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Debug, PartialEq, Eq, Clone, Copy, PartialOrd, DecodeWithMemTracking)]
     #[repr(u8)]
     pub enum SessionState {
         // NOTE: Explicit discriminants are assigned to preserve backwards compatibility with any
@@ -272,7 +273,7 @@ pub mod pallet {
         SigningExpired    = 8, // Signing session TTL elapsed without completion
     }
 
-    #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo)] // IMPORTANT: Keep these derives
+    #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo, DecodeWithMemTracking)] // IMPORTANT: Keep these derives
     pub struct DKGSession<T>
     where
     T: Config,
@@ -285,7 +286,7 @@ pub mod pallet {
     pub deadline: BlockNumberFor<T>,
     }
 
-    #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo)]
+    #[derive(Encode, Decode, MaxEncodedLen, Debug, PartialEq, Eq, Clone, TypeInfo, DecodeWithMemTracking)]
     pub struct SigningSession {
     pub dkg_session_id: SessionId,
         pub request_id: U256, // Link to OPOC Outputs request id
@@ -363,7 +364,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn last_opoc_request_id)]
-    pub type LastOpocRequestId<T: Config> = StorageValue<_, sp_core::U256, ValueQuery>;
+    pub type LastOpocRequestId<T: Config> = StorageValue<_, U256, ValueQuery>;
 
     // Add storage for tracking previous validator set to detect changes
     #[pallet::storage]
@@ -1594,7 +1595,7 @@ pub mod pallet {
             // Always attempt to process OPOC requests on the cadence
             match Self::process_opoc_requests() {
                 Ok((requests, last_id_u256)) => {
-                    let mut max_request_id = sp_core::U256::zero();
+                    let mut max_request_id = U256::zero();
                     for (request_id, (nft_id_u256, chain_id, tx_bytes)) in requests.clone() {
                         let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
                         if !signer.can_sign() {
@@ -1623,7 +1624,7 @@ pub mod pallet {
                     }
 
                     // After submitting all signing session creation extrinsics, submit a single extrinsic updating LastOpocRequestId to the highest processed id
-                    if max_request_id > sp_core::U256::zero() {
+                    if max_request_id > U256::zero() {
                         let signer = Signer::<T, <T as pallet::Config>::AuthorityId>::all_accounts();
                         if signer.can_sign() {
                             let _ = signer.send_unsigned_transaction(
@@ -1812,7 +1813,7 @@ impl<T: Config> Pallet<T> {
     /// Offchain: scan NonceStates and compare internal last_allocated with RPC account nonce; queue empty tx if gap persists.
     fn detect_and_fill_nonce_gaps_offchain() {
         use crate::multichain::MultiChainRpcClient;
-    use sp_core::U256 as U256Core;
+    use ethereum_types::U256 as U256Core;
         // Iterate all (nft_id, chain_id) nonce states; this can be heavy -> early exit after limited operations
         const MAX_CHECKS: usize = 25; // safety cap per invocation
         let mut checked = 0usize;
@@ -2502,7 +2503,7 @@ sp_api::decl_runtime_apis! {
 }
 
 impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
-    fn create_agent_wallet(nft_id: sp_core::U256, threshold: u8) -> frame_support::pallet_prelude::DispatchResult {
+    fn create_agent_wallet(nft_id: U256, threshold: u8) -> frame_support::pallet_prelude::DispatchResult {
         log::info!("TSS: Creating wallet for agent {}", nft_id);
 
         ensure!(threshold >= 50, frame_support::pallet_prelude::DispatchError::Other("Threshold must be at least 50%"));
@@ -2523,7 +2524,7 @@ impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
         Ok(())
     }
     
-    fn agent_wallet_exists(nft_id: sp_core::U256) -> bool {
+    fn agent_wallet_exists(nft_id: U256) -> bool {
         log::info!("TSS: Checking if wallet exists for agent {}", nft_id);
 
         // Convert nft_id to BoundedVec
@@ -2538,7 +2539,7 @@ impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
         exists
     }
     
-    fn get_agent_wallet_address(nft_id: sp_core::U256) -> Option<sp_core::H160> {
+    fn get_agent_wallet_address(nft_id: U256) -> Option<sp_core::H160> {
         log::info!("TSS: Getting wallet address for agent {}", nft_id);
 
         // Convert nft_id to BoundedVec

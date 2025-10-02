@@ -9,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
+ethereum = { workspace = true}
 log = { workspace = true, optional = true }
 num_enum = { workspace = true }
 parity-scale-codec = { workspace = true }
@@ -108,7 +109,7 @@ pallet-delegated-staking = { workspace = true }
 # Moonbeam tracing
 moonbeam-evm-tracer = { workspace = true, optional = true }
 moonbeam-rpc-primitives-debug = { workspace = true, optional = true }
-moonbeam-rpc-primitives-txpool = { workspace = true, optional = true }
+## Removed: moonbeam-rpc-primitives-txpool
 
 # chain-extensions
 pallet-chain-extension-assets = { workspace = true }
@@ -204,7 +205,7 @@ std = [
 	"pallet-uomi-engine/std",
 	"moonbeam-evm-tracer/std",
 	"moonbeam-rpc-primitives-debug/std",
-	"moonbeam-rpc-primitives-txpool/std",
+    ## Removed: moonbeam-rpc-primitives-txpool/std
 	"substrate-wasm-builder",
 	"pallet-chain-extension-assets/std",
 	"uomi-primitives/std",
@@ -298,7 +299,7 @@ try-runtime = [
 evm-tracing = [
 	"moonbeam-evm-tracer",
 	"moonbeam-rpc-primitives-debug",
-	"moonbeam-rpc-primitives-txpool",
+    ## Removed: moonbeam-rpc-primitives-txpool
 ]
 
 # Enable metadata hash generation at compile time for the `CheckMetadataHash` extension.

@@ -493,4 +493,10 @@ impl<T: frame_system::Config> pallet_assets::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
+	/// Added to satisfy newer trait version. Approximate weight; run benchmarks to refine.
+	fn transfer_all() -> Weight {
+		Weight::from_parts(38_500_000, 6232)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
 }

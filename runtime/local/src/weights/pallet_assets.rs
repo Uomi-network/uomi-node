@@ -493,4 +493,14 @@ impl<T: frame_system::Config> pallet_assets::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
+	// New in newer pallet_assets versions: transfer_all weight. Adopt same db access pattern as transfer()
+	/// Storage: Assets Asset (r:1 w:1)
+	/// Storage: Assets Account (r:2 w:2)
+	/// Storage: System Account (r:1 w:1)
+	fn transfer_all() -> Weight {
+		// Using numbers similar to transfer_keep_alive as approximation; adjust after benchmarking.
+		Weight::from_parts(38_500_000, 6232)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
 }
