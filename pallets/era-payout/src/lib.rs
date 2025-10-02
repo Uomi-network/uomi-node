@@ -14,9 +14,19 @@ pub mod pallet {
     };
     use sp_core::H160;
     use sp_runtime::traits::Zero;
+    use frame_system::pallet_prelude::BlockNumberFor;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
+
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        #[cfg(feature = "try-runtime")]
+        fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+            // Nessun controllo specifico richiesto: pallet solo eventi.
+            Ok(())
+        }
+    }
 
     #[pallet::config]
     pub trait Config: frame_system::Config {

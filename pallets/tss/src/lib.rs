@@ -1504,6 +1504,11 @@ pub mod pallet {
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    #[cfg(feature = "try-runtime")]
+    fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+        // Nessuna verifica specifica: pallet non richiede controlli addizionali per lo stato.
+        Ok(())
+    }
     fn offchain_worker(n: BlockNumberFor<T>) {
         // Check pending transactions every block for real-time monitoring
         Self::check_pending_transactions_offchain().ok();

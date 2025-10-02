@@ -475,6 +475,10 @@ pub mod pallet {
     // Hooks are used to execute code in response to certain events.
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        #[cfg(feature = "try-runtime")]
+        fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+            Ok(())
+        }
         // The `offchain_worker` function is executed by the offchain worker in the runtime at the beginning of each block.
         #[cfg(feature = "std")]
         fn offchain_worker(_: BlockNumberFor<T>) {

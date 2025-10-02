@@ -275,6 +275,11 @@ pub mod pallet {
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "IPFS: inherent must be updated once in the block");
         }
+
+         #[cfg(feature = "try-runtime")]
+        fn try_state(_n: BlockNumber<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+            Ok(())
+        }
     }
 
     #[pallet::validate_unsigned]
