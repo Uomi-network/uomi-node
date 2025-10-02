@@ -1030,13 +1030,13 @@ impl<T: Config> Pallet<T> {
                     Self::deposit_event(Event::NodesWorksAdd {
                         account_id: account_id.clone(),
                         request_id: request_id.clone(),
-                    });
+                    }); //aggiunto nuovo
                 } else {
                     NodesWorks::<T>::remove(account_id, request_id);
                     Self::deposit_event(Event::NodesWorksRemove {
                         account_id: account_id.clone(),
                         request_id: request_id.clone(),
-                    });
+                    }); //aggiunto nuovo
                 }
             }
         }
@@ -1049,13 +1049,13 @@ impl<T: Config> Pallet<T> {
                     Self::deposit_event(Event::OpocTimeoutsAdd {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
-                    });
+                    }); //aggiunto nuovo
                 } else {
                     OpocTimeouts::<T>::remove(request_id, account_id);
                     Self::deposit_event(Event::OpocTimeoutsRemove {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
-                    });
+                    }); //aggiunto nuovo
                 }
             }
         }
@@ -1068,13 +1068,13 @@ impl<T: Config> Pallet<T> {
                     Self::deposit_event(Event::OpocErrorsAdd {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
-                    });
+                    }); //aggiunto nuovo
                 } else {
                     OpocErrors::<T>::remove(request_id, account_id);
                     Self::deposit_event(Event::OpocErrorsRemove {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
-                    });
+                    }); //aggiunto nuovo
                 }
             }
         }

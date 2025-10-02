@@ -16826,7 +16826,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",
