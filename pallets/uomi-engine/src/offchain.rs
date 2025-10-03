@@ -200,9 +200,11 @@ impl<T: Config> Pallet<T> {
     // Offchain worker entry point
     #[cfg(feature = "std")]
     pub fn offchain_run(account_id: &T::AccountId) -> DispatchResult {
+        log::info!("UOMI-ENGINE: Offchain worker started");
 
         // Be sure account is a validator, if not, do nothing
         if !cfg!(test) && !Self::address_is_active_validator(account_id) {
+            log::info!("UOMI-ENGINE: Offchain worker stopped, account is not an active validator");
             return Ok(());
         }
 
@@ -227,16 +229,19 @@ impl<T: Config> Pallet<T> {
         // Find the request with less expiration block number to execute
         let (request_id, (expiration_block_number, _opoc_level)) = Self::offchain_find_request_with_min_expiration_block_number(&account_id);
         if request_id == RequestId::default() {
+            log::info!("UOMI-ENGINE: No requests to process");
             return Ok(());
         }
 
+        // Be sure the request is not already running on another thread
         if !semaphore_try_to_add(request_id) {
-            // Unable to acquire a slot in the semaphore, skip this request for now
+            log::info!("UOMI-ENGINE: Request {:?} is already running on another thread", request_id);
             return Ok(());
         }
 
         // Load request data from Inputs storage
         let (block_number, address, nft_id, nft_required_consensus, nft_execution_max_time, nft_file_cid, input_data, input_file_cid) = Inputs::<T>::get(&request_id);
+        log::info!("UOMI-ENGINE: Processing request {:?} assigned to validator {:?}, expiration block number: {:?}", request_id, account_id, expiration_block_number);
 
         // Detect the level of opoc the execution should have
         let opoc_level = match Self::offchain_detect_opoc_level(&request_id, &account_id) {
@@ -289,7 +294,8 @@ impl<T: Config> Pallet<T> {
 
         // Remove request_id from the semaphore
         semaphore_remove(request_id);
-
+        
+        log::info!("UOMI-ENGINE: Finished processing request {:?}", request_id);
         Ok(())
     }
 
