@@ -68,6 +68,7 @@ sp-std = { workspace = true }
 sp-transaction-pool = { workspace = true }
 sp-version = { workspace = true }
 pallet-bags-list = { workspace = true }
+pallet-era-payout = { path = "../../pallets/era-payout", default-features = false }
 frame-election-provider-support = { workspace = true }
 
 # Used for the node template's RPCs
@@ -180,6 +181,7 @@ std = [
 	"pallet-vesting/std",
 	"pallet-proxy/std",
 	"sp-api/std",
+	"pallet-era-payout/std",
 	"sp-block-builder/std",
 	"sp-consensus-babe/std",
 	"sp-core/std",
@@ -251,11 +253,20 @@ try-runtime = [
 	"frame-executive/try-runtime",
 	"frame-support/try-runtime",
 	"frame-system/try-runtime",
+	"pallet-session/try-runtime",
+	"pallet-im-online/try-runtime",
+	"pallet-offences/try-runtime",
+	"pallet-authorship/try-runtime",
+	"pallet-election-provider-multi-phase/try-runtime",
+	"pallet-elections-phragmen/try-runtime",
+	"pallet-nomination-pools/try-runtime",
 	"pallet-babe/try-runtime",
 	"pallet-balances/try-runtime",
 	"pallet-contracts/try-runtime",
 	"pallet-collective-proxy/try-runtime",
 	"pallet-treasury/try-runtime",
+	"pallet-ipfs/try-runtime",
+	"pallet-tss/try-runtime",
 	"pallet-uomi-engine/try-runtime",
 	"pallet-membership/try-runtime",
 	"pallet-grandpa/try-runtime",
@@ -278,6 +289,10 @@ try-runtime = [
 	"uomi-primitives/try-runtime",
 	"pallet-chain-extension-assets/try-runtime",
 	"sp-runtime/try-runtime",
+	"pallet-bags-list/try-runtime",
+	"pallet-staking/try-runtime",
+	"pallet-base-fee/try-runtime",
+	"pallet-era-payout/try-runtime",
 ]
 evm-tracing = [
 	"moonbeam-evm-tracer",

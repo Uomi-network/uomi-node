@@ -241,6 +241,16 @@ pub mod pallet {
             Ok(())
         }
     }
+
+    // Hooks opzionali: aggiungiamo una implementazione try_state per abilitare try-runtime.
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        #[cfg(feature = "try-runtime")]
+        fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+            // Pallet semplice: nessuna verifica addizionale necessaria.
+            Ok(())
+        }
+    }
 }
 
 impl<T: Config> Pallet<T> {

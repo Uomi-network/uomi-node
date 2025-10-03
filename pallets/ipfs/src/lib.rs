@@ -8,6 +8,7 @@ mod tests;
 mod ipfs;
 mod storages;
 pub mod types;
+pub mod migrations;
 
 pub use pallet::*;
 
@@ -15,6 +16,8 @@ use frame_support::pallet_prelude::DispatchClass;
 
 use sp_std::{ vec, vec::Vec };
 use core::fmt::Debug;
+use frame_support::traits::GetStorageVersion;
+use frame_support::pallet_prelude::StorageVersion;
 use frame_support::{
     inherent::{ InherentData, InherentIdentifier, IsFatalError, ProvideInherent },
     parameter_types,
@@ -214,6 +217,15 @@ pub mod pallet {
     }
 
     #[pallet::storage]
+    pub type CidReferenceCount<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        Cid,
+        u32,  // number of agents referencing this CID
+        ValueQuery
+    >;
+
+    #[pallet::storage]
     pub type NodesPins<T: Config> = StorageDoubleMap<
         _,
         Blake2_128Concat,
@@ -240,7 +252,10 @@ pub mod pallet {
     >;
 
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(PhantomData<T>);
+
+    pub const STORAGE_VERSION: StorageVersion = StorageVersion::new(2); 
 
     // Errors
     #[pallet::error]
@@ -259,6 +274,11 @@ pub mod pallet {
             // Be sure that the InherentDidUpdate is set to true and reset it to false.
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "IPFS: inherent must be updated once in the block");
+        }
+
+         #[cfg(feature = "try-runtime")]
+        fn try_state(_n: BlockNumber<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+            Ok(())
         }
     }
 
@@ -318,31 +338,31 @@ pub mod pallet {
                 }
 
                 log::info!("IPFS: Agent already pinned, cid is different");
-                log::info!("IPFS: Current block number: {:?}", frame_system::Pallet::<T>::block_number());
-                log::info!("IPFS: MinExpireDuration: {:?}", MinExpireDuration::get());
-
-                CidsStatus::<T>::mutate(&existing_cid, |(expires_at, _usable_from)| {
-                    let current_block = frame_system::Pallet::<T>::block_number();
-                    let new_expiry: u32 = current_block
-                        .saturating_add(MinExpireDuration::get().into())
-                        .try_into()
-                        .unwrap_or(u32::MAX);
-                    log::info!("IPFS: Setting expiry to: {}", new_expiry);
-                    *expires_at = U256::from(new_expiry);
-                    log::info!("IPFS: Expires at after mutation: {}", *expires_at);
-                });
-
-                log::info!(
-                    "IPFS: Existing CID status after update: {:?}",
-                    CidsStatus::<T>::get(&existing_cid)
-                );
+                
+                // ⭐ NUOVO: Decrementa il reference count del vecchio CID se esiste un vecchio CID
+                let old_ref_count = CidReferenceCount::<T>::get(&existing_cid);
+                if old_ref_count > 1 {
+                    // Altri agent stanno usando questo CID, solo decrementa
+                    CidReferenceCount::<T>::insert(&existing_cid, old_ref_count - 1);
+                } else {
+                    // Nessun altro usa questo CID, mettilo in scadenza
+                    CidReferenceCount::<T>::remove(&existing_cid);
+                    CidsStatus::<T>::mutate(&existing_cid, |(expires_at, _usable_from)| {
+                        let current_block = frame_system::Pallet::<T>::block_number();
+                        let new_expiry: u32 = current_block
+                            .saturating_add(MinExpireDuration::get().into())
+                            .try_into()
+                            .unwrap_or(u32::MAX);
+                        log::info!("IPFS: Setting expiry to: {}", new_expiry);
+                        *expires_at = U256::from(new_expiry);
+                    });
+                    log::info!("IPFS: Last reference removed, CID will expire");
+                }
             } else {
-                // Call the TSS Pallet to initiate the wallet creation.
+                // Wallet creation logic...
                 log::info!("IPFS: Agent not pinned, creating new wallet through TSS Pallet");
-
-                // Check if wallet already exists for this agent
+                
                 if !T::TssInterface::agent_wallet_exists(nft_id) {
-                    // Create new wallet for the agent
                     if let Err(e) = T::TssInterface::create_agent_wallet(nft_id, threshold) {
                         log::error!("IPFS: Failed to create agent wallet: {:?}", e);
                         return Err(Error::<T>::SomethingWentWrong.into());
@@ -353,9 +373,17 @@ pub mod pallet {
                 }
             }
 
+            // ⭐ NUOVO: Incrementa il reference count del nuovo CID
             AgentsPins::<T>::insert(nft_id, &cid);
-            CidsStatus::<T>::insert(&cid, (U256::zero(), U256::zero()));
-            log::info!("IPFS: CID status after insert: {:?}", CidsStatus::<T>::get(&cid));
+            let new_ref_count = CidReferenceCount::<T>::get(&cid);
+            CidReferenceCount::<T>::insert(&cid, new_ref_count + 1);
+            log::info!("IPFS: Incremented reference count for new CID to {}", new_ref_count + 1);
+            
+            // Se è un CID nuovo, inizializza anche CidsStatus
+            if !CidsStatus::<T>::contains_key(&cid) {
+                CidsStatus::<T>::insert(&cid, (U256::zero(), U256::zero()));
+                log::info!("IPFS: CID status initialized");
+            }
 
             Self::deposit_event(Event::IpfsOperationSuccess {
                 operation: IpfsOperation::Pin,
@@ -387,7 +415,7 @@ pub mod pallet {
 
             if CidsStatus::<T>::contains_key(&cid) {
                 CidsStatus::<T>::mutate(&cid, |(expires_at, _usable_from)| {
-                    if (new_expires_at.into() > *expires_at) {
+                    if new_expires_at.into() > *expires_at {
                         *expires_at = new_expires_at.into();
                     } else {
                         *expires_at = expires_at.clone();

@@ -242,6 +242,7 @@ impl<T: Config> Pallet<T> {
                             // Clean all timeouts for the request
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
+                                &mut opoc_blacklist_operations,
                                 &request_id
                             );
 
@@ -496,6 +497,7 @@ impl<T: Config> Pallet<T> {
                             // Clean all timeouts for the request
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
+                                &mut opoc_blacklist_operations,
                                 &request_id
                             );
 
@@ -1027,8 +1029,16 @@ impl<T: Config> Pallet<T> {
             for (request_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     NodesWorks::<T>::insert(account_id, request_id, is_assigned);
+                    Self::deposit_event(Event::NodesWorksAdd {
+                        account_id: account_id.clone(),
+                        request_id: request_id.clone(),
+                    }); //aggiunto nuovo
                 } else {
                     NodesWorks::<T>::remove(account_id, request_id);
+                    Self::deposit_event(Event::NodesWorksRemove {
+                        account_id: account_id.clone(),
+                        request_id: request_id.clone(),
+                    }); //aggiunto nuovo
                 }
             }
         }
@@ -1038,8 +1048,16 @@ impl<T: Config> Pallet<T> {
             for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
+                    Self::deposit_event(Event::OpocTimeoutsAdd {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    }); //aggiunto nuovo
                 } else {
                     OpocTimeouts::<T>::remove(request_id, account_id);
+                    Self::deposit_event(Event::OpocTimeoutsRemove {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    }); //aggiunto nuovo
                 }
             }
         }
@@ -1049,8 +1067,16 @@ impl<T: Config> Pallet<T> {
             for (account_id, is_assigned) in requests.iter() {
                 if *is_assigned {
                     OpocErrors::<T>::insert(request_id, account_id, is_assigned);
+                    Self::deposit_event(Event::OpocErrorsAdd {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    }); //aggiunto nuovo
                 } else {
                     OpocErrors::<T>::remove(request_id, account_id);
+                    Self::deposit_event(Event::OpocErrorsRemove {
+                        request_id: request_id.clone(),
+                        account_id: account_id.clone(),
+                    }); //aggiunto nuovo
                 }
             }
         }
@@ -1549,9 +1575,17 @@ impl<T: Config> Pallet<T> {
     // NOTE: It should remove all the timeouts stored in opoc_timeouts_operations, then it should add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
     fn opoc_timeouts_operations_clean(
         opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
+        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
         request_id: &RequestId
     ) -> bool {
+        let mut accounts_restored: Vec<T::AccountId> = Vec::new();
+
         // remove all the timeouts stored in opoc_timeouts_operations
+        if let Some(timeouts) = opoc_timeouts_operations.get(request_id) {
+            for (validator, _is_timeout) in timeouts.iter() {
+                accounts_restored.push(validator.clone());
+            }
+        }
         opoc_timeouts_operations.remove(request_id);
 
         // add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
@@ -1559,8 +1593,14 @@ impl<T: Config> Pallet<T> {
         let mut timeouts = BTreeMap::<T::AccountId, bool>::new();
         for (validator, _is_timeout) in storage_timeouts_for_request_id {
             timeouts.insert(validator.clone(), false);
+            accounts_restored.push(validator.clone());
         }
         opoc_timeouts_operations.insert(request_id.clone(), timeouts);
+
+        // remove the accounts restored from the opoc blacklist operations 
+        for account in accounts_restored {
+            Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &account);
+        }
 
         true
     }
@@ -1607,7 +1647,7 @@ impl<T: Config> Pallet<T> {
             .map(|(validator, _)| validator).collect();
         for validator in processed_validators {
             Self::reset_validator_current_era_points(&validator)?;
-            log::info!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
+            log::debug!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
         }
         Ok(())
     }

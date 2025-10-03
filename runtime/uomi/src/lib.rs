@@ -133,7 +133,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("uomi"),
     impl_name: create_runtime_str!("uomi"),
     authoring_version: 1,
-    spec_version: 1, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
+    spec_version: 3, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1, // Extrinsic payload shape change
@@ -1737,7 +1737,9 @@ pub type Executive = frame_executive::Executive<
 >;
 
 // Add pallet_tss storage migrations here. Each element must implement OnRuntimeUpgrade.
-pub type Migrations = ();
+pub type Migrations = (
+    pallet_ipfs::migrations::InitializeCidReferenceCount<Runtime>,
+);
 //     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
 // );
 
