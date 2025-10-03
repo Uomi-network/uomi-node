@@ -3581,6 +3581,7 @@ dependencies = [
  "pallet-democracy",
  "pallet-election-provider-multi-phase",
  "pallet-elections-phragmen",
+ "pallet-era-payout",
  "pallet-ethereum",
  "pallet-evm",
  "pallet-evm-precompile-assets-erc20",
@@ -6259,6 +6260,7 @@ dependencies = [
  "pallet-democracy",
  "pallet-election-provider-multi-phase",
  "pallet-elections-phragmen",
+ "pallet-era-payout",
  "pallet-ethereum",
  "pallet-evm",
  "pallet-evm-precompile-assets-erc20",
@@ -16824,7 +16826,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "array-bytes 6.2.3",
  "fp-rpc",

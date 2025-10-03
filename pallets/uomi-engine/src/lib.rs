@@ -195,6 +195,30 @@ pub mod pallet {
             offence_type: EngineOffenceType, // Offence type
             request_id: RequestId,    // Request id context
         },
+        NodesWorksAdd {
+            account_id: T::AccountId, // The account ID of the validator.
+            request_id: RequestId, // The request ID.
+        },// AGGIUNTO NUOVO
+        NodesWorksRemove {
+            account_id: T::AccountId, // The account ID of the validator.
+            request_id: RequestId, // The request ID.
+        },// AGGIUNTO NUOVO
+        OpocTimeoutsAdd {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        },// AGGIUNTO NUOVO
+        OpocTimeoutsRemove {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        },// AGGIUNTO NUOVO
+        OpocErrorsAdd {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        }, // AGGIUNTO NUOVO
+        OpocErrorsRemove {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+        }, // AGGIUNTO NUOVO
     }
 
     // Errors
@@ -451,6 +475,10 @@ pub mod pallet {
     // Hooks are used to execute code in response to certain events.
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        #[cfg(feature = "try-runtime")]
+        fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+            Ok(())
+        }
         // The `offchain_worker` function is executed by the offchain worker in the runtime at the beginning of each block.
         #[cfg(feature = "std")]
         fn offchain_worker(_: BlockNumberFor<T>) {
@@ -692,7 +720,7 @@ pub mod pallet {
 		#[pallet::weight((500_000, DispatchClass::Mandatory))]
 		pub fn set_inherent_data(
 			origin: OriginFor<T>,
-            _opoc_operations: (
+            opoc_operations: (
                 BTreeMap<T::AccountId, bool>,
                 BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
                 BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
@@ -700,11 +728,11 @@ pub mod pallet {
                 BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
                 BTreeMap<RequestId, (Data, u32, u32, U256)>
             ),
-            _aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
+            aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
 		) -> DispatchResultWithPostInfo {
 			ensure_none(origin)?;
             assert!(!InherentDidUpdate::<T>::exists(), "Inherent data must be updated only once in the block");
-            
+
 			InherentDidUpdate::<T>::set(true);
 			Ok(().into())
 		}
@@ -842,8 +870,8 @@ pub mod pallet {
             })
         }
     
-        fn check_inherent(_call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
-            Ok(())
+        fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
+            Ok(())        
         }
         
         fn is_inherent(call: &Self::Call) -> bool {

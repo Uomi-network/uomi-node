@@ -115,6 +115,11 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		#[cfg(feature = "try-runtime")]
+		fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
+			// Nessuna logica di controllo aggiuntiva richiesta.
+			Ok(())
+		}
 		fn on_initialize(_: BlockNumberFor<T>) -> Weight {
 			// Register the Weight used on_finalize.
 			// 	- One storage read to get the block_weight.
