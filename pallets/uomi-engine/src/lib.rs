@@ -127,10 +127,7 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
-    /// Maximum number of concurrent offchain worker executions allowed per node.
-    /// When the number of running offchain executions reaches this value, further
-    /// attempts will be skipped until some finish.
-    type MaxOffchainConcurrent: Get<u32>;
+        type MaxOffchainConcurrent: Get<u32>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
         type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
         type OffenceReporter: ReportOffence<
             <Self as frame_system::Config>::AccountId,

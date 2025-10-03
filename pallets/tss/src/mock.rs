@@ -210,7 +210,7 @@ impl pallet_uomi_engine::Config for Test {
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
-    type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>;
+    type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
 }
 
 pub struct IpfsWrapper;
