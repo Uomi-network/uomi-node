@@ -152,6 +152,7 @@ std = [
 	"pallet-balances/std",
 	"pallet-contracts/std",
 	"pallet-chain-extension-unified-accounts/std",
+	"pallet-im-online/std",
 	"pallet-base-fee/std",
 	"pallet-ethereum/std",
 	"pallet-evm/std",
