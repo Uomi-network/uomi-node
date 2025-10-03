@@ -200,7 +200,7 @@ impl<T: Config> Pallet<T> {
     // Offchain worker entry point
     #[cfg(feature = "std")]
     pub fn offchain_run(account_id: &T::AccountId) -> DispatchResult {
-        log::info!("UOMI-ENGINE: Offchain worker started");
+        log::info!("UOMI-ENGINE: Offchain worker run started");
 
         // Be sure account is a validator, if not, do nothing
         if !cfg!(test) && !Self::address_is_active_validator(account_id) {
@@ -304,11 +304,6 @@ impl<T: Config> Pallet<T> {
         let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
 
         for (request_id, _) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
-            // Be sure is not already running on the semaphore
-            if semaphore_is_running(*request_id) {
-                continue;
-            }
-
             // Check if the request is assigned to the validator by checking if the request_id is in the OpocAssignment storage
             let has_opoc_assignment = OpocAssignment::<T>::contains_key(*request_id, &account_id);
             if !has_opoc_assignment {
@@ -321,12 +316,17 @@ impl<T: Config> Pallet<T> {
                 continue;
             }
 
+            // Be sure is not already running on the semaphore
+            if semaphore_is_running(*request_id) {
+                log::info!("UOMI-ENGINE: Request {:?} is already running on another thread", request_id);
+                continue;
+            }
+
             // Read the expiration_block_number from the OpocAssignment storage
             let opoc_assignement_data = OpocAssignment::<T>::get(*request_id, &account_id);
 
             // Add the request_id and expiration_block_number to the opoc_assignment vector
-            opoc_assignments.push((*request_id, opoc_assignement_data));//TODO LUCA SISTEMARE
-
+            opoc_assignments.push((*request_id, opoc_assignement_data));
         }
 
         // Return zero if no opoc_assignments has been found
