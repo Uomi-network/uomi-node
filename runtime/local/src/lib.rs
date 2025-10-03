@@ -453,7 +453,7 @@ impl pallet_balances::Config for Runtime {
 impl pallet_session::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type ValidatorId = <Self as frame_system::Config>::AccountId;
-    type ValidatorIdOf = pallet_staking::StashOf<Self>;
+    type ValidatorIdOf = sp_runtime::traits::ConvertInto;
     type ShouldEndSession = Babe;
     type NextSessionRotation = Babe;
     type SessionManager = pallet_session::historical::NoteHistoricalRoot<Self, Staking>;
@@ -500,6 +500,7 @@ impl pallet_election_provider_multi_phase::MinerConfig for Runtime {
     type MaxLength = MinerMaxLength;
     type MaxWeight = MinerMaxWeight;
     type Solution = NposSolution16;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
     type MaxVotesPerVoter =
 	<<Self as pallet_election_provider_multi_phase::Config>::DataProvider as ElectionDataProvider>::MaxVotesPerVoter;
     type MaxWinners = MaxActiveValidators;
@@ -589,6 +590,7 @@ impl pallet_election_provider_multi_phase::Config for Runtime {
     type ElectionBounds = ElectionBounds;
     type BenchmarkingConfig = ElectionProviderBenchmarkConfig;
     type WeightInfo = pallet_election_provider_multi_phase::weights::SubstrateWeight<Self>;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
 }
 
 // voter bags
@@ -641,6 +643,7 @@ impl pallet_offences::Config for Runtime {
 impl pallet_session::historical::Config for Runtime {
     type FullIdentification = pallet_staking::Exposure<AccountId, Balance>;
     type FullIdentificationOf = pallet_staking::ExposureOf<Runtime>;
+    type RuntimeEvent = RuntimeEvent;
 }
 
 pub const MINER_MAX_ITERATIONS: u32 = 10;
@@ -684,8 +687,10 @@ impl onchain::Config for OnChainSeqPhragmen {
     >;
     type DataProvider = <Runtime as pallet_election_provider_multi_phase::Config>::DataProvider;
     type WeightInfo = frame_election_provider_support::weights::SubstrateWeight<Runtime>;
-    type MaxWinners = <Runtime as pallet_election_provider_multi_phase::Config>::MaxWinners;
     type Bounds = ElectionBounds;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
+    type MaxWinnersPerPage = MaxActiveValidators;
+    type Sort = ConstBool<true>;
 }
 
 pub struct StakingBenchmarkingConfig;
@@ -752,6 +757,7 @@ impl pallet_staking::Config for Runtime {
     type EventListeners = ();
     type BenchmarkingConfig = StakingBenchmarkingConfig;
     type WeightInfo = pallet_staking::weights::SubstrateWeight<Self>;
+    type MaxValidatorSet = ConstU32<{ u32::MAX }>;
 }
 
 parameter_types! {
@@ -952,7 +958,6 @@ impl pallet_evm::Config for Runtime {
     type WithdrawOrigin = pallet_evm::EnsureAddressTruncated;
     type AddressMapping = UnifiedAccounts;
     type Currency = Balances;
-    type RuntimeEvent = RuntimeEvent;
     type Runner = pallet_evm::runner::stack::Runner<Self>;
     type PrecompilesType = Precompiles;
     type PrecompilesValue = PrecompilesValue;
@@ -977,7 +982,6 @@ parameter_types! {
 pub struct StateRootProvider;
 impl sp_core::Get<H256> for StateRootProvider { fn get() -> H256 { H256::default() } }
 impl pallet_ethereum::Config for Runtime {
-    type RuntimeEvent = RuntimeEvent;
     type StateRoot = StateRootProvider; // TODO restore IntermediateStateRoot
     type PostLogContent = PostBlockAndTxnHashes;
     // Maximum length (in bytes) of revert message to include in Executed event
@@ -1722,7 +1726,7 @@ impl<LocalCall> frame_system::offchain::CreateInherent<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
-	fn create_inherent(call: RuntimeCall) -> UncheckedExtrinsic {
+	fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic {
 		UncheckedExtrinsic::new_bare(call)
 	}
 }
