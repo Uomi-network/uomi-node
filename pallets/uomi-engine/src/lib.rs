@@ -479,21 +479,26 @@ pub mod pallet {
         // The `offchain_worker` function is executed by the offchain worker in the runtime at the beginning of each block.
         #[cfg(feature = "std")]
         fn offchain_worker(_: BlockNumberFor<T>) {
+            log::info!("UOMI-ENGINE: Offchain worker started");
+
             // Check if the current node is a validator, do nothing if it is not.
             let is_validator = sp_io::offchain::is_validator();
             if !is_validator { // Do nothing if the node is not a validator.
+                log::info!("UOMI-ENGINE: Current node is not a validator, skipping offchain worker.");
                 return;
             }
 
             // Find the account id of the current node.
             let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
             if !signer.can_sign() { // Do nothing if the signer cannot sign.
+                log::info!("UOMI-ENGINE: No local account available, skipping offchain worker.");
                 return;
             }
             let public_keys = sp_io::crypto::sr25519_public_keys(crypto::CRYPTO_KEY_TYPE);
             let public_key = match public_keys.get(0) {
                 Some(public_key) => public_key,
                 None => { // Do nothing if the public key is not found.
+                    log::info!("UOMI-ENGINE: No public key found, skipping offchain worker.");
                     return;
                 }
             };

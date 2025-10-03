@@ -200,7 +200,7 @@ impl<T: Config> Pallet<T> {
     // Offchain worker entry point
     #[cfg(feature = "std")]
     pub fn offchain_run(account_id: &T::AccountId) -> DispatchResult {
-        log::info!("UOMI-ENGINE: Offchain worker started");
+        log::info!("UOMI-ENGINE: Offchain worker run started");
 
         // Be sure account is a validator, if not, do nothing
         if !cfg!(test) && !Self::address_is_active_validator(account_id) {
