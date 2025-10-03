@@ -199,8 +199,8 @@ pallet-democracy = { git = "https://github.com/paritytech/polkadot-sdk", branch 
 pallet-treasury = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
 
 # EVM & Ethereum (Unified upgraded stack)
-# Use crates.io evm 0.43.0 so evm, evm-runtime, evm-gasometer share the same evm_core instance.
-evm = { version = "0.43.0", default-features = false }
+# Use crates.io evm 0.43.4 so evm, evm-runtime, evm-gasometer share the same evm_core instance.
+evm = { version = "0.43.4", default-features = false }
 evm-gasometer = { version = "0.43.0", default-features = false }
 evm-runtime = { version = "0.43.0", default-features = false }
 ethereum-types = { version = "0.15", default-features = false }
