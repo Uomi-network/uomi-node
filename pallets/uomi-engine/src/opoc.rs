@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES, BN_HARDFIX_2}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
 // Helper trait imports for accessing staking internals
@@ -1573,12 +1573,9 @@ impl<T: Config> Pallet<T> {
         }
         opoc_timeouts_operations.insert(request_id.clone(), timeouts);
 
-        // remove the accounts restored from the opoc blacklist operations
-        let current_block_number = <frame_system::Pallet<T>>::block_number();
-        if current_block_number >= BN_HARDFIX_2.into() {
-            for account in accounts_restored {
-                Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &account);
-            }
+        // remove the accounts restored from the opoc blacklist operations 
+        for account in accounts_restored {
+            Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &account);
         }
 
         true
