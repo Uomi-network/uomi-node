@@ -153,9 +153,11 @@ pub mod pallet {
         },
         OpocBlacklistAdd {
             account_id: T::AccountId, // The account ID of the validator.
+            nft_id: NftId, // The NFT ID.
         },
         OpocBlacklistRemove {
             account_id: T::AccountId, // The account ID of the validator.
+            nft_id: NftId, // The NFT ID.
         },
         OpocAssignmentAdd {
             request_id: RequestId, // The request ID.
@@ -401,8 +403,10 @@ pub mod pallet {
 
 	// OpocBlacklist storage is used to store the blacklist of validators
 	#[pallet::storage]
-	pub type OpocBlacklist<T: Config> = StorageMap<
+	pub type OpocBlacklist<T: Config> = StorageDoubleMap<
 		_,
+        Blake2_128Concat,
+        NftId, // nft_id
 		Blake2_128Concat,
 		T::AccountId, // account_id
 		bool, // is_blacklisted
