@@ -1397,6 +1397,8 @@ impl pallet_ipfs::Config for Runtime {
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
     // TSS interface implementation
     type TssInterface = Tss;
+    /// Uomi Engine interface implementation
+    type UomiEngineInterface = UomiEngine;
 }
 
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime

@@ -266,7 +266,7 @@ impl pallet_ipfs::Config for Test {
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
     type TssInterface = crate::Pallet<Test>;
-    type UomiEngineInterface = crate::Pallet<Test>;
+    type UomiEngineInterface = Uomi;
 }
 
 impl pallet_babe::Config for Test {

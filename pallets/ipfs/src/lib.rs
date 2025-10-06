@@ -44,7 +44,7 @@ use frame_support::{
 };
 use sp_runtime::traits::Convert;
 use uomi_primitives::Balance;
-use uomi_primitives::TssInterface;
+use uomi_primitives::{TssInterface, UomiEngineInterface};
 use sp_runtime::traits::AtLeast32BitUnsigned;
 use frame_system::{
     ensure_none,
@@ -179,6 +179,9 @@ pub mod pallet {
         
         /// TSS interface for wallet creation
         type TssInterface: uomi_primitives::TssInterface<Self>;
+
+        /// UOMI Engine interface for clearing blacklists
+        type UomiEngineInterface: uomi_primitives::UomiEngineInterface<Self>;
     }
 
     #[pallet::event]
@@ -358,6 +361,9 @@ pub mod pallet {
                     });
                     log::info!("IPFS: Last reference removed, CID will expire");
                 }
+
+                T::UomiEngineInterface::clear_blacklist_for_nft(nft_id)?;
+
             } else {
                 // Wallet creation logic...
                 log::info!("IPFS: Agent not pinned, creating new wallet through TSS Pallet");

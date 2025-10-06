@@ -535,12 +535,13 @@ pub mod pallet {
                 },
             };
 
-            // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
-            let divisor = U256::from(1000);
-            if current_block_number % divisor == U256::zero() {
-                log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
-                OpocBlacklist::<T>::remove_all(None);
-            }
+            // // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
+            // SUSPENDED FOR NOW.
+            // let divisor = U256::from(1000);
+            // if current_block_number % divisor == U256::zero() {
+            //     log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
+            //     OpocBlacklist::<T>::remove_all(None);
+            // }
 
             // Reset validators' current era points at the end of each era to avoid overflow.
             Self::reset_validators_current_era_points_for_current_era().unwrap_or_else(|e| {
@@ -1051,5 +1052,13 @@ impl<T: Config> Pallet<T> {
         } else {
             false
         }
+    }
+}
+
+
+impl<T: Config> uomi_primitives::UomiEngineInterface<T> for Pallet<T> {
+    fn clear_blacklist_for_nft(nft_id: U256) -> DispatchResult {
+        OpocBlacklist::<T>::remove_prefix(nft_id, None);
+        Ok(())
     }
 }

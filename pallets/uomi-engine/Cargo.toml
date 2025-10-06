@@ -33,6 +33,7 @@ sp-inherents = { workspace = true }
 pallet-authorship = { workspace = true }
 wasmtime = { version = "23.0.1", optional = true }
 miniserde = { version = "0.1.42", default-features = false }
+uomi-primitives = { workspace = true }
 
 # frame deps
 frame-benchmarking = { workspace = true }

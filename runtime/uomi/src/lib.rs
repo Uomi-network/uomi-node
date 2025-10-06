@@ -1344,6 +1344,8 @@ impl pallet_ipfs::Config for Runtime {
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
     // TSS interface implementation
     type TssInterface = Tss;
+    /// UomiEngine interface implementation
+    type UomiEngineInterface = UomiEngine;
 }
 
 impl pallet_era_payout::Config for Runtime {
