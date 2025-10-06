@@ -1740,7 +1740,7 @@ pub type Executive = frame_executive::Executive<
 
 // Add pallet_tss storage migrations here. Each element must implement OnRuntimeUpgrade.
 pub type Migrations = (
-    pallet_uomi_engine::migrations::v1::Migration<Runtime>,
+    pallet_uomi_engine::migrations::v2::Migration<Runtime>,
 );
 //     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
 // );
