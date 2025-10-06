@@ -17,6 +17,7 @@ mod opoc;
 mod aimodelscalc;
 pub mod ipfs;
 pub mod crypto;
+pub mod migrations;
 
 pub use pallet::*; // Re-export pallet items so that they can be accessed from the crate namespace.
 pub mod weights;
@@ -112,6 +113,7 @@ pub mod pallet {
     
     // Pallet
     #[pallet::pallet]
+    #[pallet::storage_version(migrations::STORAGE_VERSION)]
     pub struct Pallet<T>(PhantomData<T>);
 
     // Config
@@ -476,6 +478,7 @@ pub mod pallet {
     // Hooks are used to execute code in response to certain events.
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        
         #[cfg(feature = "try-runtime")]
         fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
             Ok(())
