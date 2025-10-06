@@ -59,6 +59,19 @@ tss = { workspace = true }
 pallet-uomi-engine = { workspace = true }
 pallet-tss = { workspace = true }
 
+# Example / tooling crates (used only for examples like deploy_counter). These are regular
+# dependencies (not dev-dependencies) because examples are built with the crate. They are
+# kept non-default by not being optional features elsewhere.
+# Enable solc feature for contract compilation in examples.
+ethers = { workspace = true, features = ["solc"] }
+eyre = { version = "0.6" }
+tempfile = { version = "3" }
+semver = "1"
+rlp = { workspace = true }
+sha3 = { workspace = true }
+hex = { workspace = true }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+
 # client dependencies
 sc-basic-authorship = { workspace = true }
 sc-chain-spec = { workspace = true }
@@ -205,3 +218,7 @@ evm-tracing = [
 	# Removed: moonbeam-rpc-txpool
 ]
 manual-seal = ["sc-consensus-manual-seal"]
+
+# Enable example tooling set (ethers + eyre + tempfile)
+# (Deprecated) example-tooling feature retained for backward compatibility (no-op now)
+example-tooling = []

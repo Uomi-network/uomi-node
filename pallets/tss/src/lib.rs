@@ -1,5 +1,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
+// Alias sp_std as std for macro code paths that unconditionally reference `std`.
+#[cfg(not(feature = "std"))]
+extern crate sp_std as std;
 use sp_runtime::KeyTypeId;
 use alloc::string::String; // for no_std String
 
@@ -22,6 +25,8 @@ mod validators;
 use core::fmt::Debug;
 use frame_support::pallet_prelude::*;
 use sp_std::prelude::*;
+// Bring in common std replacements for runtime API macro (avoids implicit std:: paths)
+use sp_std::{vec::Vec as SpVec, result::Result as SpResult};
 pub mod types;
 use frame_support::BoundedVec;
 

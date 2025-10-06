@@ -93,6 +93,62 @@ Defining _features_ in the root `Cargo.toml` is additive with the features defin
 * [Whitepaper](https://github.com/Uomi-network/uomi-whitepaper)
 * [Website](https://uomi.network)
 
+## EVM / Frontier Smoke Tests
+
+After starting a local development node (`--dev`), you can quickly verify EVM functionality and the Frontier upgrade:
+
+1. Deploy and interact with a simple Solidity counter:
+    ```bash
+    cargo run --example deploy_counter
+    ```
+    Expected output (abridged):
+    - "Deploying Counter..."
+    - "Deployed at: 0x..."
+    - "inc tx included in block ..."
+    - "Success: Counter incremented."
+
+2. (Experimental) Submit a raw EIP-7702 transaction (typed 0x04):
+    ```bash
+    cargo run --example eip7702_send
+    # customize the ephemeral authorization code + RPC endpoint
+    AUTH_CODE=0x6001600055 RPC_HTTP=http://127.0.0.1:9933 cargo run --example eip7702_send
+    # let the helper auto-raise fees to satisfy the current base fee
+    AUTO_ADJUST_GAS=1 cargo run --example eip7702_send
+    # provide explicit EIP-1559 style fee caps (values in wei)
+    MAX_PRIORITY_FEE=1500000000 MAX_FEE=60000000000 cargo run --example eip7702_send
+    ```
+    Layout encoded (type byte 0x04 + RLP list):
+    [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, authorizationBytes, accessList] then signature fields [yParity, r, s].
+
+    Environment variables (all optional):
+    - RPC_HTTP: HTTP RPC endpoint (default http://127.0.0.1:9933)
+    - AUTH_CODE: Hex bytecode injected ephemerally for this tx (default 0x6001600055 which sets storage slot 0 to 1)
+    - NONCE: Override the sender account nonce (otherwise fetched via eth_getTransactionCount)
+    - GAS_LIMIT: Hex or decimal gas limit (default 0x5208 = 21000)
+    - MAX_PRIORITY_FEE: Tip (wei). If unset we default to a small constant (1 gwei unless auto-adjust bumps it)
+    - MAX_FEE: Max fee per gas cap (wei). If unset we start with base heuristic (2 * priority or small default)
+    - AUTO_ADJUST_GAS=1: Fetch latest block baseFee and, if (baseFee + priority) > MAX_FEE (or MAX_FEE unset), raise MAX_FEE to (baseFee * 2 + priority) so the tx isn't rejected with "gas price less than block base fee".
+    - SILENT=1: Reduce logging noise (if implemented later; currently ignored)
+
+    Notes:
+    - authorizationBytes is a single ephemeral code blob (NOT a list of delegates)
+    - yParity is stored as 0/1 (derived from signature.v - 27)
+    - A rejection "gas price less than block base fee" means structural decoding succeeded; raise MAX_FEE or set AUTO_ADJUST_GAS=1
+    - If you see "decode transaction failed" verify your Frontier version still matches this field ordering and TxType=0x04; adjust if upstream changes.
+
+3. Inspect the deployed contract code:
+    ```bash
+    curl -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"eth_getCode","params":["<COUNTER_ADDRESS>", "latest"]}' \
+      http://127.0.0.144
+    ```
+
+4. (Optional) Verify storage / call path:
+    Use `eth_call` with the ABI selector for `value()` to confirm the increment.
+
+If you modify precompiles or upgrade Frontier again, re-run these examples to ensure no regressions in basic deployment / execution or in 7702 acceptance.
+
+
 ## Development
 
 Running node locally for development purposes is simple. After the node is compiled (see above), run the following command:

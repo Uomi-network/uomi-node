@@ -150,6 +150,7 @@ std = [
 	"pallet-membership/std",
 	"pallet-balances/std",
 	"pallet-contracts/std",
+	"pallet-im-online/std",
 	"pallet-chain-extension-unified-accounts/std",
 	"pallet-base-fee/std",
 	"pallet-ethereum/std",
