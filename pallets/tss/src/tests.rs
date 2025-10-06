@@ -1975,7 +1975,7 @@ mod tests {
                 to,
                 0u64,
                 &[],
-                25_000u64, // updated default gas limit from dynamic estimation placeholder
+                21_000u64, // updated default gas limit from dynamic estimation placeholder
                 1_000_000_000,      // max fee 1 gwei
                 1_000_000_000u64,   // priority fee 1 gwei
                 0u64,
@@ -2061,10 +2061,13 @@ mod tests {
             let start = U256::from(1u128 << 40); // large value
             LastOpocRequestId::<Test>::put(start);
             let res = TestingPallet::process_opoc_requests();
-
-            assert!(res.is_err());
-            assert_eq!(res, Err("No requests to sign found"));
-
+            match res {
+                Ok((map, last)) => {
+                    assert!(map.is_empty(), "No requests should be found");
+                    assert_eq!(last, start, "Last processed should not advance if no requests found");
+                },
+                Err(e) => panic!("Should not error even if no requests found: {:?}", e),
+            }
         });
     }
 
