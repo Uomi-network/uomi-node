@@ -859,7 +859,7 @@ fn test_on_finalize_opoc_level_0_no_timeout() {
         let nodes_works_number = NodesWorks::<Test>::get(validators[0].clone(), request_id);
         assert_eq!(nodes_works_number, true);
         // The validator should not be blacklisted
-        let opoc_blacklist = OpocBlacklist::<Test>::get(validators[0].clone());
+        let opoc_blacklist = OpocBlacklist::<Test>::get(U256::from(1), validators[0].clone());
         assert_eq!(opoc_blacklist, false);
         // The validator should not have timeouts
         let nodes_timeouts = OpocTimeouts::<Test>::get(request_id, validators[0].clone());
@@ -887,7 +887,7 @@ fn test_on_finalize_opoc_level_0_timeout() {
         Inputs::<Test>::insert(request_id, (
             U256::zero(),
             H160::repeat_byte(0xAA),
-            U256::zero(),
+            U256::from(10),
             U256::from(5), // nft_required_consensus
             U256::from(25), // nft_execution_max_time
             empty_cid.clone(),
@@ -916,7 +916,7 @@ fn test_on_finalize_opoc_level_0_timeout() {
         let nodes_works_number = NodesWorks::<Test>::iter().collect::<Vec<_>>();
         assert_eq!(nodes_works_number.len(), 1);
         // The validator should be blacklisted
-        let opoc_blacklist = OpocBlacklist::<Test>::get(validators[0].clone());
+        let opoc_blacklist = OpocBlacklist::<Test>::get(U256::from(10), validators[0].clone());
         assert_eq!(opoc_blacklist, true);
         // The validator should have timeouts
         let nodes_timeouts = OpocTimeouts::<Test>::get(request_id, validators[0].clone());
@@ -1212,7 +1212,7 @@ fn test_on_finalize_opoc_level_1_some_timeouts() { // Case where during the exec
         Inputs::<Test>::insert(request_id, (
                 U256::zero(),
                 H160::repeat_byte(0xAA),
-                U256::zero(),
+                U256::from(19),
                 nft_required_consensus,
                 U256::from(25), // nft_execution_max_time
                 empty_cid.clone(),
@@ -1270,7 +1270,7 @@ fn test_on_finalize_opoc_level_1_some_timeouts() { // Case where during the exec
         // this means the the validator with the updated timeout is a new validator chosen to retry the execution that was in timeout
         assert_eq!(opoc_assignment_with_new_expiration, 1);
 
-        let opoc_blacklist = OpocBlacklist::<Test>::get(validators[3].clone());
+        let opoc_blacklist = OpocBlacklist::<Test>::get(U256::from(19), validators[3].clone());
         assert_eq!(opoc_blacklist, true);
         // The validator should have timeouts
         let nodes_timeouts = OpocTimeouts::<Test>::get(request_id, validators[3].clone());
@@ -1678,7 +1678,7 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
         let num_validators = 100;
         let _validators = create_validators(num_validators, stake);
 
-        let opoc_blacklist_operations = BTreeMap::<AccountId, bool>::new();
+        let opoc_blacklist_operations = BTreeMap::<(AccountId, U256), bool>::new();
         let nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
 
         // Request 100 validators, all available
@@ -1687,7 +1687,8 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
             &nodes_works_operations,
             U256::from(100),
             false,
-            vec![]
+            vec![],
+            &U256::from(1)
         ).unwrap();
         assert_eq!(validators.len(), 100);
 
@@ -1697,7 +1698,8 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
             &nodes_works_operations,
             U256::from(50),
             false,
-            vec![]
+            vec![],
+            &U256::from(1)
         ).unwrap();
         assert_eq!(validators.len(), 50);
 
@@ -1707,7 +1709,8 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
             &nodes_works_operations,
             U256::from(1),
             false,
-            vec![]
+            vec![],
+            &U256::from(1)
         ).unwrap();
         assert_eq!(validators.len(), 1);
 
@@ -1717,7 +1720,8 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
             &nodes_works_operations,
             U256::from(101),
             false,
-            vec![]
+            vec![],
+            &U256::from(1)
         );
         assert_eq!(validators.is_err(), true);
 
@@ -1728,7 +1732,8 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
             &nodes_works_operations,
             U256::from(50),
             false,
-            excluded_validators.clone()
+            excluded_validators.clone(),
+            &U256::from(1)
         ).unwrap();
         assert_eq!(validators.len(), 50);
         // be sure selected validators are not in the excluded_validators
@@ -1743,7 +1748,8 @@ fn test_opoc_assignment_get_random_validators_on_multiple_cases() {
             &nodes_works_operations,
             U256::from(50),
             false,
-            excluded_validators
+            excluded_validators,
+            &U256::from(1)
         );
         assert_eq!(validators.is_err(), true);
     });
