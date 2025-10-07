@@ -252,26 +252,25 @@ pub fn start_node(
     #[cfg(feature = "evm-tracing")] evm_tracing_config: crate::evm_tracing_types::EvmTracingConfig,
 ) -> Result<TaskManager, ServiceError> {
 
-    // Load the AI service status by calling localhost:8888/status and get the json response
-    log::info!("🤖 Checking AI service status...");
-    let ai_status = match reqwest::blocking::get("http://localhost:8888/status") {
-        Ok(response) => {
-            match response.json::<serde_json::Value>() {
-                Ok(json) => json,
-                Err(e) => {
-                    log::error!("🚨 Failed to parse AI service status response: {}", e);
-                    std::process::exit(1);
-                }
-            }
-        },
-        Err(e) => {
-            log::error!("🚨 Failed to get AI service status: {}", e);
-            std::process::exit(1);
-        }
-    };
-
     // we skip this check altogether if the node is not an authority:
     if config.role.is_authority() {
+        // Load the AI service status by calling localhost:8888/status and get the json response
+        log::info!("🤖 Checking AI service status...");
+        let ai_status = match reqwest::blocking::get("http://localhost:8888/status") {
+            Ok(response) => {
+                match response.json::<serde_json::Value>() {
+                    Ok(json) => json,
+                    Err(e) => {
+                        log::error!("🚨 Failed to parse AI service status response: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            },
+            Err(e) => {
+                log::error!("🚨 Failed to get AI service status: {}", e);
+                std::process::exit(1);
+            }
+        };
         // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
         let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
         if service_version != pallet_uomi_engine::consts::PALLET_VERSION {

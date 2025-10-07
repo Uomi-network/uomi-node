@@ -268,34 +268,37 @@ pub fn start_node(
 
     // Load the AI service status by calling localhost:8888/status and get the json response
     log::info!("🤖 Checking AI service status...");
-    let ai_status = match reqwest::blocking::get("http://localhost:8888/status") {
-        Ok(response) => {
-            match response.json::<serde_json::Value>() {
-                Ok(json) => json,
-                Err(e) => {
-                    log::error!("🚨 Failed to parse AI service status response: {}", e);
-                    serde_json::json!({
-                        "UOMI_ENGINE_PALLET_VERSION": 0,
-                        "details": {
-                            "system_valid": false,
-                            "cuda_available": false
-                        }
-                    })
-                }
-            }
-        },
-        Err(e) => {
-            log::error!("🚨 Failed to get AI service status: {}", e);
-            serde_json::json!({
-                "UOMI_ENGINE_PALLET_VERSION": 0,
-                "details": {
-                    "system_valid": false,
-                    "cuda_available": false
-                }
-            })
-        }
-    };
+    
     if config.role.is_authority() {
+
+        let ai_status = match reqwest::blocking::get("http://localhost:8888/status") {
+            Ok(response) => {
+                match response.json::<serde_json::Value>() {
+                    Ok(json) => json,
+                    Err(e) => {
+                        log::error!("🚨 Failed to parse AI service status response: {}", e);
+                        serde_json::json!({
+                            "UOMI_ENGINE_PALLET_VERSION": 0,
+                            "details": {
+                                "system_valid": false,
+                                "cuda_available": false
+                            }
+                        })
+                    }
+                }
+            },
+            Err(e) => {
+                log::error!("🚨 Failed to get AI service status: {}", e);
+                serde_json::json!({
+                    "UOMI_ENGINE_PALLET_VERSION": 0,
+                    "details": {
+                        "system_valid": false,
+                        "cuda_available": false
+                    }
+                })
+            }
+        };
+        
         // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
         let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
         if service_version != pallet_uomi_engine::consts::PALLET_VERSION {
