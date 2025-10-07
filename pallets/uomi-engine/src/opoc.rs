@@ -1035,13 +1035,13 @@ impl<T: Config> Pallet<T> {
         // set nodes_works_operations
         for (account_id, requests) in nodes_works_operations.iter() {
             for (request_id, is_assigned) in requests.iter() {
-                if *is_assigned {
+                if *is_assigned && !NodesWorks::<T>::contains_key(account_id, request_id) {
                     NodesWorks::<T>::insert(account_id, request_id, is_assigned);
                     Self::deposit_event(Event::NodesWorksAdd {
                         account_id: account_id.clone(),
                         request_id: request_id.clone(),
                     }); //aggiunto nuovo
-                } else {
+                } else if !*is_assigned && NodesWorks::<T>::contains_key(account_id, request_id) {
                     NodesWorks::<T>::remove(account_id, request_id);
                     Self::deposit_event(Event::NodesWorksRemove {
                         account_id: account_id.clone(),
@@ -1054,13 +1054,13 @@ impl<T: Config> Pallet<T> {
         // set opoc_timeouts_operations
         for (request_id, requests) in opoc_timeouts_operations.iter() {
             for (account_id, is_assigned) in requests.iter() {
-                if *is_assigned {
+                if *is_assigned && !OpocTimeouts::<T>::contains_key(request_id, account_id) {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
                     Self::deposit_event(Event::OpocTimeoutsAdd {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
                     }); //aggiunto nuovo
-                } else {
+                } else if !*is_assigned && OpocTimeouts::<T>::contains_key(request_id, account_id) {
                     OpocTimeouts::<T>::remove(request_id, account_id);
                     Self::deposit_event(Event::OpocTimeoutsRemove {
                         request_id: request_id.clone(),
@@ -1073,13 +1073,13 @@ impl<T: Config> Pallet<T> {
         // set opoc_errors_operations
         for (request_id, requests) in opoc_errors_operations.iter() {
             for (account_id, is_assigned) in requests.iter() {
-                if *is_assigned {
+                if *is_assigned && !OpocErrors::<T>::contains_key(request_id, account_id) {
                     OpocErrors::<T>::insert(request_id, account_id, is_assigned);
                     Self::deposit_event(Event::OpocErrorsAdd {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
                     }); //aggiunto nuovo
-                } else {
+                } else if !*is_assigned && OpocErrors::<T>::contains_key(request_id, account_id) {
                     OpocErrors::<T>::remove(request_id, account_id);
                     Self::deposit_event(Event::OpocErrorsRemove {
                         request_id: request_id.clone(),
