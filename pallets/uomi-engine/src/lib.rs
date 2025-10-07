@@ -47,7 +47,7 @@ use frame_support::{
 };
 use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
-    ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
+    ensure_none, ensure_signed, ensure_root, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
 };
 use pallet_ipfs::{
     self,
@@ -541,13 +541,12 @@ pub mod pallet {
                 },
             };
 
-            // // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
-            // SUSPENDED FOR NOW.
-            // let divisor = U256::from(1000);
-            // if current_block_number % divisor == U256::zero() {
-            //     log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
-            //     OpocBlacklist::<T>::remove_all(None);
-            // }
+            // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
+            let divisor = U256::from(1000);
+            if current_block_number % divisor == U256::zero() {
+                log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
+                OpocBlacklist::<T>::remove_all(None);
+            }
 
             // Remove from the chain the Inputs that are older (block_number + nft_execution_max_time < current_block) and are not assigned to any validator.
             let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
@@ -880,6 +879,17 @@ pub mod pallet {
             let reporter = ensure_signed(origin)?;
             let offence_type = match offence_type_raw { 0 => EngineOffenceType::OutputTimeout, 1 => EngineOffenceType::InvalidOutput, 2 => EngineOffenceType::RepeatedMisbehavior, _ => return Err(Error::<T>::SomethingWentWrong.into()) };
             Self::insert_pending_offence(request_id, reporter, offence_type, offenders)
+        }
+
+        #[pallet::call_index(5)]
+        #[pallet::weight(0)]
+        pub fn force_clear_all_opoc_blacklist(origin: OriginFor<T>) -> DispatchResult {
+            log::info!("UOMI-ENGINE: Forcing clear of OpocBlacklist");
+            let _ = ensure_root(origin)?;
+
+            OpocBlacklist::<T>::remove_all(None);
+
+            Ok(())
         }
     }
 
