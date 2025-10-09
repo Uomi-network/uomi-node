@@ -154,6 +154,7 @@ use crate::{
 
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiRequestWithProof {
+    request_id: String,
     model: String,
     input: String,
     proof: String,
@@ -161,6 +162,7 @@ struct CallAiRequestWithProof {
 
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiRequestWithoutProof {
+    request_id: String,
     model: String,
     input: String,
 }
@@ -598,6 +600,8 @@ impl<T: Config> Pallet<T> {
 
     #[cfg(feature = "std")]
     pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId, opoc_level:OpocLevel) -> Result<Vec<u8>, DispatchError> {
+        let request_id_as_string = format!("{:?}", request_id);
+            
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
             let output = input.iter().rev().cloned().collect();
             return Ok(output);
@@ -631,6 +635,7 @@ impl<T: Config> Pallet<T> {
 
         if opoc_level == OpocLevel::Level0 { 
             let body_data = CallAiRequestWithoutProof {
+                request_id: request_id_as_string,
                 model: model.clone(),
                 input: input_data.clone(),
             };
@@ -698,20 +703,18 @@ impl<T: Config> Pallet<T> {
                 }
             }
 
-            let body = if proof.is_empty() {
-                let body_data = CallAiRequestWithoutProof {
-                    model: model.clone(),
-                    input: input_data.clone(),
-                };
-                miniserde::json::to_string(&body_data)
-            } else {
-                let body_data = CallAiRequestWithProof {
-                    model: model.clone(),
-                    input: input_data.clone(),
-                    proof: String::from_utf8(proof.to_vec()).unwrap_or_default(),
-                };
-                miniserde::json::to_string(&body_data)
+            if proof.is_empty() {
+                log::error!("UOMI-ENGINE: No proof found for request_id {:?} and inference_index {}", request_id, counter);
+                return Err(DispatchError::Other("No proof found for the requested inference"));
+            }
+
+            let body_data = CallAiRequestWithProof {
+                request_id: request_id_as_string,
+                model: model.clone(),
+                input: input_data.clone(),
+                proof: String::from_utf8(proof.to_vec()).unwrap_or_default(),
             };
+            let body = miniserde::json::to_string(&body_data);
 
             let output = Self::offchain_worker_call_ai_send_request(body)?;
             let output_string = String::from_utf8(output.to_vec()).map_err(|_| {
