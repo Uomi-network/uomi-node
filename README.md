@@ -43,6 +43,29 @@ $ cargo build --release
 # show list of available commands
 $ ./target/release/uomi --help
 ```
+## Install via Script (Quick Setup)
+
+For users who want a one-command installation, a simplified installer script is available:
+
+```bash
+git clone --recurse-submodules https://github.com/Uomi-network/uomi-node.git
+cd uomi-node
+bash scripts/install-simple.sh
+```
+
+## After installation:
+```bash
+which uomi
+uomi --help
+sudo systemctl status uomi
+```
+## Troubleshooting
+protoc not found
+
+Install protobuf:
+```bash
+sudo apt-get install protobuf-compiler libprotobuf-dev
+```
 
 ## Running a node
 
