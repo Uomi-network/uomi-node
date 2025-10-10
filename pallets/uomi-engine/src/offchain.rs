@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 // Semaphore implementation to limit the executions of requests in parallel
 const SEMAPHORE_ARRAY_REPEAT_VALUE: SemaphoreAtomicSlot = SemaphoreAtomicSlot::new();
-const SEMAPHORE_MAX_SLOTS: usize = 2; // Maximum number of concurrent requests
+const SEMAPHORE_MAX_SLOTS: usize = 4; // Maximum number of concurrent requests
 static SEMAPHORE_SLOTS: [SemaphoreAtomicSlot; SEMAPHORE_MAX_SLOTS] = [
     SEMAPHORE_ARRAY_REPEAT_VALUE; SEMAPHORE_MAX_SLOTS
 ];
