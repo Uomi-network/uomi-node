@@ -11676,6 +11676,7 @@ dependencies = [
  "hex",
  "log",
  "miniserde",
+ "pallet-authorship",
  "pallet-babe",
  "pallet-balances",
  "pallet-ipfs",

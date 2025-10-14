@@ -27,9 +27,8 @@ wasmi = { version = "0.35", default-features = false }
 pallet-staking = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 uomi-primitives = { workspace = true }
-## NOTE: Fixed incorrect key `feature` -> `features` and rely on workspace definition (default-features = false).
-## We enable std for sp-api via the feature list below ("sp-api/std").
-sp-api = { workspace = true }
+pallet-authorship = { workspace = true }
+sp-api = { workspace = true, feature = ["std"]}
 pallet-uomi-engine = { workspace = true }
 pallet-ipfs = { workspace = true }
 pallet-babe = { workspace = true }
@@ -86,7 +85,7 @@ std = [
     "pallet-uomi-engine/std",
     "sp-application-crypto/std",
     "sp-runtime-interface/std",
-    "sp-api/std",
+    "pallet-authorship/std",
 ]
 runtime-benchmarks = [
     "frame-benchmarking/runtime-benchmarks",

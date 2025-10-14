@@ -137,6 +137,12 @@ impl uomi_primitives::TssInterface<Test> for MockTssInterface {
     }
 }
 
+impl uomi_primitives::UomiEngineInterface<Test> for MockTssInterface {
+    fn clear_blacklist_for_nft(nft_id: sp_core::U256) -> frame_support::pallet_prelude::DispatchResult {
+        Ok(())
+    }
+}
+
 impl crate::Config for Test {
     type RuntimeEvent = RuntimeEvent;
 
@@ -146,6 +152,7 @@ impl crate::Config for Test {
     type BlockNumber = BlockNumber;
     type TemporaryPinningCost = IpfsPinningCost;
     type TssInterface = MockTssInterface;
+    type UomiEngineInterface = MockTssInterface;
 }
 
 // SIGNING TYPES

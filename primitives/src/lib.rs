@@ -126,3 +126,11 @@ pub trait TssInterface<T: frame_system::Config> {
     /// Get wallet address for an agent
     fn get_agent_wallet_address(nft_id: sp_core::U256) -> Option<sp_core::H160>;
 }
+
+
+/// Trait for UOMI Engine functionality
+/// This allows other pallets to interact with UOMI Engine without direct dependencies
+pub trait UomiEngineInterface<T: frame_system::Config> {
+    /// Clear all blacklists for a given NFT
+    fn clear_blacklist_for_nft(nft_id: sp_core::U256) -> frame_support::pallet_prelude::DispatchResult;
+}

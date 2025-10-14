@@ -83,6 +83,7 @@ construct_runtime!(
         Session: pallet_session,
         Balances: pallet_balances,
         Timestamp: pallet_timestamp,
+        Babe: pallet_babe,
         Ipfs: pallet_ipfs,
         Uomi: pallet_uomi_engine,
     Offences: pallet_offences,
@@ -165,6 +166,12 @@ impl SignatureVerification<PublicKey> for MockVerifier {
 
 }
 
+impl pallet_authorship::Config for Test {
+    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
+    type EventHandler = ();
+}
+
+
 impl crate::pallet::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type MaxNumberOfShares = MaxNumberOfShares;
@@ -203,6 +210,7 @@ impl pallet_uomi_engine::Config for Test {
     type IpfsPallet = IpfsWrapper;
     type InherentDataType = ();
     type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
+    type OffenceReporter = TestOffenceReporter;
 }
 
 pub struct IpfsWrapper;
@@ -250,6 +258,7 @@ impl pallet_ipfs::Config for Test {
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
     type TssInterface = crate::Pallet<Test>;
+    type UomiEngineInterface = Uomi;
 }
 
 impl pallet_babe::Config for Test {

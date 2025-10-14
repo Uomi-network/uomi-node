@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, NftId, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
 };
 
 // Helper trait imports for accessing staking internals
@@ -31,7 +31,7 @@ impl<T: Config> Pallet<T> {
     // OPoC entry point
     pub fn opoc_run(current_block: BlockNumber) -> Result<
         (
-            BTreeMap<T::AccountId, bool>, // opoc_blacklist_operations
+            BTreeMap<(T::AccountId, NftId), bool>, // opoc_blacklist_operations
             BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, // opoc_assignment_operations
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
             BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
@@ -40,7 +40,7 @@ impl<T: Config> Pallet<T> {
         ),
         DispatchError
     > {
-        let mut opoc_blacklist_operations = BTreeMap::<T::AccountId, bool>::new();
+        let mut opoc_blacklist_operations = BTreeMap::<(T::AccountId, NftId), bool>::new();
         let mut opoc_assignment_operations = BTreeMap::<
             (RequestId, T::AccountId),
             (BlockNumber, OpocLevel)
@@ -145,7 +145,8 @@ impl<T: Config> Pallet<T> {
                             OpocLevel::Level0,
                             1,
                             vec![],
-                            true
+                            true,
+                            &nft_id
                         )
                     {
                         Err(error) => {
@@ -179,6 +180,7 @@ impl<T: Config> Pallet<T> {
                                 &mut opoc_timeouts_operations,
                                 &mut nodes_works_operations,
                                 &request_id,
+                                &nft_id,
                                 &validator
                             )
                         {
@@ -212,7 +214,8 @@ impl<T: Config> Pallet<T> {
                                 OpocLevel::Level0,
                                 1,
                                 validators_to_exclude,
-                                true
+                                true,
+                                &nft_id
                             )
                         {
                             Err(error) => {
@@ -243,7 +246,8 @@ impl<T: Config> Pallet<T> {
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
                                 &mut opoc_blacklist_operations,
-                                &request_id
+                                &request_id,
+                                &nft_id
                             );
 
                             // Deassign the request from the validator per completion
@@ -293,6 +297,7 @@ impl<T: Config> Pallet<T> {
                                     &mut opoc_timeouts_operations,
                                     &mut nodes_works_operations,
                                     &request_id,
+                                    &nft_id,
                                     &validator
                                 )
                             {
@@ -324,7 +329,8 @@ impl<T: Config> Pallet<T> {
                                     OpocLevel::Level0,
                                     1,
                                     validators_to_exclude,
-                                    true
+                                    true,
+                                    &nft_id
                                 )
                             {
                                 Err(error) => {
@@ -377,7 +383,8 @@ impl<T: Config> Pallet<T> {
                                 OpocLevel::Level1,
                                 (opoc_assignments_of_level_1 as u32) - 1,
                                 validators_to_exclude,
-                                false
+                                false,
+                                &nft_id
                             )
                         {
                             Err(error) => {
@@ -427,6 +434,7 @@ impl<T: Config> Pallet<T> {
                                     &mut opoc_timeouts_operations,
                                     &mut nodes_works_operations,
                                     &request_id,
+                                    &nft_id,
                                     &validator
                                 )
                             {
@@ -461,7 +469,8 @@ impl<T: Config> Pallet<T> {
                                 OpocLevel::Level1,
                                 validators_in_timeout.len() as u32,
                                 validators_to_exclude,
-                                false
+                                false,
+                                &nft_id
                             )
                         {
                             Err(error) => {
@@ -498,7 +507,8 @@ impl<T: Config> Pallet<T> {
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
                                 &mut opoc_blacklist_operations,
-                                &request_id
+                                &request_id,
+                                &nft_id
                             );
 
                             // Deassign the request from all validators per completion
@@ -551,6 +561,7 @@ impl<T: Config> Pallet<T> {
                                         &mut opoc_timeouts_operations,
                                         &mut nodes_works_operations,
                                         &request_id,
+                                        &nft_id,
                                         &validator
                                     )
                                 {
@@ -586,7 +597,8 @@ impl<T: Config> Pallet<T> {
                                     OpocLevel::Level1,
                                     validators_with_empty_output.len() as u32,
                                     validators_to_exclude,
-                                    false
+                                    false,
+                                    &nft_id
                                 )
                             {
                                 Err(error) => {
@@ -680,7 +692,8 @@ impl<T: Config> Pallet<T> {
                                 OpocLevel::Level2,
                                 number_of_validators,
                                 validators_to_exclude,
-                                false
+                                false,
+                                &nft_id
                             )
                         {
                             Err(error) => {
@@ -713,6 +726,7 @@ impl<T: Config> Pallet<T> {
                                     &mut opoc_timeouts_operations,
                                     &mut nodes_works_operations,
                                     &request_id,
+                                    &nft_id,
                                     &validator
                                 )
                             {
@@ -740,6 +754,7 @@ impl<T: Config> Pallet<T> {
                                     &mut opoc_timeouts_operations,
                                     &mut nodes_works_operations,
                                     &request_id,
+                                    &nft_id,
                                     &validator
                                 )
                             {
@@ -779,7 +794,8 @@ impl<T: Config> Pallet<T> {
                                     &mut opoc_errors_operations,
                                     &mut nodes_works_operations,
                                     &request_id,
-                                    &validator
+                                    &validator,
+                                    &nft_id
                                 )
                             {
                                 Err(error) => {
@@ -912,7 +928,7 @@ impl<T: Config> Pallet<T> {
     }
 
     pub fn opoc_assignment(
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
         opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<U256, bool>>,
         request_id: &RequestId,
@@ -920,7 +936,8 @@ impl<T: Config> Pallet<T> {
         opoc_level: OpocLevel,
         validators_amount: u32,
         validators_to_exclude: Vec<T::AccountId>,
-        first_free: bool
+        first_free: bool,
+        nft_id: &NftId
     ) -> Result<(), DispatchError> {
         let random_validators = match
             Self::opoc_assignment_get_random_validators(
@@ -928,7 +945,8 @@ impl<T: Config> Pallet<T> {
                 nodes_works_operations,
                 U256::from(validators_amount),
                 first_free,
-                validators_to_exclude
+                validators_to_exclude,
+                &nft_id
             )
         {
             Ok(validators) => validators,
@@ -938,16 +956,6 @@ impl<T: Config> Pallet<T> {
         };
 
         for validator in random_validators {
-            let is_blacklisted = Self::opoc_blacklist_operations_check(
-                opoc_blacklist_operations,
-                &validator
-            );
-
-            // if black listed, remove the validator from the list of validators
-            if is_blacklisted {
-                Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &validator);
-            }
-
             // increment the number of works of the validator
             Self::opoc_nodes_works_operations_add(nodes_works_operations, &validator, &request_id);
 
@@ -974,7 +982,7 @@ impl<T: Config> Pallet<T> {
 
     pub fn opoc_store_operations(
         operations: (
-            BTreeMap<T::AccountId, bool>, // opoc_blacklist_operations
+            BTreeMap<(T::AccountId, NftId), bool>, // opoc_blacklist_operations
             BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, // opoc_assignment_operations
             BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
             BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
@@ -993,13 +1001,13 @@ impl<T: Config> Pallet<T> {
         ) = operations;
 
         // set opoc_blacklist_operations
-        for (account_id, is_blacklisted) in opoc_blacklist_operations.iter() {
+        for ((account_id, nft_id), is_blacklisted) in opoc_blacklist_operations.iter() {
             if *is_blacklisted {
-                OpocBlacklist::<T>::insert(account_id, is_blacklisted);
-                Self::deposit_event(Event::OpocBlacklistAdd { account_id: account_id.clone() });
+                OpocBlacklist::<T>::insert(nft_id, account_id, is_blacklisted);
+                Self::deposit_event(Event::OpocBlacklistAdd { account_id: account_id.clone(), nft_id: nft_id.clone() });
             } else {
-                OpocBlacklist::<T>::remove(account_id);
-                Self::deposit_event(Event::OpocBlacklistRemove { account_id: account_id.clone() });
+                OpocBlacklist::<T>::remove(nft_id, account_id);
+                Self::deposit_event(Event::OpocBlacklistRemove { account_id: account_id.clone(), nft_id: nft_id.clone() });
             }
         }
 
@@ -1027,13 +1035,13 @@ impl<T: Config> Pallet<T> {
         // set nodes_works_operations
         for (account_id, requests) in nodes_works_operations.iter() {
             for (request_id, is_assigned) in requests.iter() {
-                if *is_assigned {
+                if *is_assigned && !NodesWorks::<T>::contains_key(account_id, request_id) {
                     NodesWorks::<T>::insert(account_id, request_id, is_assigned);
                     Self::deposit_event(Event::NodesWorksAdd {
                         account_id: account_id.clone(),
                         request_id: request_id.clone(),
                     }); //aggiunto nuovo
-                } else {
+                } else if !*is_assigned && NodesWorks::<T>::contains_key(account_id, request_id) {
                     NodesWorks::<T>::remove(account_id, request_id);
                     Self::deposit_event(Event::NodesWorksRemove {
                         account_id: account_id.clone(),
@@ -1046,13 +1054,13 @@ impl<T: Config> Pallet<T> {
         // set opoc_timeouts_operations
         for (request_id, requests) in opoc_timeouts_operations.iter() {
             for (account_id, is_assigned) in requests.iter() {
-                if *is_assigned {
+                if *is_assigned && !OpocTimeouts::<T>::contains_key(request_id, account_id) {
                     OpocTimeouts::<T>::insert(request_id, account_id, is_assigned);
                     Self::deposit_event(Event::OpocTimeoutsAdd {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
                     }); //aggiunto nuovo
-                } else {
+                } else if !*is_assigned && OpocTimeouts::<T>::contains_key(request_id, account_id) {
                     OpocTimeouts::<T>::remove(request_id, account_id);
                     Self::deposit_event(Event::OpocTimeoutsRemove {
                         request_id: request_id.clone(),
@@ -1065,13 +1073,13 @@ impl<T: Config> Pallet<T> {
         // set opoc_errors_operations
         for (request_id, requests) in opoc_errors_operations.iter() {
             for (account_id, is_assigned) in requests.iter() {
-                if *is_assigned {
+                if *is_assigned && !OpocErrors::<T>::contains_key(request_id, account_id) {
                     OpocErrors::<T>::insert(request_id, account_id, is_assigned);
                     Self::deposit_event(Event::OpocErrorsAdd {
                         request_id: request_id.clone(),
                         account_id: account_id.clone(),
                     }); //aggiunto nuovo
-                } else {
+                } else if !*is_assigned && OpocErrors::<T>::contains_key(request_id, account_id) {
                     OpocErrors::<T>::remove(request_id, account_id);
                     Self::deposit_event(Event::OpocErrorsRemove {
                         request_id: request_id.clone(),
@@ -1142,11 +1150,12 @@ impl<T: Config> Pallet<T> {
     }
 
     pub fn opoc_assignment_get_random_validators(
-        opoc_blacklist_operations: &BTreeMap<T::AccountId, bool>,
+        opoc_blacklist_operations: &BTreeMap<(T::AccountId, NftId), bool>,
         nodes_works_operations: &BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         number: U256,
         first_free: bool,
-        validators_to_exclude: Vec<T::AccountId>
+        validators_to_exclude: Vec<T::AccountId>,
+        nft_id: &NftId
     ) -> Result<Vec<T::AccountId>, DispatchError> {
         let number_usize = number.low_u64() as usize;
 
@@ -1156,10 +1165,10 @@ impl<T: Config> Pallet<T> {
             .filter(|account_id| !validators_to_exclude.contains(account_id)) // filter out the validators to exclude
             .collect();
 
-        // TEMPORARY MOD FOR TURING TESTNET: We remove from the validators list nodes that are blacklisted
+        // Filter out blacklisted validators
         let validators: Vec<T::AccountId> = validators
             .into_iter()
-            .filter(|account_id| !Self::opoc_blacklist_operations_check(opoc_blacklist_operations, account_id))
+            .filter(|account_id| !Self::opoc_blacklist_operations_check(opoc_blacklist_operations, account_id, &nft_id))
             .collect();
     
         // Get potential validators based on first_free flag
@@ -1240,12 +1249,13 @@ impl<T: Config> Pallet<T> {
     }
 
     fn opoc_deassignment_per_invalid_output(
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
         opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         opoc_errors_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         request_id: &RequestId,
-        validator: &T::AccountId
+        validator: &T::AccountId,
+        nft_id: &NftId,
     ) -> Result<(), DispatchError> {
         // Decrease the number of works of the validator
         Self::opoc_nodes_works_operations_remove(nodes_works_operations, validator, request_id);
@@ -1254,17 +1264,18 @@ impl<T: Config> Pallet<T> {
         // Increment the number of errors of the validator
         Self::opoc_errors_operations_add(opoc_errors_operations, validator, request_id);
         // Set the validator as blacklisted
-        Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator);
+        Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator, nft_id);
 
         Ok(())
     }
 
     fn opoc_deassignment_per_timeout(
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
         opoc_assignment_operations: &mut BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>,
         opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
         nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
         request_id: &RequestId,
+        nft_id: &NftId,
         validator: &T::AccountId
     ) -> Result<(), DispatchError> {
         // Decrease the number of works of the validator
@@ -1274,7 +1285,7 @@ impl<T: Config> Pallet<T> {
         // Increment the number of timeouts of the validator
         Self::opoc_timeouts_operations_add(opoc_timeouts_operations, validator, request_id);
         // Set the validator as blacklisted
-        Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator);
+        Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator, nft_id);
 
 
         Ok(())
@@ -1337,31 +1348,34 @@ impl<T: Config> Pallet<T> {
     }
 
     fn opoc_blacklist_operations_check(
-        opoc_blacklist_operations: &BTreeMap<T::AccountId, bool>,
-        validator: &T::AccountId
+        opoc_blacklist_operations: &BTreeMap<(T::AccountId, NftId), bool>,
+        validator: &T::AccountId,
+        nft_id: &NftId
     ) -> bool {
-        match opoc_blacklist_operations.get(&validator) {
+        match opoc_blacklist_operations.get(&(validator.clone(), *nft_id)) {
             Some(&blacklisted) => blacklisted,
             None => {
-                let blacklisted = OpocBlacklist::<T>::get(&validator);
+                let blacklisted = OpocBlacklist::<T>::get(nft_id, validator);
                 blacklisted
             }
         }
     }
 
     fn opoc_blacklist_operations_add(
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        validator: &T::AccountId
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
+        validator: &T::AccountId,
+        nft_id: &NftId
     ) -> bool {
-        opoc_blacklist_operations.insert(validator.clone(), true);
+        opoc_blacklist_operations.insert((validator.clone(), nft_id.clone()), true);
         true
     }
 
     fn opoc_blacklist_operations_remove(
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        validator: &T::AccountId
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
+        validator: &T::AccountId,
+        nft_id: &NftId
     ) -> bool {
-        opoc_blacklist_operations.insert(validator.clone(), false);
+        opoc_blacklist_operations.insert((validator.clone(), nft_id.clone()), false);
         true
     }
 
@@ -1575,17 +1589,10 @@ impl<T: Config> Pallet<T> {
     // NOTE: It should remove all the timeouts stored in opoc_timeouts_operations, then it should add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
     fn opoc_timeouts_operations_clean(
         opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
-        opoc_blacklist_operations: &mut BTreeMap<T::AccountId, bool>,
-        request_id: &RequestId
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
+        request_id: &RequestId,
+        nft_id: &NftId
     ) -> bool {
-        let mut accounts_restored: Vec<T::AccountId> = Vec::new();
-
-        // remove all the timeouts stored in opoc_timeouts_operations
-        if let Some(timeouts) = opoc_timeouts_operations.get(request_id) {
-            for (validator, _is_timeout) in timeouts.iter() {
-                accounts_restored.push(validator.clone());
-            }
-        }
         opoc_timeouts_operations.remove(request_id);
 
         // add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
@@ -1593,14 +1600,10 @@ impl<T: Config> Pallet<T> {
         let mut timeouts = BTreeMap::<T::AccountId, bool>::new();
         for (validator, _is_timeout) in storage_timeouts_for_request_id {
             timeouts.insert(validator.clone(), false);
-            accounts_restored.push(validator.clone());
         }
         opoc_timeouts_operations.insert(request_id.clone(), timeouts);
 
-        // remove the accounts restored from the opoc blacklist operations 
-        for account in accounts_restored {
-            Self::opoc_blacklist_operations_remove(opoc_blacklist_operations, &account);
-        }
+       
 
         true
     }

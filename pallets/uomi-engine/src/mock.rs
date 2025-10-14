@@ -354,6 +354,7 @@ impl uomi_primitives::TssInterface<Test> for MockTssInterface {
         None
     }
 }
+
 impl pallet_ipfs::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type IpfsApiUrl = TestIpfsUrl;
@@ -362,6 +363,7 @@ impl pallet_ipfs::Config for Test {
     type BlockNumber = u64;
     type TemporaryPinningCost = IpfsTemporaryPinningCost;
     type TssInterface = MockTssInterface;
+    type UomiEngineInterface = pallet_uomi_engine::Pallet<Test>;
 }
 
 impl pallet_uomi_engine::Config for Test {

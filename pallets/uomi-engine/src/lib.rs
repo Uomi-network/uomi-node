@@ -17,6 +17,7 @@ mod opoc;
 mod aimodelscalc;
 pub mod ipfs;
 pub mod crypto;
+pub mod migrations;
 
 pub use pallet::*; // Re-export pallet items so that they can be accessed from the crate namespace.
 pub mod weights;
@@ -46,7 +47,7 @@ use frame_support::{
 };
 use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
-    ensure_none, ensure_signed, offchain::{AppCrypto, CreateSignedTransaction, CreateInherent, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
+    ensure_none, ensure_signed, ensure_root, offchain::{AppCrypto, CreateSignedTransaction, SignedPayload, Signer}, pallet_prelude::{BlockNumberFor, OriginFor}
 };
 use pallet_ipfs::{
     self,
@@ -112,6 +113,7 @@ pub mod pallet {
     
     // Pallet
     #[pallet::pallet]
+    #[pallet::storage_version(migrations::STORAGE_VERSION)]
     pub struct Pallet<T>(PhantomData<T>);
 
     // Config
@@ -154,9 +156,11 @@ pub mod pallet {
         },
         OpocBlacklistAdd {
             account_id: T::AccountId, // The account ID of the validator.
+            nft_id: NftId, // The NFT ID.
         },
         OpocBlacklistRemove {
             account_id: T::AccountId, // The account ID of the validator.
+            nft_id: NftId, // The NFT ID.
         },
         OpocAssignmentAdd {
             request_id: RequestId, // The request ID.
@@ -217,6 +221,9 @@ pub mod pallet {
             request_id: RequestId, // The request ID.
             account_id: T::AccountId, // The account ID of the validator.
         }, // AGGIUNTO NUOVO
+        RequestExpired {
+            request_id: RequestId, // The request Id.
+        },
     }
 
     // Errors
@@ -402,8 +409,10 @@ pub mod pallet {
 
 	// OpocBlacklist storage is used to store the blacklist of validators
 	#[pallet::storage]
-	pub type OpocBlacklist<T: Config> = StorageMap<
+	pub type OpocBlacklist<T: Config> = StorageDoubleMap<
 		_,
+        Blake2_128Concat,
+        NftId, // nft_id
 		Blake2_128Concat,
 		T::AccountId, // account_id
 		bool, // is_blacklisted
@@ -473,6 +482,7 @@ pub mod pallet {
     // Hooks are used to execute code in response to certain events.
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        
         #[cfg(feature = "try-runtime")]
         fn try_state(_n: BlockNumberFor<T>) -> Result<(), sp_runtime::TryRuntimeError> {
             Ok(())
@@ -537,6 +547,21 @@ pub mod pallet {
             if current_block_number % divisor == U256::zero() {
                 log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
                 OpocBlacklist::<T>::remove_all(None);
+            }
+
+            // Remove from the chain the Inputs that are older (block_number + nft_execution_max_time < current_block) and are not assigned to any validator.
+            let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
+            for (request_id, (block_number, _address, nft_id, _nft_required_consensus, nft_execution_max_time, _nft_file_cid, _input_data, _input_file_cid)) in inputs {
+                let expiration_block = block_number + nft_execution_max_time.saturated_into::<u32>();
+                if U256::from(expiration_block) < current_block_number {
+                    // Check if the request_id is assigned to any validator
+                    let is_assigned = OpocAssignment::<T>::iter_prefix(request_id).next().is_some();
+                    if !is_assigned {
+                        log::info!("UOMI-ENGINE: Removing expired input for request_id: {:?}", request_id);
+                        Inputs::<T>::remove(request_id);
+                        Self::deposit_event(Event::RequestExpired { request_id });
+                    }
+                }
             }
 
             // Reset validators' current era points at the end of each era to avoid overflow.
@@ -856,6 +881,17 @@ pub mod pallet {
             let offence_type = match offence_type_raw { 0 => EngineOffenceType::OutputTimeout, 1 => EngineOffenceType::InvalidOutput, 2 => EngineOffenceType::RepeatedMisbehavior, _ => return Err(Error::<T>::SomethingWentWrong.into()) };
             Self::insert_pending_offence(request_id, reporter, offence_type, offenders)
         }
+
+        #[pallet::call_index(5)]
+        #[pallet::weight(0)]
+        pub fn force_clear_all_opoc_blacklist(origin: OriginFor<T>) -> DispatchResult {
+            log::info!("UOMI-ENGINE: Forcing clear of OpocBlacklist");
+            let _ = ensure_root(origin)?;
+
+            OpocBlacklist::<T>::remove_all(None);
+
+            Ok(())
+        }
     }
 
     // Inherent functions are used to execute code at the beginning of each block.
@@ -1048,5 +1084,13 @@ impl<T: Config> Pallet<T> {
         } else {
             false
         }
+    }
+}
+
+
+impl<T: Config> uomi_primitives::UomiEngineInterface<T> for Pallet<T> {
+    fn clear_blacklist_for_nft(nft_id: U256) -> DispatchResult {
+        OpocBlacklist::<T>::remove_prefix(nft_id, None);
+        Ok(())
     }
 }
