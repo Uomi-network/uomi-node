@@ -20,6 +20,7 @@
 
 use fc_consensus::FrontierBlockImport;
 use fc_rpc_core::types::{FeeHistoryCache, FilterPool};
+use fc_storage::StorageOverrideHandler;
 use futures::{FutureExt, StreamExt};
 use ipfs_manager::IpfsManager;
 use local_runtime::RuntimeEvent;
@@ -29,9 +30,11 @@ use sc_client_api::{
 use sc_consensus::BoxBlockImport;
 use sc_consensus_grandpa::SharedVoterState;
 use sc_executor::NativeElseWasmExecutor;
+use sc_network::NetworkBackend;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker};
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
+use sp_runtime::traits::Block as BlockT;
 use std::{
     collections::BTreeMap,marker::PhantomData, sync::Arc, time::Duration,
 };
@@ -56,19 +59,26 @@ type GrandpaBlockImport<C> =
     sc_consensus_grandpa::GrandpaBlockImport<FullBackend, Block, C, FullSelectChain>;
 
 /// Extra host functions
+/// Include:
+/// - Default Substrate host functions
+/// - (optional) benchmarking host functions
+/// - Moonbeam EVM tracing host functions
+/// - Cumulus parachain host functions (adds `storage_proof_size` etc.)
+/// The last item is required to satisfy runtime imports such as
+/// `env:ext_storage_proof_size_storage_proof_size_version_1`.
 #[cfg(feature = "runtime-benchmarks")]
 pub type HostFunctions = (
-    // benchmarking host functions
+    sp_io::SubstrateHostFunctions,
     frame_benchmarking::benchmarking::HostFunctions,
-    // evm tracing host functions
     moonbeam_primitives_ext::moonbeam_ext::HostFunctions,
+    cumulus_client_executor_common::ParachainHostFunctions,
 );
 
-/// Extra host functions
 #[cfg(not(feature = "runtime-benchmarks"))]
 pub type HostFunctions = (
-    // evm tracing host functions
+    sp_io::SubstrateHostFunctions,
     moonbeam_primitives_ext::moonbeam_ext::HostFunctions,
+	cumulus_primitives_proof_size_hostfunction::storage_proof_size::HostFunctions,
 );
 
 /// Local runtime native executor.
@@ -90,7 +100,7 @@ type FullClient = sc_service::TFullClient<Block, RuntimeApi, NativeElseWasmExecu
 type FullBackend = sc_service::TFullBackend<Block>;
 type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 type BasicImportQueue = sc_consensus::DefaultImportQueue<Block>;
-type FullPool = sc_transaction_pool::FullPool<Block, FullClient>;
+type FullPool = sc_transaction_pool::TransactionPoolHandle<Block, FullClient>;
 type GrandpaLinkHalf<C> = sc_consensus_grandpa::LinkHalf<Block, C, FullSelectChain>;
 
 /// Build a partial chain component config
@@ -109,7 +119,7 @@ pub fn new_partial(
             BabeLink<Block>,
             BabeWorkerHandle<Block>,
             GrandpaLinkHalf<FullClient>,
-            Arc<fc_db::kv::Backend<Block>>,
+            Arc<fc_db::kv::Backend<Block, FullClient>>,
         ),
     >,
     ServiceError,
@@ -143,12 +153,15 @@ pub fn new_partial(
         telemetry
     });
     let select_chain = sc_consensus::LongestChain::new(backend.clone());
-    let transaction_pool = sc_transaction_pool::BasicPool::new_full(
-        config.transaction_pool.clone(),
-        config.role.is_authority().into(),
-        config.prometheus_registry(),
-        task_manager.spawn_essential_handle(),
-        client.clone(),
+    let transaction_pool = Arc::from(
+        sc_transaction_pool::Builder::new(
+            task_manager.spawn_essential_handle(),
+            client.clone(),
+            config.role.is_authority().into(),
+        )
+        .with_options(config.transaction_pool.clone())
+        .with_prometheus(config.prometheus_registry())
+        .build(),
     );
     let (grandpa_block_import, grandpa_link) = sc_consensus_grandpa::block_import(
         client.clone(),
@@ -253,11 +266,14 @@ pub fn build_babe_grandpa_import_queue(
 }
 
 /// Builds a new service.
-pub fn start_node(
+pub fn start_node<N>(
     config: Configuration,
     #[cfg(feature = "evm-tracing")] evm_tracing_config: crate::evm_tracing_types::EvmTracingConfig,
-) -> Result<TaskManager, ServiceError> {
-    // Load the AI service status by calling localhost:8888/status and get the json response
+) -> Result<TaskManager, ServiceError>
+where
+    N: NetworkBackend<Block, <Block as BlockT>::Hash, NotificationProtocolConfig = sc_network::config::NonDefaultSetConfig>,
+{ 
+      // Load the AI service status by calling localhost:8888/status and get the json response
     let ipfs_manager =
         Arc::new(IpfsManager::new().map_err(|e| {
             ServiceError::Other(format!("Failed to initialize IPFS manager: {}", e))
@@ -357,17 +373,26 @@ pub fn start_node(
             .expect("Genesis block exists; qed"),
         &config.chain_spec,
     );
+    let mut net_config =
+        sc_network::config::FullNetworkConfiguration::<_, _, N>::new(&config.network, config.prometheus_registry().cloned());
 
-    let mut net_config = sc_network::config::FullNetworkConfiguration::new(&config.network);
+    let metrics = N::register_notification_metrics(
+        config.prometheus_config.as_ref().map(|cfg| &cfg.registry),
+    );
+    let peer_store_handle = net_config.peer_store_handle();
 
     let (grandpa_protocol_config, grandpa_notification_service) =
-        sc_consensus_grandpa::grandpa_peers_set_config(protocol_name.clone());
+        sc_consensus_grandpa::grandpa_peers_set_config::<_, N>(
+            protocol_name.clone(),
+            metrics.clone(),
+            Arc::clone(&peer_store_handle),
+        );
     net_config.add_notification_protocol(grandpa_protocol_config);
 
     let (tss_protocol_config, tss_notification_service, tss_protocol_name) = get_config();
     net_config.add_notification_protocol(tss_protocol_config);
 
-    let (network, system_rpc_tx, tx_handler_controller, network_starter, sync_service) =
+    let (network, system_rpc_tx, tx_handler_controller, sync_service) =
         sc_service::build_network(sc_service::BuildNetworkParams {
             config: &config,
             net_config,
@@ -376,8 +401,9 @@ pub fn start_node(
             spawn_handle: task_manager.spawn_handle(),
             import_queue,
             block_announce_validator_builder: None,
-            warp_sync_params: None,
+            warp_sync_config: None,
             block_relay: None,
+            metrics: metrics.clone(),
         })?;
 
     if config.offchain_worker.enabled {
@@ -391,7 +417,7 @@ pub fn start_node(
                 transaction_pool: Some(OffchainTransactionPoolFactory::new(
                     transaction_pool.clone(),
                 )),
-                network_provider: network.clone(),
+				network_provider: Arc::new(network.clone()),
                 is_validator: config.role.is_authority(),
                 enable_http_requests: true,
                 custom_extensions: move |_| vec![],
@@ -403,7 +429,7 @@ pub fn start_node(
 
     let filter_pool: FilterPool = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
     let fee_history_cache: FeeHistoryCache = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
-    let overrides = fc_storage::overrides_handle(client.clone());
+    let storage_override = Arc::new(StorageOverrideHandler::new(client.clone()));
 
     // Sinks for pubsub notifications.
     // Everytime a new subscription is created, a new mpsc channel is added to the sink pool.
@@ -428,7 +454,7 @@ pub fn start_node(
                     substrate_backend: backend.clone(),
                     frontier_backend: frontier_backend.clone(),
                     filter_pool: Some(filter_pool.clone()),
-                    overrides: overrides.clone(),
+                    storage_override: storage_override.clone(),
                 },
             )
         } else {
@@ -448,7 +474,7 @@ pub fn start_node(
             Duration::new(6, 0),
             client.clone(),
             backend.clone(),
-            overrides.clone(),
+            storage_override.clone(),
             frontier_backend.clone(),
             3,
             0,
@@ -478,7 +504,7 @@ pub fn start_node(
         Some("frontier"),
         fc_rpc::EthTask::fee_history_task(
             client.clone(),
-            overrides.clone(),
+            storage_override.clone(),
             fee_history_cache.clone(),
             FEE_HISTORY_LIMIT,
         ),
@@ -497,7 +523,7 @@ pub fn start_node(
 
     let block_data_cache = Arc::new(fc_rpc::EthBlockDataCacheTask::new(
         task_manager.spawn_handle(),
-        overrides.clone(),
+        storage_override.clone(),
         50,
         50,
         prometheus_registry.clone(),
@@ -537,23 +563,21 @@ pub fn start_node(
         );
 
         Box::new(
-            move |deny_unsafe, subscription: sc_rpc::SubscriptionTaskExecutor| {
+            move |subscription: sc_rpc::SubscriptionTaskExecutor| {
                 let shared_voter_state = sc_consensus_grandpa::SharedVoterState::empty();
                 let deps = crate::rpc::FullDeps {
                     client: client.clone(),
                     select_chain: select_chain.clone(),
                     pool: transaction_pool.clone(),
-                    graph: transaction_pool.pool().clone(),
                     network: network.clone(),
                     sync: sync.clone(),
                     is_authority,
-                    deny_unsafe,
                     frontier_backend: frontier_backend.clone(),
                     filter_pool: filter_pool.clone(),
                     fee_history_limit: FEE_HISTORY_LIMIT,
                     fee_history_cache: fee_history_cache.clone(),
                     block_data_cache: block_data_cache.clone(),
-                    overrides: overrides.clone(),
+                    storage_override: storage_override.clone(),
                     enable_evm_rpc: true, // enable EVM RPC for dev node by default
                     pending_create_inherent_data_providers: pending_create_inherent_data_providers,
                     babe: crate::rpc::BabeDeps {
@@ -760,8 +784,6 @@ pub fn start_node(
             .unwrap(),
         );
     }
-
-    network_starter.start_network();
 
     Ok(task_manager)
 }

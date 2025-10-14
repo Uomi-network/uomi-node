@@ -14,7 +14,7 @@ use frost_ed25519::{
     },
     Identifier,
 };
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use sp_runtime::traits::Block as BlockT;
 use std::collections::BTreeMap;
 use uomi_runtime::pallet_tss::TssOffenceType;

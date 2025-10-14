@@ -9,7 +9,7 @@ use frame_support::{
     construct_runtime, derive_impl, dispatch::DispatchResult, parameter_types,
     traits::EstimateNextSessionRotation, weights::Weight,
 };
-use frame_system::offchain::{CreateSignedTransaction, SendTransactionTypes, SigningTypes};
+use frame_system::offchain::{CreateSignedTransaction, SigningTypes};
 use pallet_babe;
 use pallet_ipfs::{
     self,
@@ -146,10 +146,6 @@ impl frame_system::Config for Test {
     type MaxConsumers = ConstU32<16>;
 }
 
-impl SendTransactionTypes<UomiCall<Test>> for Test {
-    type Extrinsic = sp_runtime::testing::TestXt<UomiCall<Test>, (u64, ())>;
-    type OverarchingCall = UomiCall<Test>;
-}
 
 impl CreateSignedTransaction<UomiCall<Test>> for Test {
     fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
@@ -205,10 +201,6 @@ impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
     )> {
         Some((call, (nonce, (nonce, ()))))
     }
-}
-impl SendTransactionTypes<crate::pallet::Call<Test>> for Test {
-    type Extrinsic = TestXt<crate::Call<Test>, (u64, ())>;
-    type OverarchingCall = crate::Call<Test>;
 }
 
 impl pallet_uomi_engine::Config for Test {
@@ -314,10 +306,6 @@ parameter_types! {
     pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
 }
 
-impl SendTransactionTypes<pallet_ipfs::Call<Test>> for Test {
-    type Extrinsic = sp_runtime::testing::TestXt<pallet_ipfs::Call<Test>, (u64, ())>;
-    type OverarchingCall = pallet_ipfs::Call<Test>;
-}
 
 impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
     fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(

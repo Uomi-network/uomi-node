@@ -232,7 +232,7 @@ where
     TP: TransactionPool<Block = B> + LocalTransactionPool<Block = B> + Send + Sync + 'static,
 {
     fn submit_unsigned(&self, call: RuntimeCall) -> Result<(), String> {
-        let xt = UncheckedExtrinsic::new_unsigned(call.into());
+        let xt = UncheckedExtrinsic::new_bare(call.into());
         let best_hash = self.client.info().best_hash;
         // convert to block extrinsic type
         let encoded = xt.encode();
@@ -294,7 +294,7 @@ pub(crate) fn keystore_sign_payload<P: Encode>(
         .as_slice()
         .try_into()
         .map_err(|_| "Invalid sr25519 signature length".to_string())?;
-    let sr_sig = sr25519::Signature(arr);
+    let sr_sig = sp_core::sr25519::Signature::from_raw(arr);
     Ok(sr_sig.into())
 }
 

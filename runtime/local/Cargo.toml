@@ -1,6 +1,6 @@
 [package]
 name = "local-runtime"
-version = "0.3.6"
+version = "0.3.7"
 
 build = "build.rs"
 authors.workspace = true
@@ -9,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
+ethereum = { workspace = true}
 log = { workspace = true, optional = true }
 num_enum = { workspace = true }
 parity-scale-codec = { workspace = true }
@@ -102,12 +103,13 @@ pallet-nomination-pools = { workspace = true }
 pallet-nomination-pools-runtime-api = { workspace = true }
 static_assertions = "1.1"
 pallet-staking-runtime-api = { workspace = true }
+pallet-delegated-staking = { workspace = true }
 
 
 # Moonbeam tracing
 moonbeam-evm-tracer = { workspace = true, optional = true }
 moonbeam-rpc-primitives-debug = { workspace = true, optional = true }
-moonbeam-rpc-primitives-txpool = { workspace = true, optional = true }
+## Removed: moonbeam-rpc-primitives-txpool
 
 # chain-extensions
 pallet-chain-extension-assets = { workspace = true }
@@ -150,6 +152,7 @@ std = [
 	"pallet-balances/std",
 	"pallet-contracts/std",
 	"pallet-chain-extension-unified-accounts/std",
+	"pallet-im-online/std",
 	"pallet-base-fee/std",
 	"pallet-ethereum/std",
 	"pallet-evm/std",
@@ -203,7 +206,7 @@ std = [
 	"pallet-uomi-engine/std",
 	"moonbeam-evm-tracer/std",
 	"moonbeam-rpc-primitives-debug/std",
-	"moonbeam-rpc-primitives-txpool/std",
+    ## Removed: moonbeam-rpc-primitives-txpool/std
 	"substrate-wasm-builder",
 	"pallet-chain-extension-assets/std",
 	"uomi-primitives/std",
@@ -297,7 +300,7 @@ try-runtime = [
 evm-tracing = [
 	"moonbeam-evm-tracer",
 	"moonbeam-rpc-primitives-debug",
-	"moonbeam-rpc-primitives-txpool",
+    ## Removed: moonbeam-rpc-primitives-txpool
 ]
 
 # Enable metadata hash generation at compile time for the `CheckMetadataHash` extension.

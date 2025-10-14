@@ -14,7 +14,6 @@ use frame_support::{
 use frame_system::offchain::{
     AppCrypto,
     CreateSignedTransaction,
-    SendTransactionTypes,
     SigningTypes,
 };
 use pallet_session::{ SessionHandler, ShouldEndSession };
@@ -204,11 +203,6 @@ impl onchain::Config for OnChainSeqPhragmen {
     type Bounds = ElectionsBounds;
 }
 
-// CREATE SIGNED TRANSACTION
-impl SendTransactionTypes<crate::Call<Test>> for Test {
-    type Extrinsic = TestXt<crate::Call<Test>, (u64, ())>;
-    type OverarchingCall = crate::Call<Test>;
-}
 
 impl CreateSignedTransaction<crate::Call<Test>> for Test {
     fn create_transaction<C: AppCrypto<Self::Public, Self::Signature>>(

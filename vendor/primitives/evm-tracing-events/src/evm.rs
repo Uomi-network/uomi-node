@@ -31,8 +31,8 @@ pub struct Transfer {
     pub value: U256,
 }
 
-impl From<evm_runtime::Transfer> for Transfer {
-    fn from(i: evm_runtime::Transfer) -> Self {
+impl From<evm::Transfer> for Transfer {
+    fn from(i: evm::Transfer) -> Self {
         Self {
             source: i.source,
             target: i.target,
@@ -61,11 +61,11 @@ pub enum CreateScheme {
     Fixed(H160),
 }
 
-impl From<evm_runtime::CreateScheme> for CreateScheme {
-    fn from(i: evm_runtime::CreateScheme) -> Self {
+impl From<evm::CreateScheme> for CreateScheme {
+    fn from(i: evm::CreateScheme) -> Self {
         match i {
-            evm_runtime::CreateScheme::Legacy { caller } => Self::Legacy { caller },
-            evm_runtime::CreateScheme::Create2 {
+            evm::CreateScheme::Legacy { caller } => Self::Legacy { caller },
+            evm::CreateScheme::Create2 {
                 caller,
                 code_hash,
                 salt,
@@ -74,7 +74,7 @@ impl From<evm_runtime::CreateScheme> for CreateScheme {
                 code_hash,
                 salt,
             },
-            evm_runtime::CreateScheme::Fixed(address) => Self::Fixed(address),
+            evm::CreateScheme::Fixed(address) => Self::Fixed(address),
         }
     }
 }
@@ -136,6 +136,11 @@ pub enum EvmEvent {
         is_static: bool,
         context: super::Context,
     },
+    Log {
+        address: H160,
+        topics: Vec<H256>,
+        data: Vec<u8>,
+    },
 }
 
 #[cfg(feature = "evm-tracing")]
@@ -159,7 +164,11 @@ impl<'a> From<evm::tracing::Event<'a>> for EvmEvent {
                 input: input.to_vec(),
                 target_gas,
                 is_static,
-                context: context.clone().into(),
+                context: super::Context {
+                    address: context.address,
+                    caller: context.caller,
+                    apparent_value: context.apparent_value,
+                },
             },
             evm::tracing::Event::Create {
                 caller,
@@ -250,7 +259,20 @@ impl<'a> From<evm::tracing::Event<'a>> for EvmEvent {
                 input: input.to_vec(),
                 target_gas,
                 is_static,
-                context: context.clone().into(),
+                context: super::Context {
+                    address: context.address,
+                    caller: context.caller,
+                    apparent_value: context.apparent_value,
+                },
+            },
+            evm::tracing::Event::Log {
+                address,
+                topics,
+                data,
+            } => Self::Log {
+                address,
+                topics: topics.to_vec(),
+                data: data.to_vec(),
             },
         }
     }

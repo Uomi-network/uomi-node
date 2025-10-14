@@ -12,7 +12,7 @@ use frame_support::{
     traits::{ConstU16, ConstU32, ConstU64, EstimateNextSessionRotation},
     weights::Weight,
 };
-use frame_system::offchain::{CreateSignedTransaction, SendTransactionTypes, SigningTypes};
+use frame_system::offchain::{CreateSignedTransaction, SigningTypes};
 use pallet_ipfs::{
     self,
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
@@ -304,11 +304,6 @@ impl frame_system::Config for Test {
    type MaxConsumers = ConstU32<16>;
 }
 
-impl SendTransactionTypes<UomiCall<Test>> for Test {
-   type Extrinsic = sp_runtime::testing::TestXt<UomiCall<Test>, (u64, ())>;
-   type OverarchingCall = UomiCall<Test>;
-}
-
 impl CreateSignedTransaction<UomiCall<Test>> for Test {
    fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
        call: UomiCall<Test>,
@@ -320,10 +315,6 @@ impl CreateSignedTransaction<UomiCall<Test>> for Test {
    }
 }
 
-impl SendTransactionTypes<pallet_ipfs::Call<Test>> for Test {
-    type Extrinsic = sp_runtime::testing::TestXt<pallet_ipfs::Call<Test>, (u64, ())>;
-    type OverarchingCall = pallet_ipfs::Call<Test>;
-}
 
 impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
     fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(

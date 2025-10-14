@@ -12,7 +12,7 @@ use frost_ed25519::{
     round2::{sign as frost_round2_sign, SignatureShare},
     Identifier, Signature, SigningPackage,
 };
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use sp_runtime::traits::Block as BlockT;
 use std::{
     collections::{btree_map::Keys, HashMap},
