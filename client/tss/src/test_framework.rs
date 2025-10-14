@@ -7,7 +7,7 @@ use crate::{
     PeerMapper, SessionId, SessionManager,
     TSSPublic, TSSRuntimeEvent, TssMessage, SignedTssMessage,
 };
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use sp_runtime::{
     traits::{Block as BlockT, Hash as HashT, Header as HeaderT},
 };

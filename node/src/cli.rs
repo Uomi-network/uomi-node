@@ -19,6 +19,7 @@
 
 #[cfg(feature = "evm-tracing")]
 use crate::evm_tracing_types::EthApiOptions;
+#[cfg(feature = "sc-cli")]
 use sc_cli::RunCmd;
 
 /// An overarching CLI command definition.
@@ -30,6 +31,7 @@ pub struct Cli {
 
     #[allow(missing_docs)]
     #[clap(flatten)]
+    #[cfg(feature = "sc-cli")]
     pub run: RunCmd,
 
     #[allow(missing_docs)]
@@ -53,48 +55,35 @@ pub struct Cli {
 /// Possible subcommands of the main binary.
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
-    /// Key management cli utilities
+    /// Key management cli utilities (only with sc-cli feature)
+    #[cfg(feature = "sc-cli")]
     #[clap(subcommand)]
     Key(sc_cli::KeySubcommand),
-
-    /// Verify a signature for a message, provided on STDIN, with a given (public or secret) key.
+    #[cfg(feature = "sc-cli")]
     Verify(sc_cli::VerifyCmd),
-
-    /// Generate a seed that provides a vanity address.
+    #[cfg(feature = "sc-cli")]
     Vanity(sc_cli::VanityCmd),
-
-    /// Sign a message, with a given (secret) key.
+    #[cfg(feature = "sc-cli")]
     Sign(sc_cli::SignCmd),
-
-    /// Build a chain specification.
+    #[cfg(feature = "sc-cli")]
     BuildSpec(sc_cli::BuildSpecCmd),
-
-    /// Validate blocks.
+    #[cfg(feature = "sc-cli")]
     CheckBlock(sc_cli::CheckBlockCmd),
-
-    /// Export blocks.
+    #[cfg(feature = "sc-cli")]
     ExportBlocks(sc_cli::ExportBlocksCmd),
-
-    /// Export the state of a given block into a chain spec.
+    #[cfg(feature = "sc-cli")]
     ExportState(sc_cli::ExportStateCmd),
-
-    /// Import blocks.
+    #[cfg(feature = "sc-cli")]
     ImportBlocks(sc_cli::ImportBlocksCmd),
-
-    /// Remove the whole chain.
+    #[cfg(feature = "sc-cli")]
     PurgeChain(sc_cli::PurgeChainCmd),
-
-    /// Revert the chain to a previous state.
+    #[cfg(feature = "sc-cli")]
     Revert(sc_cli::RevertCmd),
-
-    /// The custom benchmark subcommmand benchmarking runtime pallets.
-    #[cfg(feature = "runtime-benchmarks")]
+    #[cfg(all(feature = "runtime-benchmarks", feature = "sc-cli"))]
     #[clap(name = "benchmark", about = "Benchmark runtime pallets.")]
     #[clap(subcommand)]
     Benchmark(frame_benchmarking_cli::BenchmarkCmd),
-
-    /// Try some command against runtime state.
-    /// No moved to separte cli and just a placeholder command here
+    /// Placeholder / fallback (always present)
     TryRuntime,
 }
 

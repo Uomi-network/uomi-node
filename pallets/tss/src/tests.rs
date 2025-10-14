@@ -13,7 +13,7 @@ use sp_core::{
 };
 use sp_keystore::{testing::MemoryKeystore, Keystore, KeystoreExt};
 use sp_runtime::{BoundedVec, Perbill};
-use sp_core::U256;
+use ethereum_types::U256;
 
 // Helper function to create test account
 fn create_test_account(seed: Option<[u8; 32]>) -> AccountId {
@@ -1853,7 +1853,7 @@ mod tests {
     fn structured_legacy_action_builds_expected_preimage() {
         use pallet_uomi_engine::Outputs as EngineOutputs; // storage alias
         use crate::multichain::TransactionBuilder;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             let request_id = U256::from(1u8);
             let nft_id = U256::from(9u8);
@@ -1868,7 +1868,7 @@ mod tests {
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
             // Process single request
-            let res = TestingPallet::process_single_request(sp_core::U256::from(1u8)).expect("processing ok");
+            let res = TestingPallet::process_single_request(U256::from(1u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             let produced = maybe.1;
@@ -1890,7 +1890,7 @@ mod tests {
     #[test]
     fn structured_eip1559_action_builds_expected_preimage() {
         use crate::multichain::TransactionBuilder;
-        use sp_core::U256;
+    use ethereum_types::U256;
     use pallet_uomi_engine::Outputs as EngineOutputs;
         new_test_ext().execute_with(|| {
             let request_id = U256::from(2u8);
@@ -1904,7 +1904,7 @@ mod tests {
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
-            let res = TestingPallet::process_single_request(sp_core::U256::from(2u8)).expect("processing ok");
+            let res = TestingPallet::process_single_request(U256::from(2u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             let produced = maybe.1;
@@ -1927,7 +1927,7 @@ mod tests {
     #[test]
     fn structured_action_fallback_on_invalid_address() {
         use pallet_uomi_engine::Outputs as EngineOutputs;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             let request_id = U256::from(3u8);
             let nft_id = U256::from(11u8);
@@ -1940,7 +1940,7 @@ mod tests {
             let raw_vec = vec![1u8,2u8,3u8];
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
-            let res = TestingPallet::process_single_request(sp_core::U256::from(3u8)).expect("processing ok");
+            let res = TestingPallet::process_single_request(U256::from(3u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             assert_eq!(maybe.1, raw_vec, "Should fallback to provided raw data when address invalid");
@@ -1951,7 +1951,7 @@ mod tests {
     fn structured_eip1559_default_data_action_builds_expected_preimage() {
         use pallet_uomi_engine::Outputs as EngineOutputs;
         use crate::multichain::TransactionBuilder;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             let request_id = U256::from(2u8);
             let nft_id = U256::from(10u8);
@@ -1966,7 +1966,7 @@ mod tests {
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
 
-            let res = TestingPallet::process_single_request(sp_core::U256::from(2u8)).expect("processing ok");
+            let res = TestingPallet::process_single_request(U256::from(2u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             let produced = maybe.1;
@@ -1989,7 +1989,7 @@ mod tests {
     #[test]
     fn structured_action_malformed_hex_data_graceful_fallback() {
         use pallet_uomi_engine::Outputs as EngineOutputs;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             let request_id = U256::from(50u8);
             let nft_id = U256::from(77u8);
@@ -2001,7 +2001,7 @@ mod tests {
             );
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
-            let res = TestingPallet::process_single_request(sp_core::U256::from(50u8)).expect("processing ok");
+            let res = TestingPallet::process_single_request(U256::from(50u8)).expect("processing ok");
             let (_nft, maybe) = res.unwrap();
             assert_eq!(maybe.0, chain_id);
             // Malformed hex should decode to empty vec (log warning) then used as raw data or for tx build failure fallback.
@@ -2012,7 +2012,7 @@ mod tests {
     #[test]
     fn opoc_iteration_from_zero_u256() {
         use pallet_uomi_engine::Outputs as EngineOutputs;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Ensure starting point
             LastOpocRequestId::<Test>::put(U256::zero());
@@ -2034,7 +2034,7 @@ mod tests {
     #[test]
     fn opoc_iteration_large_u256_boundary() {
         use pallet_uomi_engine::Outputs as EngineOutputs;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Set last id near 2^40 boundary to ensure we don't truncate
             let start = U256::from(1u128 << 40); // large value
@@ -2055,7 +2055,7 @@ mod tests {
     #[test]
     fn opoc_iteration_no_requests() {
         use pallet_uomi_engine::Outputs as EngineOutputs;
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Set last id near 2^40 boundary to ensure we don't truncate
             let start = U256::from(1u128 << 40); // large value
@@ -2074,7 +2074,7 @@ mod tests {
     // --- New tests for request_id based linking & dedup ---
     #[test]
     fn request_id_deduplication_and_storage() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Prepare validators & DKG session
             let validators = vec![account(10), account(11), account(12)];
@@ -2124,7 +2124,7 @@ mod tests {
 
     #[test]
     fn request_id_cleanup_after_signature_processing() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Setup DKG complete for nft_id
             let validators = vec![account(10), account(11), account(12)];
@@ -2173,7 +2173,7 @@ mod tests {
 
     #[test]
     fn multiple_distinct_request_ids_same_nft_create_multiple_sessions() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Prepare validators & complete a single DKG for an nft_id
             let validators = vec![account(10), account(11), account(12)];
@@ -2225,7 +2225,7 @@ mod tests {
 
     #[test]
     fn dkg_reshare_supersedes_previous_and_signing_uses_latest() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             // Prepare validators & initialize
             let validators = vec![account(20), account(21), account(22), account(23)];
@@ -2301,7 +2301,7 @@ mod tests {
 
     #[test]
     fn signing_session_expires_after_ttl() {
-        use sp_core::U256;
+    use ethereum_types::U256;
     use sp_runtime::SaturatedConversion; // for saturated_into on BlockNumber
     use frame_support::traits::Hooks; // bring on_initialize into scope
     use crate::ProposedSignatures;
@@ -2373,7 +2373,7 @@ mod tests {
     // --- Signing retry logic tests ---
     #[test]
     fn signing_retry_creates_new_session_after_expiry() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         use frame_support::traits::Hooks;
         new_test_ext().execute_with(|| {
             let validators = vec![account(90), account(91), account(92)];
@@ -2411,7 +2411,7 @@ mod tests {
 
     #[test]
     fn signing_retry_caps_after_max_attempts() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         use frame_support::traits::Hooks;
         new_test_ext().execute_with(|| {
             let validators = vec![account(93), account(94), account(95)];
@@ -2450,7 +2450,7 @@ mod tests {
 
     #[test]
     fn signing_retry_events_emitted() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         use frame_support::traits::Hooks;
         new_test_ext().execute_with(|| {
             let validators = vec![account(120), account(121), account(122)];
@@ -2508,7 +2508,7 @@ mod tests {
 
     #[test]
     fn signing_retry_counter_cleared_on_success() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             let validators = vec![account(96), account(97), account(98)];
             setup_active_validators(&validators);
@@ -2541,7 +2541,7 @@ mod tests {
 
     #[test]
     fn end_to_end_reshare_and_retry_flow() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         use frame_support::traits::Hooks;
         new_test_ext().execute_with(|| {
             let validators = vec![account(150), account(151), account(152)];
@@ -2602,7 +2602,7 @@ mod tests {
 
     #[test]
     fn signing_no_duplicate_while_in_progress() {
-        use sp_core::U256;
+    use ethereum_types::U256;
         new_test_ext().execute_with(|| {
             let validators = vec![account(101), account(102), account(103)];
             setup_active_validators(&validators);
@@ -2633,7 +2633,7 @@ mod tests {
             setup_active_validators(&validators);
             let _ = TestingPallet::initialize_validator_ids();
             let dkg_session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(6000u64);
+            let nft_id_u256 = U256::from(6000u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(
@@ -2665,7 +2665,7 @@ mod tests {
             setup_active_validators(&validators);
             let _ = TestingPallet::initialize_validator_ids();
             let dkg_session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(7000u64);
+            let nft_id_u256 = U256::from(7000u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(
@@ -2687,7 +2687,7 @@ mod tests {
             let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![5,5,5]).unwrap();
             assert_ok!(TestingPallet::create_signing_session(
                 RuntimeOrigin::none(),
-                sp_core::U256::from(9000u64),
+                U256::from(9000u64),
                 nft_id.clone(),
                 msg
             ));
@@ -2714,7 +2714,7 @@ mod tests {
             setup_active_validators(&validators);
             let _ = TestingPallet::initialize_validator_ids();
             let session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(9100u64);
+            let nft_id_u256 = U256::from(9100u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(
@@ -2749,7 +2749,7 @@ mod tests {
             setup_active_validators(&validators);
             let _ = TestingPallet::initialize_validator_ids();
             let first_session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(9200u64);
+            let nft_id_u256 = U256::from(9200u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(
@@ -2784,7 +2784,7 @@ mod tests {
             let _ = TestingPallet::initialize_validator_ids();
 
             let session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(9300u64);
+            let nft_id_u256 = U256::from(9300u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(
@@ -2826,7 +2826,7 @@ mod tests {
             setup_active_validators(&validators);
             let _ = TestingPallet::initialize_validator_ids();
             let session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(9400u64);
+            let nft_id_u256 = U256::from(9400u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(
@@ -2857,7 +2857,7 @@ mod tests {
             setup_active_validators(&validators);
             let _ = TestingPallet::initialize_validator_ids();
             let session_id = TestingPallet::next_session_id();
-            let nft_id_u256 = sp_core::U256::from(9500u64);
+            let nft_id_u256 = U256::from(9500u64);
             let nft_bytes: Vec<u8> = nft_id_u256.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
             let nft_id: NftId = nft_bytes.clone().try_into().unwrap();
             assert_ok!(TestingPallet::create_dkg_session(

@@ -22,9 +22,10 @@ use crate::{
     local::{self, development_config},
     uomi::{self, mainnet_config, chain_spec as chain_spec_uomi},
 };
-use sc_cli::{
-       Result, SubstrateCli,
-};
+#[cfg(feature = "sc-cli")]
+use sc_cli::{Result, SubstrateCli};
+#[cfg(not(feature = "sc-cli"))]
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use sc_service::PartialComponents;
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -63,6 +64,7 @@ fn load_spec(id: &str) -> std::result::Result<Box<dyn sc_service::ChainSpec>, St
     })
 }
 
+#[cfg(feature = "sc-cli")]
 impl SubstrateCli for Cli {
     fn impl_name() -> String {
         "Uomi".into()
@@ -97,6 +99,13 @@ impl SubstrateCli for Cli {
 /// Parse command line arguments into service configuration.
 pub fn run() -> Result<()> {
     let cli = Cli::from_args();
+
+    #[cfg(not(feature = "sc-cli"))]
+    {
+        // When sc-cli feature is disabled (e.g. building only examples), we don't support
+        // full node CLI subcommands. Just exit early.
+        return Err("sc-cli feature disabled: full node CLI not available".into());
+    }
 
     match &cli.subcommand {
         Some(Subcommand::BuildSpec(cmd)) => {
@@ -358,9 +367,9 @@ pub fn run() -> Result<()> {
             runner.run_node_until_exit(|config| async move {
                 log::info!("🧠 Uomi engine active, starting to process requests");
                 if config.chain_spec.is_uomi() {
-                    return uomi::start_node(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
+                    return uomi::start_node::<sc_network::NetworkWorker<_, _>>(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
                 } else {
-                    return local::start_node(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
+                    return local::start_node::<sc_network::NetworkWorker<_, _>>(config, #[cfg(feature = "evm-tracing")] evm_tracing_config).map_err(Into::into);
                 }
 
             })

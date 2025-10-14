@@ -1,4 +1,4 @@
-use sc_network::PeerId;
+use sc_network_types::PeerId;
 use log;
 use crate::types::{TssMessage, SignedTssMessage, SessionId};
 use crate::ecdsa::ECDSAPhase;

@@ -1,7 +1,7 @@
 use sp_std::collections::btree_map::BTreeMap;
 use sp_std::prelude::*;
 use sp_std::vec::Vec;
-use sp_core::U256;
+use ethereum_types::U256;
 use scale_info::prelude::string::String;
 use crate::{Config, LastOpocRequestId, DkgSessions, AggregatedPublicKeys};
 use sp_io::hashing::keccak_256;
@@ -365,7 +365,8 @@ fn build_or_passthrough_with_nonce<T: Config>(action: &Action, nft_id: &U256) ->
         let internal_allocated = if explicit_nonce.is_none() {
             // Convert U256 nft_id into crate::types::NftId (little endian bytes -> bounded vec)
             let le_bytes: Vec<u8> = {
-                let mut tmp = [0u8; 32]; nft_id.to_little_endian(&mut tmp); tmp.to_vec()
+                let mut tmp = [0u8; 32]; 
+                nft_id.to_little_endian().to_vec()
             };
             if let Ok(bounded) = crate::types::NftId::try_from(le_bytes) {
                 match crate::pallet::Pallet::<T>::allocate_next_nonce_internal(&bounded, action.chain_id) {

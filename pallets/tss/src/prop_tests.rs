@@ -7,7 +7,7 @@ mod prop {
     use crate::{mock::{new_test_ext, RuntimeOrigin, Test, TestingPallet}, SessionState};
     use proptest::{prelude::*, collection};
     use frame_support::BoundedVec;
-    use sp_core::U256;
+    use ethereum_types::U256;
     use frame_support::traits::Hooks;
 
     // Simplified action set.
