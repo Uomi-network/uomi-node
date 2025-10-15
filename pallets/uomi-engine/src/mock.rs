@@ -25,11 +25,12 @@ use sp_core::{
     Get,
     H256,
     U256,
+    ConstBool,
 };
 use sp_runtime::{
     curve::PiecewiseLinear,
-    traits::{BlakeTwo256, IdentityLookup},
-    testing::UintAuthorityId,
+    traits::{BlakeTwo256, IdentityLookup, Verify},
+    testing::{UintAuthorityId, TestXt},
     BuildStorage,
     DispatchError,
     KeyTypeId,
@@ -128,8 +129,10 @@ impl onchain::Config for OnChainSeqPhragmen {
 	type Solver = SequentialPhragmen<AccountId, Perbill>;
 	type DataProvider = Staking;
 	type WeightInfo = ();
-	type MaxWinners = ConstU32<100>;
 	type Bounds = ElectionsBounds;
+    type MaxWinnersPerPage = ConstU32<{ u32::MAX }>;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
+    type Sort = ConstBool<true>;
 }
 
 impl MockInherentDataProvider {
@@ -186,10 +189,10 @@ pub type VoterList = pallet_staking::UseNominatorsAndValidatorsMap<Test>;
 
 impl pallet_staking::Config for Test {
    type NominationsQuota = pallet_staking::FixedNominationsQuota<16>;
+   type OldCurrency = Balances;
    type Currency = Balances;
    type CurrencyBalance = Balance;
    type UnixTime = Timestamp;
-   type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
    type CurrencyToVote = SaturatingCurrencyToVote;
    type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
    type GenesisElectionProvider = Self::ElectionProvider;
@@ -213,6 +216,7 @@ impl pallet_staking::Config for Test {
    type EventListeners = ();
    type BenchmarkingConfig = TestBenchmarkingConfig;
    type WeightInfo = ();
+   type MaxValidatorSet = ConstU32<1000>;
 }
 
 pallet_staking_reward_curve::build! {
@@ -264,13 +268,14 @@ impl<AId> SessionHandler<AId> for TestSessionHandler {
 impl pallet_session::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type ValidatorId = AccountId;
-    type ValidatorIdOf = pallet_staking::StashOf<Self>;
+    type ValidatorIdOf = sp_runtime::traits::ConvertInto;
     type ShouldEndSession = TestShouldEndSession;
     type NextSessionRotation = TestNextSessionRotation;
     type SessionManager = ();
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+    type DisablingStrategy = ();
 }
 
 impl SigningTypes for Test {
@@ -305,26 +310,12 @@ impl frame_system::Config for Test {
 }
 
 impl CreateSignedTransaction<UomiCall<Test>> for Test {
-   fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-       call: UomiCall<Test>,
-       _public: Self::Public,
-       _account: <Test as frame_system::Config>::AccountId,
-       nonce: <Test as frame_system::Config>::Nonce
-   ) -> Option<(UomiCall<Test>, (u64, (u64, ())))> {
-       Some((call, (nonce, (nonce, ()))))
-   }
+   
 }
 
 
 impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
-    fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: pallet_ipfs::Call<Test>,
-        _public: Self::Public,
-        _account: <Test as frame_system::Config>::AccountId,
-        nonce: <Test as frame_system::Config>::Nonce
-    ) -> Option<(pallet_ipfs::Call<Test>, (u64, (u64, ())))> {
-        Some((call, (nonce, (nonce, ()))))
-    }
+    
 }
 
 // First, create a custom type for the test IPFS URL
@@ -386,6 +377,7 @@ impl sp_runtime::traits::Convert<AccountId, Option<AccountId>> for IdentityOf {
 impl pallet_session::historical::Config for Test {
     type FullIdentification = AccountId; // minimal
     type FullIdentificationOf = IdentityOf; // simple identity mapping
+    type RuntimeEvent = RuntimeEvent;
 }
 
 impl pallet_offences::Config for Test {
@@ -397,6 +389,23 @@ impl pallet_offences::Config for Test {
 impl pallet_authorship::Config for Test {
     type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
     type EventHandler = ();
+}
+
+impl<C> frame_system::offchain::CreateTransactionBase<C> for Test
+where
+	RuntimeCall: From<C>,
+{
+	type Extrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
+	type RuntimeCall = RuntimeCall;
+}
+
+impl<C> frame_system::offchain::CreateBare<C> for Test
+where
+	RuntimeCall: From<C>,
+{
+	fn create_bare(call: Self::RuntimeCall) -> Self::Extrinsic {
+		frame_system::mocking::MockUncheckedExtrinsic::<Test>::new_bare(call)
+	}
 }
 
 // Provide a minimal OffenceReporter for the mock runtime so the pallet's Config
@@ -431,6 +440,7 @@ impl pallet_balances::Config for Test {
    type MaxFreezes = ();
    type RuntimeHoldReason = ();
    type RuntimeFreezeReason = ();
+   type DoneSlashHandler = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
@@ -438,6 +448,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 
     pallet_balances::GenesisConfig::<Test> {
        balances: vec![],
+       dev_accounts: None,
     }
     .assimilate_storage(&mut t)
     .unwrap();
