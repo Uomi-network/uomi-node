@@ -31,6 +31,7 @@ use sp_runtime::{
     curve::PiecewiseLinear,
     traits::{BlakeTwo256, IdentityLookup, Verify},
     testing::{UintAuthorityId, TestXt},
+    generic::UncheckedExtrinsic,
     BuildStorage,
     DispatchError,
     KeyTypeId,
@@ -217,6 +218,8 @@ impl pallet_staking::Config for Test {
    type BenchmarkingConfig = TestBenchmarkingConfig;
    type WeightInfo = ();
    type MaxValidatorSet = ConstU32<1000>;
+   type RuntimeHoldReason = ();
+   type Filter = frame_support::traits::Everything;
 }
 
 pallet_staking_reward_curve::build! {
@@ -310,12 +313,32 @@ impl frame_system::Config for Test {
 }
 
 impl CreateSignedTransaction<UomiCall<Test>> for Test {
-   
+   fn create_signed_transaction<C>(
+       call: <Self as frame_system::offchain::CreateTransactionBase<UomiCall<Test>>>::RuntimeCall,
+       _public: <Self as SigningTypes>::Public,
+       account: <Self as frame_system::Config>::AccountId,
+       nonce: <Self as frame_system::Config>::Nonce,
+   ) -> Option<<Self as frame_system::offchain::CreateTransactionBase<UomiCall<Test>>>::Extrinsic>
+   where
+       C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>,
+   {
+        Some(UncheckedExtrinsic::new_signed(call, account.into(), (), ()))
+   }
 }
 
 
 impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
-    
+   fn create_signed_transaction<C>(
+       call: <Self as frame_system::offchain::CreateTransactionBase<pallet_ipfs::Call<Test>>>::RuntimeCall,
+       _public: <Self as SigningTypes>::Public,
+       account: <Self as frame_system::Config>::AccountId,
+       nonce: <Self as frame_system::Config>::Nonce,
+   ) -> Option<<Self as frame_system::offchain::CreateTransactionBase<pallet_ipfs::Call<Test>>>::Extrinsic>
+   where
+       C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>,
+   {
+        Some(UncheckedExtrinsic::new_signed(call, account.into(), (), ()))
+   }
 }
 
 // First, create a custom type for the test IPFS URL
