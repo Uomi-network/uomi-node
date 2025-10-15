@@ -4701,7 +4701,7 @@ checksum = "0399f9d26e5191ce32c498bebd31e7a3ceabc2745f0ac54af3f335126c3f24b3"
 
 [[package]]
 name = "finney-runtime"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "array-bytes 6.2.3",
  "ethereum",
@@ -8573,7 +8573,7 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 
 [[package]]
 name = "local-runtime"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "array-bytes 6.2.3",
  "ethereum",
@@ -22098,7 +22098,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uomi"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-trait",
  "clap",
@@ -22237,7 +22237,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "array-bytes 6.2.3",
  "ethereum",

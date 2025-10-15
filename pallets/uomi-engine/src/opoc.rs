@@ -1603,8 +1603,6 @@ impl<T: Config> Pallet<T> {
         }
         opoc_timeouts_operations.insert(request_id.clone(), timeouts);
 
-       
-
         true
     }
 
