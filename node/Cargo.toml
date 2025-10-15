@@ -1,6 +1,6 @@
 [package]
 name = "uomi"
-version = "0.3.6"
+version = "0.3.7"
 
 description = "Uomi node implementation in Rust."
 build = "build.rs"
@@ -58,6 +58,19 @@ ipfs-manager = { workspace = true }
 tss = { workspace = true }
 pallet-uomi-engine = { workspace = true }
 pallet-tss = { workspace = true }
+
+# Example / tooling crates (used only for examples like deploy_counter). These are regular
+# dependencies (not dev-dependencies) because examples are built with the crate. They are
+# kept non-default by not being optional features elsewhere.
+# Enable solc feature for contract compilation in examples.
+ethers = { workspace = true, features = ["solc"] }
+eyre = { version = "0.6" }
+tempfile = { version = "3" }
+semver = "1"
+rlp = { workspace = true }
+sha3 = { workspace = true }
+hex = { workspace = true }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 
 # client dependencies
 sc-basic-authorship = { workspace = true }
@@ -139,12 +152,15 @@ try-runtime-cli = { workspace = true, optional = true }
 
 # evm-tracing
 moonbeam-rpc-primitives-debug = { workspace = true, features = ["std"], optional = true }
-moonbeam-rpc-primitives-txpool = { workspace = true, features = ["std"], optional = true }
+## Removed: moonbeam-rpc-primitives-txpool (deprecated)
 
 moonbeam-primitives-ext = { workspace = true }
 moonbeam-rpc-debug = { workspace = true, optional = true }
 moonbeam-rpc-trace = { workspace = true, optional = true }
-moonbeam-rpc-txpool = { workspace = true, optional = true }
+## Removed: moonbeam-rpc-txpool
+
+# Cumulus host functions (for storage proof size reclaim etc.)
+cumulus-primitives-proof-size-hostfunction = { workspace = true }
 
 [build-dependencies]
 polkadot-cli = { workspace = true, optional = true }
@@ -181,7 +197,6 @@ try-runtime = [
 	"local-runtime/try-runtime",
 	"finney-runtime/try-runtime",
 	"uomi-runtime/try-runtime",
-	"try-runtime-cli/try-runtime",
 	"uomi-primitives/try-runtime",
 	"frame-system/try-runtime",
 	"frame-try-runtime/try-runtime",
@@ -196,11 +211,14 @@ try-runtime = [
 evm-tracing = [
 	"moonbeam-rpc-debug",
 	"moonbeam-rpc-primitives-debug",
-	"moonbeam-rpc-primitives-txpool",
 	"moonbeam-rpc-trace",
-	"moonbeam-rpc-txpool",
 	"local-runtime/evm-tracing",
 	"finney-runtime/evm-tracing",
 	"uomi-runtime/evm-tracing",
+	# Removed: moonbeam-rpc-txpool
 ]
 manual-seal = ["sc-consensus-manual-seal"]
+
+# Enable example tooling set (ethers + eyre + tempfile)
+# (Deprecated) example-tooling feature retained for backward compatibility (no-op now)
+example-tooling = []

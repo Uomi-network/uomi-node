@@ -20,8 +20,9 @@
 use fc_rpc::pending::ConsensusDataProvider;
 use fc_rpc::{
     Eth, EthApiServer, EthBlockDataCacheTask, EthFilter, EthFilterApiServer, EthPubSub,
-    EthPubSubApiServer, Net, NetApiServer, OverrideHandle, Web3, Web3ApiServer,
+    EthPubSubApiServer, Net, NetApiServer, Web3, Web3ApiServer,
 };
+use fc_storage::StorageOverride;
 use sc_consensus_grandpa::{
     FinalityProofProvider, GrandpaJustificationStream, SharedAuthoritySet, SharedVoterState,
 };
@@ -31,11 +32,10 @@ use jsonrpsee::RpcModule;
 use sc_client_api::{
     AuxStore, Backend, BlockchainEvents, StateBackend, StorageProvider, UsageProvider,
 };
-use sc_network::NetworkService;
+use sc_network::service::traits::NetworkService;
 use sc_network_sync::SyncingService;
 use sc_rpc::dev::DevApiServer;
 pub use sc_rpc::{DenyUnsafe, SubscriptionTaskExecutor};
-use sc_transaction_pool::{ChainApi, Pool};
 use sc_transaction_pool_api::TransactionPool;
 use sp_api::{CallApiAt, ProvideRuntimeApi};
 use sp_block_builder::BlockBuilder;
@@ -44,7 +44,9 @@ use sp_blockchain::{
 };
 use sp_keystore::KeystorePtr;
 use sp_consensus_babe::BabeApi;
+use sp_core::H256;
 use sp_runtime::traits::BlakeTwo256;
+use sp_runtime::traits::Block as BlockT;
 use std::sync::Arc;
 use sp_inherents::CreateInherentDataProviders;
 use sc_consensus_babe::BabeWorkerHandle;
@@ -54,7 +56,7 @@ use moonbeam_rpc_debug::{Debug, DebugServer};
 use moonbeam_rpc_trace::{Trace, TraceServer};
 // TODO: get rid of this completely now that it's part of frontier?
 #[cfg(feature = "evm-tracing")]
-use moonbeam_rpc_txpool::{TxPool as MoonbeamTxPool, TxPoolServer};
+// Removed custom Moonbeam TxPool RPC (moonbeam-rpc-txpool) per upstream deprecation.
 
 use super::consensus_data_provider::BabeConsensusDataProvider;
 use uomi_primitives::*;
@@ -76,14 +78,14 @@ pub struct EvmTracingConfig {
 pub fn open_frontier_backend<C>(
     client: Arc<C>,
     config: &sc_service::Configuration,
-) -> Result<Arc<fc_db::kv::Backend<Block>>, String>
+) -> Result<Arc<fc_db::kv::Backend<Block, C>>, String>
 where
     C: sp_blockchain::HeaderBackend<Block>,
 {
     let config_dir = config.base_path.config_dir(config.chain_spec.id());
     let path = config_dir.join("frontier").join("db");
 
-    Ok(Arc::new(fc_db::kv::Backend::<Block>::new(
+    Ok(Arc::new(fc_db::kv::Backend::<Block, C>::new(
         client,
         &fc_db::kv::DatabaseSettings {
             source: fc_db::DatabaseSource::RocksDb {
@@ -132,21 +134,17 @@ pub struct GrandpaDeps<B> {
 }
 
 /// Full client dependencies
-pub struct FullDeps<C, P, BE, A: ChainApi, SC, CIDP> {
+pub struct FullDeps<C, P, BE, SC, CIDP> {
     /// The client instance to use.
     pub client: Arc<C>,
     /// Transaction pool instance.
     pub pool: Arc<P>,
     /// The SelectChain Strategy
     pub select_chain: SC,
-    /// Graph pool instance.
-    pub graph: Arc<Pool<A>>,
     /// Network service
-    pub network: Arc<NetworkService<Block, Hash>>,
+    pub network: Arc<dyn NetworkService>,
     /// Chain syncing service
     pub sync: Arc<SyncingService<Block>>,
-    /// Whether to deny unsafe calls
-    pub deny_unsafe: DenyUnsafe,
     /// The Node authority flag
     pub is_authority: bool,
     /// Frontier Backend.
@@ -157,8 +155,8 @@ pub struct FullDeps<C, P, BE, A: ChainApi, SC, CIDP> {
     pub fee_history_limit: u64,
     /// Fee history cache.
     pub fee_history_cache: FeeHistoryCache,
-    /// Ethereum data access overrides.
-    pub overrides: Arc<OverrideHandle<Block>>,
+    /// Ethereum data access storage_override.
+    pub storage_override: Arc<dyn StorageOverride<Block>>,
     /// Cache for Ethereum block data.
     pub block_data_cache: Arc<EthBlockDataCacheTask<Block>>,
     /// Enable EVM RPC servers
@@ -178,8 +176,8 @@ pub struct FullDeps<C, P, BE, A: ChainApi, SC, CIDP> {
 
 /// Instantiate all RPC extensions and Tracing RPC.
 #[cfg(feature = "evm-tracing")]
-pub fn create_full<C, P, BE, A, SC, CIDP>(
-    deps: FullDeps<C, P, BE, A, SC, CIDP>,
+pub fn create_full<C, P, BE, SC, CIDP>(
+    deps: FullDeps<C, P, BE, SC, CIDP>,
     subscription_task_executor: SubscriptionTaskExecutor,
     pubsub_notification_sinks: Arc<
         fc_mapping_sync::EthereumBlockNotificationSinks<
@@ -207,24 +205,19 @@ where
         + fp_rpc::EthereumRuntimeRPCApi<Block>
         + BlockBuilder<Block>
         + BabeApi<Block>
-        + moonbeam_rpc_primitives_debug::DebugRuntimeApi<Block>
-        + moonbeam_rpc_primitives_txpool::TxPoolRuntimeApi<Block>,
-    P: TransactionPool<Block = Block> + Sync + Send + 'static,
+        + moonbeam_rpc_primitives_debug::DebugRuntimeApi<Block>,
+    P: TransactionPool<Block = Block, Hash = H256> + Sync + Send + 'static,
     BE: Backend<Block> + 'static,
     BE::State: StateBackend<BlakeTwo256>,
     BE::Blockchain: BlockchainBackend<Block>,
     CIDP: CreateInherentDataProviders<Block, ()> + Send + 'static,
-    A: ChainApi<Block = Block> + 'static,
     SC: sp_consensus::SelectChain<Block> + 'static,
 {
     let client = Arc::clone(&deps.client);
-    let graph = Arc::clone(&deps.graph);
 
     let mut io = create_full_rpc(deps, subscription_task_executor, pubsub_notification_sinks)?;
 
-    if tracing_config.enable_txpool {
-        io.merge(MoonbeamTxPool::new(Arc::clone(&client), graph).into_rpc())?;
-    }
+    // Custom txpool RPC removed; rely on Frontier (fc-rpc) native txpool if enabled elsewhere.
 
     if let Some(trace_filter_requester) = tracing_config.tracing_requesters.trace {
         io.merge(
@@ -246,8 +239,8 @@ where
 
 /// Instantiate all RPC extensions.
 #[cfg(not(feature = "evm-tracing"))]
-pub fn create_full<C, P, BE, A, SC, CIDP>(
-    deps: FullDeps<C, P, BE, A, SC, CIDP>,
+pub fn create_full<C, P, BE, SC, CIDP>(
+    deps: FullDeps<C, P, BE, SC, CIDP>,
     subscription_task_executor: SubscriptionTaskExecutor,
     pubsub_notification_sinks: Arc<
         fc_mapping_sync::EthereumBlockNotificationSinks<
@@ -274,19 +267,18 @@ where
         + fp_rpc::EthereumRuntimeRPCApi<Block>
         + BlockBuilder<Block>
         + BabeApi<Block>,
-    P: TransactionPool<Block = Block> + Sync + Send + 'static,
+    P: TransactionPool<Block = Block, Hash = H256> + Sync + Send + 'static,
     BE: Backend<Block> + 'static,
     BE::State: StateBackend<BlakeTwo256>,
     BE::Blockchain: BlockchainBackend<Block>,
     CIDP: CreateInherentDataProviders<Block, ()> + Send + 'static,
-    A: ChainApi<Block = Block> + 'static,
     SC: sp_consensus::SelectChain<Block> + 'static,
 {
     create_full_rpc(deps, subscription_task_executor, pubsub_notification_sinks)
 }
 
-fn create_full_rpc<C, P, BE, A, SC, CIDP>(
-    deps: FullDeps<C, P, BE, A, SC, CIDP>,
+fn create_full_rpc<C, P, BE, SC, CIDP>(
+    deps: FullDeps<C, P, BE, SC, CIDP>,
     subscription_task_executor: SubscriptionTaskExecutor,
     pubsub_notification_sinks: Arc<
         fc_mapping_sync::EthereumBlockNotificationSinks<
@@ -313,12 +305,11 @@ where
         + fp_rpc::EthereumRuntimeRPCApi<Block>
         + BlockBuilder<Block>
         + BabeApi<Block>,
-    P: TransactionPool<Block = Block> + Sync + Send + 'static,
+    P: TransactionPool<Block = Block, Hash = H256> + Sync + Send + 'static,
     BE: Backend<Block> + 'static,
     BE::State: StateBackend<BlakeTwo256>,
     BE::Blockchain: BlockchainBackend<Block>,
     CIDP: CreateInherentDataProviders<Block, ()> + Send + 'static,
-    A: ChainApi<Block = Block> + 'static,
     SC: sp_consensus::SelectChain<Block> + 'static,
 {
     use pallet_transaction_payment_rpc::{TransactionPayment, TransactionPaymentApiServer};
@@ -330,16 +321,14 @@ where
         client,
         pool,
         select_chain,
-        graph,
         network,
         sync,
-        deny_unsafe,
         is_authority,
         frontier_backend,
         filter_pool,
         fee_history_limit,
         fee_history_cache,
-        overrides,
+        storage_override,
         block_data_cache,
         enable_evm_rpc,
         pending_create_inherent_data_providers,
@@ -358,10 +347,10 @@ where
         finality_provider,
     } = grandpa;
 
-    io.merge(System::new(client.clone(), pool.clone(), deny_unsafe).into_rpc())?;
+    io.merge(System::new(client.clone(), pool.clone()).into_rpc())?;
     io.merge(TransactionPayment::new(client.clone()).into_rpc())?;
-    io.merge(Babe::new(client.clone(), worker_handle, keystore, select_chain, deny_unsafe).into_rpc())?;
-    io.merge(sc_rpc::dev::Dev::new(client.clone(), deny_unsafe).into_rpc())?;
+    io.merge(Babe::new(client.clone(), worker_handle, keystore, select_chain).into_rpc())?;
+    io.merge(sc_rpc::dev::Dev::new(client.clone()).into_rpc())?;
     io.merge(
         Grandpa::new(
             subscription_executor,
@@ -386,14 +375,14 @@ where
     let no_tx_converter: Option<fp_rpc::NoTransactionConverter> = None;
     
     io.merge(
-        Eth::<_, _, _, _, _, _, _, ()>::new(
+        Eth::<Block, _, _, _, _, _, ()>::new(
             client.clone(),
             pool.clone(),
-            graph.clone(),
+            pool.clone(),
             no_tx_converter,
             sync.clone(),
             Default::default(),
-            overrides.clone(),
+            storage_override.clone(),
             frontier_backend.clone(),
             is_authority,
             block_data_cache.clone(),
@@ -403,7 +392,7 @@ where
             10,
             None,
             pending_create_inherent_data_providers,
-            Some(Box::new(BabeConsensusDataProvider::new()) as Box<dyn ConsensusDataProvider<_>>),
+            Some(Box::new(super::consensus_data_provider::BabeConsensusDataProvider::new()) as Box<dyn ConsensusDataProvider<_>>),
           
         )
         .replace_config::<UomiEthConfig<C, BE>>()
@@ -416,7 +405,7 @@ where
         EthFilter::new(
             client.clone(),
             frontier_backend,
-            graph.clone(),
+            pool.clone(),
             filter_pool,
             max_stored_filters,
             max_past_logs,
@@ -435,7 +424,7 @@ where
             client.clone(),
             sync,
             subscription_task_executor,
-            overrides,
+            storage_override,
             pubsub_notification_sinks,
         )
         .into_rpc(),

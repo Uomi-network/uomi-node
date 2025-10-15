@@ -36,6 +36,48 @@ pub mod governance;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarks;
 
+/// Ephemeral EIP-7702 execution helpers.
+///
+/// This module defines lightweight types used by the runtime to stage ephemeral code execution
+/// for EIP-7702 transactions (Account Abstraction style). The current implementation is a stub
+/// that allows wiring an overlay lifecycle without persisting code into the account state.
+#[cfg(feature = "evm-tracing")]
+pub mod eip7702 {
+    use sp_core::H160;
+
+    /// Represents ephemeral contract code attached to an externally owned account for the scope
+    /// of a single transaction replay. For now, we only store the raw bytes; future iterations
+    /// may include metadata (hashes, authorization signatures, versioning).
+    #[derive(Clone, Debug)]
+    pub struct EphemeralCode<'a> {
+        pub account: H160,
+        pub code: &'a [u8],
+    }
+
+    /// Runtime-local overlay handle. In a full implementation this would integrate with the
+    /// Frontier backend state overlay or custom caching layer. For now it is a zero-cost guard.
+    pub struct OverlayGuard<F: FnOnce()>(Option<F>);
+
+    impl<F: FnOnce()> OverlayGuard<F> {
+        pub fn new(finalizer: F) -> Self { Self(Some(finalizer)) }
+    }
+
+    impl<F: FnOnce()> Drop for OverlayGuard<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() { f() }
+        }
+    }
+
+    /// Enter an ephemeral execution context for an EIP-7702 tx.
+    /// Returns a guard that will cleanup automatically on scope exit.
+    pub fn enter_ephemeral<'a>(_code: EphemeralCode<'a>) -> OverlayGuard<impl FnOnce()> {
+        // TODO: integrate with pallet-evm backend to inject code into a temporary map keyed by account.
+        OverlayGuard::new(|| {
+            // cleanup hook: remove ephemeral code injection (noop for stub)
+        })
+    }
+}
+
 use sp_runtime::{
     generic,
     traits::{BlakeTwo256, IdentifyAccount, Verify},

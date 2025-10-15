@@ -101,7 +101,7 @@ pub type LocalPrecompilesSetAt<R> = (
     PrecompileAt<AddressU64<8>, Bn128Pairing, EthereumPrecompilesChecks>,
     PrecompileAt<AddressU64<9>, Blake2F, EthereumPrecompilesChecks>,
     // Non-Local specific nor Ethereum precompiles :
-    PrecompileAt<AddressU64<1024>, Sha3FIPS256, (CallableByContract, CallableByPrecompile)>,
+    PrecompileAt<AddressU64<1024>, Sha3FIPS256<R, ()>, (CallableByContract, CallableByPrecompile)>,
     PrecompileAt<
         AddressU64<1025>,
         Dispatch<R, DispatchFilterValidate<RuntimeCall, WhitelistedCalls>>,

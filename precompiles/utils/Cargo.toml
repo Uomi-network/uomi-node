@@ -3,10 +3,10 @@ name = "precompile-utils"
 authors = { workspace = true }
 description = "Utils to write EVM precompiles."
 edition = "2021"
-version = "0.2.0"
+version = "0.1.0"
 
 [dependencies]
-derive_more = { workspace = true, optional = true }
+derive_more = { workspace = true, features = ["display"], optional = true }
 environmental = { workspace = true }
 hex = { workspace = true }
 hex-literal = { workspace = true, optional = true }
@@ -17,8 +17,8 @@ scale-info = { workspace = true, optional = true, features = ["derive"] }
 serde = { workspace = true, optional = true }
 similar-asserts = { workspace = true, optional = true }
 
-# Frontier
-precompile-utils-macro-v2 = { path = "macro" }
+# Moonbeam
+precompile-utils-macro = { path = "macro" }
 
 # Substrate
 frame-support = { workspace = true }
@@ -27,6 +27,7 @@ parity-scale-codec = { workspace = true }
 sp-core = { workspace = true }
 sp-io = { workspace = true }
 sp-runtime = { workspace = true }
+sp-weights = { workspace = true }
 sp-std = { workspace = true }
 
 # Frontier
@@ -34,11 +35,12 @@ evm = { workspace = true, features = ["with-codec"] }
 fp-evm = { workspace = true }
 pallet-evm = { workspace = true, features = ["forbid-evm-reentrancy"] }
 
-
+# Polkadot / XCM
+xcm = { workspace = true, optional = true }
 
 [dev-dependencies]
 hex-literal = { workspace = true }
-
+xcm = { workspace = true }
 
 [features]
 default = ["std"]
@@ -51,13 +53,7 @@ std = [
 	"parity-scale-codec/std",
 	"sp-core/std",
 	"sp-io/std",
-	"sp-std/std",
-	"evm/std",
-	"hex/std",
-	"log/std",
-	"num_enum/std",
-	"scale-info?/std",
-	"serde?/std",
-	"sp-runtime/std",
+	"xcm?/std",
 ]
+codec-xcm = ["xcm"]
 testing = ["derive_more", "hex-literal", "scale-info", "serde", "similar-asserts", "std"]
