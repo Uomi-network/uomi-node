@@ -75,7 +75,6 @@ sp_api::decl_runtime_apis! {
             max_priority_fee_per_gas: Option<U256>,
             nonce: Option<U256>,
             access_list: Option<Vec<(H160, Vec<H256>)>>,
-            authorization_list: Option<Vec<(H160, Vec<u8>)>>,
         ) -> Result<(), sp_runtime::DispatchError>;
     }
 }

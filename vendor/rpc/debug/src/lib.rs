@@ -834,7 +834,6 @@ where
                             .map(|item| (item.address, item.storage_keys))
                             .collect(),
                     ),
-                    authorization_list.map(|list| list.into_iter().map(|(addr, bytes)| (addr, bytes.0)).collect()),
                 )
                 .map_err(|e| internal_err(format!("Runtime api access error: {:?}", e)))?
                 .map_err(|e| internal_err(format!("DispatchError: {:?}", e)))?;

@@ -136,7 +136,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("uomi"),
     impl_name: create_runtime_str!("uomi"),
     authoring_version: 1,
-    spec_version: 8, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
+    spec_version: 11, 
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1, // Extrinsic payload shape change
@@ -2518,7 +2518,6 @@ impl_runtime_apis! {
 
 
     impl sp_genesis_builder::GenesisBuilder<Block> for Runtime {
-
         fn build_state(config: Vec<u8>) -> sp_genesis_builder::Result {
             build_state::<RuntimeGenesisConfig>(config)
         }
@@ -2577,7 +2576,7 @@ impl_runtime_apis! {
     impl moonbeam_rpc_primitives_debug::DebugRuntimeApi<Block> for Runtime {
         fn trace_transaction(
             extrinsics: Vec<<Block as BlockT>::Extrinsic>,
-            traced_transaction: &ethereum::TransactionV3,
+            traced_transaction: &pallet_ethereum::Transaction,
             header: &<Block as BlockT>::Header,
         ) -> Result<
             (),
@@ -2595,13 +2594,6 @@ impl_runtime_apis! {
                 let _ = match &ext.0.function {
                     RuntimeCall::Ethereum(pallet_ethereum::Call::transact { transaction }) => {
                         if transaction == traced_transaction {
-                            use uomi_primitives::eip7702::{enter_ephemeral, EphemeralCode};
-                            let _guard = match traced_transaction {
-                                ethereum::TransactionV3::EIP7702(inner) => {
-                                    Some(enter_ephemeral(EphemeralCode { account: inner.sender, code: &inner.authorization }))
-                                }
-                                _ => None,
-                            };
                             EvmTracer::new().trace(|| Executive::apply_extrinsic(ext));
                             return Ok(());
                         } else {
@@ -2626,9 +2618,6 @@ impl_runtime_apis! {
         > {
             use moonbeam_evm_tracer::tracer::EvmTracer;
 
-            let mut config = <Runtime as pallet_evm::Config>::config().clone();
-            config.estimate = true;
-
             // We need to follow the order when replaying the transactions.
             // Block initialize happens first then apply_extrinsic.
             Executive::initialize_block(header);
@@ -2639,14 +2628,7 @@ impl_runtime_apis! {
                     RuntimeCall::Ethereum(pallet_ethereum::Call::transact { transaction }) => {
                         if known_transactions.contains(&transaction.hash()) {
                             // Each known extrinsic is a new call stack.
-                            use uomi_primitives::eip7702::{enter_ephemeral, EphemeralCode};
                             EvmTracer::emit_new();
-                            let _guard = match transaction {
-                                ethereum::TransactionV3::EIP7702(inner) => {
-                                    Some(enter_ephemeral(EphemeralCode { account: inner.sender, code: &inner.authorization }))
-                                }
-                                _ => None,
-                            };
                             EvmTracer::new().trace(|| Executive::apply_extrinsic(ext));
                         } else {
                             let _ = Executive::apply_extrinsic(ext);
@@ -2658,6 +2640,85 @@ impl_runtime_apis! {
                 };
             }
 
+            Ok(())
+        }
+
+        fn trace_call(
+            header: &<Block as BlockT>::Header,
+            from: H160,
+            to: H160,
+            data: Vec<u8>,
+            value: U256,
+            gas_limit: U256,
+            max_fee_per_gas: Option<U256>,
+            max_priority_fee_per_gas: Option<U256>,
+            nonce: Option<U256>,
+            access_list: Option<Vec<(H160, Vec<H256>)>>,
+        ) -> Result<(), sp_runtime::DispatchError> {
+            use moonbeam_evm_tracer::tracer::EvmTracer;
+
+            // Initialize block: calls the "on_initialize" hook on every pallet
+            // in AllPalletsWithSystem.
+            Executive::initialize_block(header);
+
+            EvmTracer::new().trace(|| {
+                let is_transactional = false;
+                let validate = true;
+                let without_base_extrinsic_weight = true;
+
+
+                // Estimated encoded transaction size must be based on the heaviest transaction
+                // type (EIP1559Transaction) to be compatible with all transaction types.
+                let mut estimated_transaction_len = data.len() +
+                // pallet ethereum index: 1
+                // transact call index: 1
+                // Transaction enum variant: 1
+                // chain_id 8 bytes
+                // nonce: 32
+                // max_priority_fee_per_gas: 32
+                // max_fee_per_gas: 32
+                // gas_limit: 32
+                // action: 21 (enum varianrt + call address)
+                // value: 32
+                // access_list: 1 (empty vec size)
+                // 65 bytes signature
+                258;
+
+                if access_list.is_some() {
+                    estimated_transaction_len += access_list.encoded_size();
+                }
+
+                let gas_limit = gas_limit.min(u64::MAX.into()).low_u64();
+
+                let (weight_limit, proof_size_base_cost) =
+                    match <Runtime as pallet_evm::Config>::GasWeightMapping::gas_to_weight(
+                        gas_limit,
+                        without_base_extrinsic_weight
+                    ) {
+                        weight_limit if weight_limit.proof_size() > 0 => {
+                            (Some(weight_limit), Some(estimated_transaction_len as u64))
+                        }
+                        _ => (None, None),
+                    };
+
+                let _ = <Runtime as pallet_evm::Config>::Runner::call(
+                    from,
+                    to,
+                    data,
+                    value,
+                    gas_limit,
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                    nonce,
+                    access_list.unwrap_or_default(),
+                    Vec::new(),
+                    is_transactional,
+                    validate,
+                    weight_limit,
+                    proof_size_base_cost,
+                    <Runtime as pallet_evm::Config>::config(),
+                );
+            });
             Ok(())
         }
     }
