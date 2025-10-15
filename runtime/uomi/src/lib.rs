@@ -2518,6 +2518,10 @@ impl_runtime_apis! {
 
 
     impl sp_genesis_builder::GenesisBuilder<Block> for Runtime {
+<<<<<<< HEAD
+=======
+
+>>>>>>> a8ec1fb638a76f369ef9503f6aae1f706fa60498
         fn build_state(config: Vec<u8>) -> sp_genesis_builder::Result {
             build_state::<RuntimeGenesisConfig>(config)
         }
@@ -2576,7 +2580,7 @@ impl_runtime_apis! {
     impl moonbeam_rpc_primitives_debug::DebugRuntimeApi<Block> for Runtime {
         fn trace_transaction(
             extrinsics: Vec<<Block as BlockT>::Extrinsic>,
-            traced_transaction: &pallet_ethereum::Transaction,
+            traced_transaction: &ethereum::TransactionV3,
             header: &<Block as BlockT>::Header,
         ) -> Result<
             (),
@@ -2594,6 +2598,13 @@ impl_runtime_apis! {
                 let _ = match &ext.0.function {
                     RuntimeCall::Ethereum(pallet_ethereum::Call::transact { transaction }) => {
                         if transaction == traced_transaction {
+                            use uomi_primitives::eip7702::{enter_ephemeral, EphemeralCode};
+                            let _guard = match traced_transaction {
+                                ethereum::TransactionV3::EIP7702(inner) => {
+                                    Some(enter_ephemeral(EphemeralCode { account: inner.sender, code: &inner.authorization }))
+                                }
+                                _ => None,
+                            };
                             EvmTracer::new().trace(|| Executive::apply_extrinsic(ext));
                             return Ok(());
                         } else {
@@ -2628,7 +2639,14 @@ impl_runtime_apis! {
                     RuntimeCall::Ethereum(pallet_ethereum::Call::transact { transaction }) => {
                         if known_transactions.contains(&transaction.hash()) {
                             // Each known extrinsic is a new call stack.
+                            use uomi_primitives::eip7702::{enter_ephemeral, EphemeralCode};
                             EvmTracer::emit_new();
+                            let _guard = match transaction {
+                                ethereum::TransactionV3::EIP7702(inner) => {
+                                    Some(enter_ephemeral(EphemeralCode { account: inner.sender, code: &inner.authorization }))
+                                }
+                                _ => None,
+                            };
                             EvmTracer::new().trace(|| Executive::apply_extrinsic(ext));
                         } else {
                             let _ = Executive::apply_extrinsic(ext);
