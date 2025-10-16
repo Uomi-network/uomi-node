@@ -218,7 +218,7 @@ impl pallet_staking::Config for Test {
    type BenchmarkingConfig = TestBenchmarkingConfig;
    type WeightInfo = ();
    type MaxValidatorSet = ConstU32<1000>;
-   type RuntimeHoldReason = ();
+   type RuntimeHoldReason = RuntimeHoldReason;
    type Filter = frame_support::traits::Everything;
 }
 
@@ -461,7 +461,7 @@ impl pallet_balances::Config for Test {
    type WeightInfo = ();
    type FreezeIdentifier = ();
    type MaxFreezes = ();
-   type RuntimeHoldReason = ();
+   type RuntimeHoldReason = RuntimeHoldReason;
    type RuntimeFreezeReason = ();
    type DoneSlashHandler = ();
 }
