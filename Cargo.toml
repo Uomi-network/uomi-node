@@ -169,7 +169,7 @@ pallet-utility = { git = "https://github.com/paritytech/polkadot-sdk", branch = 
 pallet-staking = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
 frame-support = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
 frame-system = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
-frame-executive = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
+frame-executive = { git = "https://github.com/Uomi-network/polkadot-sdk", branch = "stable2506", default-features = false }
 frame-metadata-hash-extension = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
 frame-system-rpc-runtime-api = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
 pallet-election-provider-multi-phase = { git = "https://github.com/paritytech/polkadot-sdk", branch = "stable2506", default-features = false }
