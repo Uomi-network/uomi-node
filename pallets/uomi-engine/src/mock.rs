@@ -219,7 +219,7 @@ impl pallet_staking::Config for Test {
    type WeightInfo = ();
    type MaxValidatorSet = ConstU32<1000>;
    type RuntimeHoldReason = RuntimeHoldReason;
-   type Filter = frame_support::traits::Everything;
+   type Filter = frame_support::traits::Nothing;
 }
 
 pallet_staking_reward_curve::build! {
