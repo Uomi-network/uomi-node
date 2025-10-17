@@ -18,12 +18,15 @@ use frame_system::offchain::{
 };
 use pallet_session::{ SessionHandler, ShouldEndSession };
 use pallet_staking::TestBenchmarkingConfig;
-use sp_core::{ sr25519::{ Public, Signature }, ConstU16, ConstU32, ConstU64, Get, H256, ConstU128 };
+use sp_core::{ sr25519::{ Public, Signature }, ConstU16, ConstU32, ConstU64, Get, H256, ConstU128, ConstBool };
+
+use crate::Call as IpfsCall;
 
 use sp_runtime::{
     curve::PiecewiseLinear,
     testing::{ TestXt, UintAuthorityId },
     traits::{ BlakeTwo256, IdentityLookup },
+    generic::UncheckedExtrinsic,
     BuildStorage,
     KeyTypeId,
     Perbill,
@@ -164,10 +167,10 @@ impl SigningTypes for Test {
 // STAKING
 impl pallet_staking::Config for Test {
     type NominationsQuota = pallet_staking::FixedNominationsQuota<16>;
+    type OldCurrency = Balances;
     type Currency = Balances;
     type CurrencyBalance = Balance;
     type UnixTime = Timestamp;
-    type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
     type CurrencyToVote = SaturatingCurrencyToVote;
     type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
     type GenesisElectionProvider = Self::ElectionProvider;
@@ -191,6 +194,9 @@ impl pallet_staking::Config for Test {
     type EventListeners = ();
     type BenchmarkingConfig = TestBenchmarkingConfig;
     type WeightInfo = ();
+    type RuntimeHoldReason = RuntimeHoldReason;
+    type MaxValidatorSet = ConstU32<1000>;
+    type Filter = frame_support::traits::Nothing;
 }
 
 // REQUIRED BY type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
@@ -199,21 +205,42 @@ impl onchain::Config for OnChainSeqPhragmen {
     type Solver = SequentialPhragmen<AccountId, Perbill>;
     type DataProvider = Staking;
     type WeightInfo = ();
-    type MaxWinners = ConstU32<100>;
     type Bounds = ElectionsBounds;
+    type Sort = ConstBool<true>;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
+    type MaxWinnersPerPage = ConstU32<{ u32::MAX }>;
+
 }
 
 
 impl CreateSignedTransaction<crate::Call<Test>> for Test {
-    fn create_transaction<C: AppCrypto<Self::Public, Self::Signature>>(
-        call: crate::Call<Test>,
-        _public: Self::Public,
-        _account: <Test as frame_system::Config>::AccountId,
-        nonce: <Test as frame_system::Config>::Nonce
-    ) -> Option<(crate::Call<Test>, (u64, (u64, ())))> {
-        Some((call, (nonce, (nonce, ()))))
+    fn create_signed_transaction<C: AppCrypto<Self::Public, Self::Signature>>(
+       call: <Self as frame_system::offchain::CreateTransactionBase<IpfsCall<Test>>>::RuntimeCall,
+       _public: <Self as SigningTypes>::Public,
+       account: <Self as frame_system::Config>::AccountId,
+       nonce: <Self as frame_system::Config>::Nonce,
+    ) -> Option<<Self as frame_system::offchain::CreateTransactionBase<IpfsCall<Test>>>::Extrinsic> {
+        Some(UncheckedExtrinsic::new_signed(call, account.into(), (), ()))
     }
 }
+impl<C> frame_system::offchain::CreateTransactionBase<C> for Test
+where
+	RuntimeCall: From<C>,
+{
+	type Extrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
+	type RuntimeCall = RuntimeCall;
+}
+
+
+impl<C> frame_system::offchain::CreateBare<C> for Test
+where
+	RuntimeCall: From<C>,
+{
+	fn create_bare(call: Self::RuntimeCall) -> Self::Extrinsic {
+		frame_system::mocking::MockUncheckedExtrinsic::<Test>::new_bare(call)
+	}
+}
+
 
 // BALANCES
 impl pallet_balances::Config for Test {
@@ -228,20 +255,22 @@ impl pallet_balances::Config for Test {
     type WeightInfo = ();
     type FreezeIdentifier = ();
     type MaxFreezes = ();
-    type RuntimeHoldReason = ();
+    type RuntimeHoldReason = RuntimeHoldReason;
     type RuntimeFreezeReason = ();
+    type DoneSlashHandler = ();
 }
 // SESSION
 impl pallet_session::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type ValidatorId = AccountId;
-    type ValidatorIdOf = pallet_staking::StashOf<Self>;
+    type ValidatorIdOf = sp_runtime::traits::ConvertInto;
     type ShouldEndSession = TestShouldEndSession;
     type NextSessionRotation = TestNextSessionRotation;
     type SessionManager = ();
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+    type DisablingStrategy = ();
 }
 
 impl EstimateNextSessionRotation<BlockNumber> for TestNextSessionRotation {
@@ -286,7 +315,7 @@ impl pallet_timestamp::Config for Test {
 pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut t = frame_system::GenesisConfig::<Test>::default().build_storage().unwrap();
 
-    (pallet_balances::GenesisConfig::<Test> { balances: vec![] })
+    (pallet_balances::GenesisConfig::<Test> { balances: vec![], dev_accounts: None })
         .assimilate_storage(&mut t)
         .unwrap();
 
