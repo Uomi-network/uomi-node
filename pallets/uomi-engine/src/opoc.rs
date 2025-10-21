@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, NftId, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, NftId, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, OpocTimeoutLevels, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet, ValidatorSuccessfulRequests, ValidatorFailedRequests, LastProcessedEra
 };
 
 // Helper trait imports for accessing staking internals
@@ -1109,25 +1109,83 @@ impl<T: Config> Pallet<T> {
                 total_consensus: total_consensus.clone(),
             });
 
-            // Deferred staking penalty application for timeouts:
-            // We moved the reset of staking era reward points from the moment a timeout is recorded
-            // to the moment the request is finalized. This ensures we only slash rewards once we're
-            // sure about the request outcome and avoid penalizing during in-flight reassignment cycles.
-            // Requirement summary:
-            // 1. Apply only to validators that timed out (OpocTimeouts == true for this request).
-            // 2. A later valid output does NOT cancel the penalty (once timed out, still penalized at completion).
-            // 3. TODO (open decision): Whether to skip this on failed (Data::default()) completions. Probably not, so this is ok for now
+            // Track successful and failed requests for proportional penalties
+            // Get current era for tracking
+            let current_era = match <pallet_staking::CurrentEra<T>>::get() {
+                Some(e) => e,
+                None => {
+                    log::warn!("No current era found when tracking request completion");
+                    0
+                }
+            };
+
+            // Track failures (timeouts and errors)
+            // Requirement: Do not penalize timeouts at OPOC Level 0
             for (account_id, is_timeout) in OpocTimeouts::<T>::iter_prefix(request_id) {
                 if is_timeout {
-                    // Best-effort; failure shouldn't abort OPoC logic.
-                    if let Err(e) = Self::reset_validator_current_era_points(&account_id) {
-                        log::error!(
-                            "Failed to reset staking points for validator {:?} on completed request {:?}: {:?}",
+                    // Check the OPOC level at which the timeout occurred
+                    let timeout_level = OpocTimeoutLevels::<T>::get(request_id, &account_id);
+
+                    // Only count timeout as failure if it's NOT at Level 0
+                    if !matches!(timeout_level, OpocLevel::Level0) {
+                        // Increment failed requests counter
+                        ValidatorFailedRequests::<T>::mutate(current_era, &account_id, |count| {
+                            *count = count.saturating_add(1);
+                        });
+                        log::debug!(
+                            "Validator {:?} failed request {:?} (timeout at level {:?}) - total failures in era {:?}: {:?}",
                             account_id,
                             request_id,
-                            e
+                            timeout_level,
+                            current_era,
+                            ValidatorFailedRequests::<T>::get(current_era, &account_id)
+                        );
+                    } else {
+                        log::debug!(
+                            "Validator {:?} timed out at OPOC Level 0 for request {:?} - no penalty applied",
+                            account_id,
+                            request_id
                         );
                     }
+                }
+            }
+
+            for (account_id, has_error) in OpocErrors::<T>::iter_prefix(request_id) {
+                if has_error {
+                    // Increment failed requests counter (only if not already counted as timeout)
+                    let is_timeout = OpocTimeouts::<T>::get(request_id, &account_id);
+                    if !is_timeout {
+                        ValidatorFailedRequests::<T>::mutate(current_era, &account_id, |count| {
+                            *count = count.saturating_add(1);
+                        });
+                        log::debug!(
+                            "Validator {:?} failed request {:?} (error) - total failures in era {:?}: {:?}",
+                            account_id,
+                            request_id,
+                            current_era,
+                            ValidatorFailedRequests::<T>::get(current_era, &account_id)
+                        );
+                    }
+                }
+            }
+
+            // Track successful completions
+            for (account_id, _output_data) in NodesOutputs::<T>::iter_prefix(request_id) {
+                // Only count as success if they didn't timeout or error
+                let is_timeout = OpocTimeouts::<T>::get(request_id, &account_id);
+                let has_error = OpocErrors::<T>::get(request_id, &account_id);
+
+                if !is_timeout && !has_error {
+                    ValidatorSuccessfulRequests::<T>::mutate(current_era, &account_id, |count| {
+                        *count = count.saturating_add(1);
+                    });
+                    log::debug!(
+                        "Validator {:?} completed request {:?} successfully - total successes in era {:?}: {:?}",
+                        account_id,
+                        request_id,
+                        current_era,
+                        ValidatorSuccessfulRequests::<T>::get(current_era, &account_id)
+                    );
                 }
             }
             // remove from Inputs
@@ -1143,6 +1201,10 @@ impl<T: Config> Pallet<T> {
             // remove all inferences from NodesOpocL0Inferences
             for (account_id, _) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) {
                 NodesOpocL0Inferences::<T>::remove(request_id, account_id);
+            }
+            // remove all timeout levels tracking
+            for (account_id, _) in OpocTimeoutLevels::<T>::iter_prefix(request_id) {
+                OpocTimeoutLevels::<T>::remove(request_id, account_id);
             }
         }
 
@@ -1278,6 +1340,19 @@ impl<T: Config> Pallet<T> {
         nft_id: &NftId,
         validator: &T::AccountId
     ) -> Result<(), DispatchError> {
+        // Get the OPOC level before removing the assignment
+        let opoc_level = match opoc_assignment_operations.get(&(*request_id, validator.clone())) {
+            Some((_expiration, level)) => *level,
+            None => {
+                // If not in operations, check storage
+                let (_, level) = OpocAssignment::<T>::get(request_id, validator);
+                level
+            }
+        };
+
+        // Store the OPOC level at which the timeout occurred
+        OpocTimeoutLevels::<T>::insert(request_id, validator, opoc_level);
+
         // Decrease the number of works of the validator
         Self::opoc_nodes_works_operations_remove(nodes_works_operations, validator, request_id);
         // Remove the request from the OpocAssignment storage
@@ -1640,16 +1715,80 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    // Get the list of ProcessedOpocTimeoutEraResets for the current era and zero out the validator points
+    // Apply proportional penalties based on failed vs successful requests for a specific era.
+    // This function is called when an era ends (detected in on_initialize) to apply
+    // penalties exactly once per era, before any payout_stakers extrinsic is processed.
     pub(crate) fn reset_validators_current_era_points_for_current_era() -> Result<(), &'static str> {
-        // Get current era; if staking not yet started, skip
-        let current_era = match <pallet_staking::CurrentEra<T>>::get() { Some(e) => e, None => return Ok(())  };
-        let processed_validators: Vec<T::AccountId> = <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::iter_prefix(current_era)
-            .map(|(validator, _)| validator).collect();
-        for validator in processed_validators {
-            Self::reset_validator_current_era_points(&validator)?;
-            log::debug!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
+        // Get the last processed era (the one that just ended)
+        let era_to_penalize = LastProcessedEra::<T>::get();
+
+        if era_to_penalize == 0 {
+            // Era 0 or no era processed yet, skip
+            return Ok(());
         }
+
+        log::info!("Applying proportional penalties for era {:?}", era_to_penalize);
+
+        // Get all validators that have either successful or failed requests in this era
+        let mut validators_to_process = sp_std::collections::btree_set::BTreeSet::new();
+
+        for (validator, _) in ValidatorSuccessfulRequests::<T>::iter_prefix(era_to_penalize) {
+            validators_to_process.insert(validator);
+        }
+        for (validator, _) in ValidatorFailedRequests::<T>::iter_prefix(era_to_penalize) {
+            validators_to_process.insert(validator);
+        }
+
+        // Apply proportional penalties for each validator
+        for validator in validators_to_process {
+            let successful = ValidatorSuccessfulRequests::<T>::get(era_to_penalize, &validator);
+            let failed = ValidatorFailedRequests::<T>::get(era_to_penalize, &validator);
+            let total = successful.saturating_add(failed);
+
+            if total == 0 {
+                continue; // No requests processed, no penalty
+            }
+
+            if failed == 0 {
+                continue; // No failures, no penalty
+            }
+
+            // Calculate the proportion of failures
+            // penalty_fraction = failed / total
+            // We'll reduce the validator's points by this fraction
+            let penalty_fraction = sp_runtime::Perbill::from_rational(failed, total);
+
+            // Fetch era points structure and apply proportional penalty
+            let mut era_points = <pallet_staking::ErasRewardPoints<T>>::get(era_to_penalize);
+            if let Some(points_entry) = era_points.individual.get_mut(&validator) {
+                let original_points = *points_entry;
+                if original_points > 0 {
+                    // Calculate penalty: points to remove = original_points * penalty_fraction
+                    let penalty_points = penalty_fraction * original_points;
+                    let new_points = original_points.saturating_sub(penalty_points);
+                    *points_entry = new_points;
+
+                    // Recalculate total points
+                    let new_total = era_points.individual.values().copied().sum();
+                    era_points.total = new_total;
+
+                    <pallet_staking::ErasRewardPoints<T>>::insert(era_to_penalize, era_points);
+
+                    log::info!(
+                        "Applied proportional penalty to validator {:?} in era {:?}: {} successes, {} failures ({} total) - reduced points from {} to {} (penalty fraction: {:?})",
+                        validator,
+                        era_to_penalize,
+                        successful,
+                        failed,
+                        total,
+                        original_points,
+                        new_points,
+                        penalty_fraction
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 }

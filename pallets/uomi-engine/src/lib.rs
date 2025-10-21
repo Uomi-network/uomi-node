@@ -443,6 +443,18 @@ pub mod pallet {
 		ValueQuery
 	>;
 
+    // OpocTimeoutLevels storage is used to store the OPOC level at which the timeout occurred
+	#[pallet::storage]
+	pub type OpocTimeoutLevels<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+		T::AccountId, // account_id
+		OpocLevel, // level at which timeout occurred
+		ValueQuery
+	>;
+
     // Track (era, validator) pairs already reset to avoid double subtraction of reward points
     #[pallet::storage]
     pub type ProcessedOpocTimeoutEraResets<T: Config> = StorageDoubleMap<
@@ -452,6 +464,31 @@ pub mod pallet {
         (),
         OptionQuery
     >;
+
+    // Track successful requests per validator in the current era
+    #[pallet::storage]
+    pub type ValidatorSuccessfulRequests<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, EraIndex,
+        Blake2_128Concat, T::AccountId,
+        u32, // number of successful requests
+        ValueQuery
+    >;
+
+    // Track failed requests per validator in the current era (timeouts + errors)
+    #[pallet::storage]
+    pub type ValidatorFailedRequests<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, EraIndex,
+        Blake2_128Concat, T::AccountId,
+        u32, // number of failed requests
+        ValueQuery
+    >;
+
+    // Track the last era for which we applied proportional penalties
+    // Used to detect era changes and apply penalties exactly once per era
+    #[pallet::storage]
+    pub type LastProcessedEra<T: Config> = StorageValue<_, EraIndex, ValueQuery>;
 
     // OpocErrors storage is used to store the number of errors that have every validator
     #[pallet::storage]
@@ -564,11 +601,6 @@ pub mod pallet {
                 }
             }
 
-            // Reset validators' current era points at the end of each era to avoid overflow.
-            Self::reset_validators_current_era_points_for_current_era().unwrap_or_else(|e| {
-                log::error!("Error resetting validators' current era points: {:?}", e);
-            });
-
             // Be sure that the InherentDidUpdate is set to true and reset it to false.
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "UOMI-ENGINE: inherent must be updated once in the block");
@@ -577,6 +609,40 @@ pub mod pallet {
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
             Self::detect_invalid_output_offences();
             if let Err(e) = Self::process_pending_engine_offences() { log::error!("[ENGINE] Offence processing failed: {:?}", e); }
+
+            // Detect era change and apply proportional penalties to the previous era
+            // IMPORTANT: This MUST be in on_initialize (not on_finalize) because:
+            // 1. payout_stakers is called manually as an extrinsic AFTER era change
+            // 2. Extrinsics are executed AFTER on_initialize but BEFORE on_finalize
+            // 3. We need to apply penalties BEFORE any payout extrinsic is processed
+            let current_era = match <pallet_staking::CurrentEra<T>>::get() {
+                Some(e) => e,
+                None => return Weight::from_parts(20_000, 0),
+            };
+
+            let last_processed_era = LastProcessedEra::<T>::get();
+
+            // Check if era has changed
+            if current_era > last_processed_era {
+                log::info!(
+                    "UOMI-ENGINE: Era changed from {} to {}, applying proportional penalties to era {}",
+                    last_processed_era,
+                    current_era,
+                    last_processed_era
+                );
+
+                // Apply penalties to the era that just ended (last_processed_era)
+                // This ensures the penalties are applied exactly ONCE per era
+                if last_processed_era > 0 {
+                    if let Err(e) = Self::reset_validators_current_era_points_for_current_era() {
+                        log::error!("Error applying proportional penalties to era {}: {:?}", last_processed_era, e);
+                    }
+                }
+
+                // Update the last processed era
+                LastProcessedEra::<T>::set(current_era);
+            }
+
             Weight::from_parts(20_000,0)
         }
     }
