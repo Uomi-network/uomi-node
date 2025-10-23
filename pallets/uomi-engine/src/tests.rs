@@ -3,7 +3,8 @@ use pallet_ipfs::CidsStatus;
 use crate::{
     mock::*, Event, InherentDidUpdate, Inputs, MaxDataSize, OpocErrors, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
 };
-use crate::types::{Address, NftId, RequestId};
+use crate::types::{Address, NftId, RequestId, Data};
+use crate::payloads;
 use sp_std::vec;
 use env_logger::Builder;
 use frame_support::{
@@ -15,7 +16,7 @@ use frame_support::{
 };
 use log::LevelFilter;
 use sp_core::{
-    sr25519::Public,
+    sr25519::{Public, Signature},
     H160, U256,
 };
 use sp_keystore::{
@@ -705,6 +706,307 @@ fn test_offchain_run_wasm_function_with_get_request_sender() {
         // Be sure result is the address
         let address_as_vec: BoundedVec::<u8, MaxDataSize> = address.as_ref().to_vec().try_into().unwrap_or_else(|_| BoundedVec::<u8, MaxDataSize>::default());
         assert_eq!(result.unwrap(), address_as_vec);
+    });
+}
+
+#[test]
+fn test_offchain_run_wasm_function_with_call_http() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(2);
+
+        // Prepare OPOC Level0 stored HTTP response so Level1 can read it without network
+        let request_id: RequestId = U256::from(123);
+        let account_id: Public = Public::from_raw([7u8; 32]);
+
+        // Insert OPOC assignment for Level0 for this account
+        OpocAssignment::<Test>::insert(request_id, account_id.clone(), (U256::from(10), OpocLevel::Level0));
+
+        // Stored HTTP request tuple (method, url, body, response)
+        let method: Data = BoundedVec::try_from(b"POST".to_vec()).unwrap();
+        let url_str = "http://example.com/api".to_string();
+        let url: Data = BoundedVec::try_from(url_str.as_bytes().to_vec()).unwrap();
+        let body_str = "{}".to_string();
+        let body: Data = BoundedVec::try_from(body_str.as_bytes().to_vec()).unwrap();
+        let response_str = "resp".to_string();
+        let response: Data = BoundedVec::try_from(response_str.as_bytes().to_vec()).unwrap();
+        crate::NodesOpocL0HttpRequests::<Test>::insert(request_id, account_id.clone(), (method, url, body, response));
+
+        // Build a tiny WASM module in WAT that calls env.call_http and forwards the returned bytes to set_output
+        // JSON placed at memory offset 64; output written by host at 1024 as [len_le32][bytes]
+        // Then we read len and call set_output(1028, len)
+        let wat_module = r#"(module
+  (import "env" "call_http" (func $call_http (param i32 i32 i32 i32)))
+  (import "env" "set_output" (func $set_output (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 64) "{\"method\":\"POST\",\"url\":\"http://example.com/api\",\"body\":\"{}\"}")
+  (func (export "run")
+    (local $len i32)
+    i32.const 64       ;; ptr to JSON
+    i32.const 60       ;; len of JSON string above
+    i32.const 1024     ;; output_ptr
+    i32.const 0        ;; reserved
+    call $call_http
+    ;; load length prefix from [1024..1028]
+    i32.const 1024
+    i32.load
+    local.set $len
+    ;; forward response bytes to set_output
+    i32.const 1028
+    local.get $len
+    call $set_output))"#;
+
+        let wasm = wat::parse_str(wat_module).expect("failed to build test wasm");
+
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+        // Run with Level1 so call_http reads the stored Level0 response instead of performing network
+        let result = TestingPallet::offchain_run_wasm(
+            wasm,
+            input_data,
+            input_file_cid,
+            H160::repeat_byte(0xAA),
+            U256::from(2),
+            U256::from(99),
+            U256::from(1),
+            U256::from(99),
+            request_id,
+            OpocLevel::Level1,
+        );
+        assert!(result.is_ok());
+
+        // Expect the returned bytes to be the JSON {"status":200,"body":"resp"}
+        let expected_json = "{\"status\":200,\"body\":\"resp\"}";
+        let expected: Data = BoundedVec::try_from(expected_json.as_bytes().to_vec()).unwrap();
+        assert_eq!(result.unwrap(), expected);
+    });
+}
+
+#[test]
+fn test_offchain_run_wasm_function_with_call_http_agent_file() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(2);
+
+        // Prepare OPOC Level0 stored HTTP response so Level1 can read it without network
+        let request_id: RequestId = U256::from(123);
+        let account_id: Public = Public::from_raw([7u8; 32]);
+
+        // Insert OPOC assignment for Level0 for this account
+        OpocAssignment::<Test>::insert(request_id, account_id.clone(), (U256::from(10), OpocLevel::Level0));
+
+        // Stored HTTP request tuple (method, url, body, response)
+        let method: Data = BoundedVec::try_from(b"POST".to_vec()).unwrap();
+        let url_str = "http://example.com/api".to_string();
+        let url: Data = BoundedVec::try_from(url_str.as_bytes().to_vec()).unwrap();
+        let body_str = "{}".to_string();
+        let body: Data = BoundedVec::try_from(body_str.as_bytes().to_vec()).unwrap();
+        let response_str = "resp".to_string();
+        let response: Data = BoundedVec::try_from(response_str.as_bytes().to_vec()).unwrap();
+        crate::NodesOpocL0HttpRequests::<Test>::insert(request_id, account_id.clone(), (method, url, body, response));
+
+    // Load agent from file as precompiled WASM
+    let wasm = include_bytes!("./test_agents/agent_http.wasm").to_vec();
+
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+        // Run with Level1 so call_http reads the stored Level0 response instead of performing network
+        let result = TestingPallet::offchain_run_wasm(
+            wasm,
+            input_data,
+            input_file_cid,
+            H160::repeat_byte(0xAA),
+            U256::from(2),
+            U256::from(99),
+            U256::from(1),
+            U256::from(99),
+            request_id,
+            OpocLevel::Level1,
+        );
+        assert!(result.is_ok());
+
+        // Expect the returned bytes to be the JSON {"status":200,"body":"resp"}
+        let expected_json = "{\"status\":200,\"body\":\"resp\"}";
+        let expected: Data = BoundedVec::try_from(expected_json.as_bytes().to_vec()).unwrap();
+        assert_eq!(result.unwrap(), expected);
+    });
+}
+
+#[test]
+#[serial]
+fn test_offchain_run_wasm_function_with_call_http_level0_mocked() {
+    make_logger();
+
+    let mut ext = new_test_ext();
+
+    // Set up the offchain worker test environment with HTTP mocking and a tx pool
+    let (offchain, state) = TestOffchainExt::new();
+    let (pool, tx_state) = TestTransactionPoolExt::new();
+    ext.register_extension(OffchainDbExt::new(offchain.clone()));
+    ext.register_extension(OffchainWorkerExt::new(offchain));
+    ext.register_extension(TransactionPoolExt::new(pool));
+
+    // Create and register the keystore so unsigned payloads can be signed by Signer
+    let keystore = Arc::new(MemoryKeystore::new());
+    keystore
+        .sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None)
+        .unwrap();
+    ext.register_extension(KeystoreExt(keystore.clone()));
+
+    ext.execute_with(|| {
+        System::set_block_number(2);
+
+        // Prepare mocked HTTP response for the exact POST we'll issue from Level0
+        // Method/URL/body must match what the wasm provides to env.call_http
+        {
+            use sp_core::offchain::testing::PendingRequest;
+
+            let mut s = state.write();
+            s.expect_request(PendingRequest {
+                method: "POST".into(),
+                uri: "http://example.com/api".into(),
+                headers: vec![
+                    ("Content-Type".into(), "application/json".into()),
+                    ("Accept".into(), "application/json".into()),
+                ],
+                body: b"{}".to_vec(),
+                response: Some(b"resp".to_vec()),
+                sent: true,
+                ..Default::default()
+            });
+        }
+
+        // Build a tiny WASM that calls env.call_http and forwards the returned bytes to set_output
+        // Keep the JSON and its length in sync with the data segment below (length = 60)
+        let wat_module = r#"(module
+  (import "env" "call_http" (func $call_http (param i32 i32 i32 i32)))
+  (import "env" "set_output" (func $set_output (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 64) "{\"method\":\"POST\",\"url\":\"http://example.com/api\",\"body\":\"{}\"}")
+  (func (export "run")
+    (local $len i32)
+    i32.const 64
+    i32.const 60
+    i32.const 1024
+    i32.const 0
+    call $call_http
+    i32.const 1024
+    i32.load
+    local.set $len
+    i32.const 1028
+    local.get $len
+    call $set_output))"#;
+
+        let wasm = wat::parse_str(wat_module).expect("failed to build test wasm");
+
+        let input_data =
+            BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+        // Run with Level0 so call_http performs a (mocked) network POST and stores L0 record
+        let result = TestingPallet::offchain_run_wasm(
+            wasm,
+            input_data,
+            input_file_cid,
+            H160::repeat_byte(0xAA),
+            U256::from(2),
+            U256::from(99),
+            U256::from(1),
+            U256::from(99),
+            U256::from(123),
+            OpocLevel::Level0,
+        );
+        assert!(result.is_ok());
+
+        // Expect the returned bytes to be the JSON {"status":200,"body":"resp"}
+        let expected_json = "{\"status\":200,\"body\":\"resp\"}";
+        let expected: Data = BoundedVec::try_from(expected_json.as_bytes().to_vec()).unwrap();
+        assert_eq!(result.unwrap(), expected);
+
+        // Ensure an unsigned tx to store the L0 HTTP request was submitted
+        let txs = tx_state.read();
+        assert!(txs.transactions.len() >= 1);
+    });
+}
+
+#[test]
+#[serial]
+fn test_offchain_run_wasm_function_with_call_http_level0_mocked_agent_file() {
+    make_logger();
+
+    let mut ext = new_test_ext();
+
+    // Set up the offchain worker test environment with HTTP mocking and a tx pool
+    let (offchain, state) = TestOffchainExt::new();
+    let (pool, tx_state) = TestTransactionPoolExt::new();
+    ext.register_extension(OffchainDbExt::new(offchain.clone()));
+    ext.register_extension(OffchainWorkerExt::new(offchain));
+    ext.register_extension(TransactionPoolExt::new(pool));
+
+    // Create and register the keystore so unsigned payloads can be signed by Signer
+    let keystore = Arc::new(MemoryKeystore::new());
+    keystore
+        .sr25519_generate_new(crate::crypto::CRYPTO_KEY_TYPE, None)
+        .unwrap();
+    ext.register_extension(KeystoreExt(keystore.clone()));
+
+    ext.execute_with(|| {
+        System::set_block_number(2);
+
+        // Prepare mocked HTTP response for the exact POST we'll issue from Level0
+        // Method/URL/body must match what the agent_http.wat provides to env.call_http
+        {
+            use sp_core::offchain::testing::PendingRequest;
+
+            let mut s = state.write();
+            s.expect_request(PendingRequest {
+                method: "POST".into(),
+                uri: "http://example.com/api".into(),
+                headers: vec![
+                    ("Content-Type".into(), "application/json".into()),
+                    ("Accept".into(), "application/json".into()),
+                ],
+                body: b"{}".to_vec(),
+                response: Some(b"resp".to_vec()),
+                sent: true,
+                ..Default::default()
+            });
+        }
+
+    // Load the agent from file as precompiled WASM
+    let wasm = include_bytes!("./test_agents/agent_http.wasm").to_vec();
+
+        let input_data =
+            BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+        // Run with Level0 so call_http performs a (mocked) network POST and stores L0 record
+        let result = TestingPallet::offchain_run_wasm(
+            wasm,
+            input_data,
+            input_file_cid,
+            H160::repeat_byte(0xAA),
+            U256::from(2),
+            U256::from(99),
+            U256::from(1),
+            U256::from(99),
+            U256::from(123),
+            OpocLevel::Level0,
+        );
+        assert!(result.is_ok());
+
+        // Expect the returned bytes to be the JSON {"status":200,"body":"resp"}
+        let expected_json = "{\"status\":200,\"body\":\"resp\"}";
+        let expected: Data = BoundedVec::try_from(expected_json.as_bytes().to_vec()).unwrap();
+        assert_eq!(result.unwrap(), expected);
+
+        // Ensure an unsigned tx to store the L0 HTTP request was submitted
+        let txs = tx_state.read();
+        assert!(txs.transactions.len() >= 1);
     });
 }
 
@@ -1866,4 +2168,137 @@ fn create_validators(num_validators: u32, stake: u128) -> Vec<AccountId> {
     }
 
     validators
+}
+
+// OFFCHAIN WORKER HTTP REQUESTS
+//////////////////////////////////////////////////////////////////////////////////
+
+#[test]
+fn test_store_nodes_opoc_l0_http_request_ok() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        // create one validator
+        let validators = create_validators(1, 10_000_000_000_000_000_000);
+        let validator = validators[0].clone();
+
+        let request_id: RequestId = U256::from(42);
+        let method: Data = BoundedVec::try_from(b"POST".to_vec()).unwrap();
+        let url: Data = BoundedVec::try_from(b"http://example.com".to_vec()).unwrap();
+        let body: BoundedVec<u8, MaxDataSize> = BoundedVec::try_from(b"{\"k\":\"v\"}".to_vec()).unwrap();
+        let response: Data = BoundedVec::try_from(b"ok".to_vec()).unwrap();
+
+        let payload = payloads::PayloadNodesOpocL0HttpRequests::<Public> {
+            request_id,
+            http_request: (method.clone(), url.clone(), body.clone(), response.clone()),
+            public: validator.clone(),
+        };
+
+        // Call dispatchable directly with none origin; signature is ignored in function body
+        let res = TestingPallet::store_nodes_opoc_l0_http_request(
+            RuntimeOrigin::none(),
+            payload,
+            Signature::default(),
+        );
+        assert_ok!(res);
+
+        // Check storage
+        let stored = crate::NodesOpocL0HttpRequests::<Test>::get(request_id, validator.clone());
+        assert_eq!(stored, (method.clone(), url.clone(), body.clone(), response.clone()));
+
+        // Check event
+        let events = System::events();
+        assert!(events.iter().any(|e| match &e.event {
+            RuntimeEvent::TestingPallet(Event::NodeOpocL0HttpRequestReceived { request_id: rid, account_id, http_request }) => {
+                *rid == request_id && account_id == &validator && http_request == &(method.clone(), url.clone(), body.clone(), response.clone())
+            }
+            _ => false,
+        }));
+    });
+}
+
+#[test]
+fn test_store_nodes_opoc_l0_http_request_rejects_non_validator() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        // No validators created; use random public key
+        let non_validator: Public = Public::from_raw([9u8; 32]);
+
+        let request_id: RequestId = U256::from(7);
+        let method: Data = BoundedVec::try_from(b"POST".to_vec()).unwrap();
+        let url: Data = BoundedVec::try_from(b"http://example.com".to_vec()).unwrap();
+        let body: BoundedVec<u8, MaxDataSize> = BoundedVec::try_from(b"{}".to_vec()).unwrap();
+        let response: Data = BoundedVec::try_from(b"r".to_vec()).unwrap();
+
+        let payload = payloads::PayloadNodesOpocL0HttpRequests::<Public> {
+            request_id,
+            http_request: (method, url, body, response),
+            public: non_validator.clone(),
+        };
+
+        let res = TestingPallet::store_nodes_opoc_l0_http_request(
+            RuntimeOrigin::none(),
+            payload,
+            Signature::default(),
+        );
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), sp_runtime::DispatchError::Other("Only validators can call this function"));
+    });
+}
+
+#[test]
+fn test_offchain_worker_call_http_request_url_reads_stored_response_level1() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(5);
+
+        // create validator
+        let validators = create_validators(1, 10_000_000_000_000_000_000);
+        let validator = validators[0].clone();
+
+        let request_id: RequestId = U256::from(99);
+        let url_str = "http://example.com/api".to_string();
+        let body_str = "{\"a\":1}".to_string();
+
+        // Insert OPOC assignment for Level0 for this validator
+        crate::OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(10), OpocLevel::Level0));
+
+        // Insert stored HTTP request (Level0 output)
+        let method: Data = BoundedVec::try_from(b"POST".to_vec()).unwrap();
+        let url: Data = BoundedVec::try_from(url_str.as_bytes().to_vec()).unwrap();
+        let body: Data = BoundedVec::try_from(body_str.as_bytes().to_vec()).unwrap();
+        let response: Data = BoundedVec::try_from(b"resp".to_vec()).unwrap();
+        crate::NodesOpocL0HttpRequests::<Test>::insert(request_id, validator.clone(), (method, url, body, response));
+
+        // Call Level1 retrieval (should not perform network)
+        let out = TestingPallet::offchain_worker_call_http_request_url(
+            "POST".to_string(),
+            url_str.clone(),
+            body_str.clone(),
+            request_id,
+            U256::from(1),
+            0,
+            OpocLevel::Level1,
+        ).expect("should read stored response");
+
+        assert_eq!(out.status, 200);
+        assert_eq!(out.body, "resp".to_string());
+    });
+}
+
+#[test]
+fn test_offchain_worker_generate_data_for_wasm_packs_length() {
+    let data = b"abc".to_vec();
+    let packed = TestingPallet::offchain_worker_generate_data_for_wasm(data.clone());
+    assert_eq!(packed.len(), 4 + data.len());
+    let len_bytes = &packed[0..4];
+    let len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+    assert_eq!(len as usize, data.len());
+    assert_eq!(&packed[4..], &data[..]);
 }

@@ -7,8 +7,8 @@ use frame_system::offchain::{SignedPayload, SigningTypes};
 use sp_core::U256;
 
 use crate::{
-   MaxDataSize,
-   types::Version,
+    MaxDataSize,
+    types::{Version, Data},
 };
 
 // PayloadNodesOutputs
@@ -51,6 +51,21 @@ pub struct PayloadNodesOpocL0Inferences<Public> {
 }
 
 impl <T: SigningTypes> SignedPayload<T> for PayloadNodesOpocL0Inferences<T::Public> {
+    fn public(&self) -> T::Public {
+        self.public.clone()
+    }
+}
+
+// PayloadNodesOpocL0HttpRequests
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, DecodeWithMemTracking)]
+pub struct PayloadNodesOpocL0HttpRequests<Public> {
+    pub request_id: U256,
+    pub http_request: (Data, Data, BoundedVec<u8, MaxDataSize>, Data), // (method, url, body, response)
+    pub public: Public,
+}
+
+impl <T: SigningTypes> SignedPayload<T> for PayloadNodesOpocL0HttpRequests<T::Public> {
     fn public(&self) -> T::Public {
         self.public.clone()
     }

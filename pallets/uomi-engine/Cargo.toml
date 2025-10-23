@@ -62,6 +62,10 @@ sp-runtime = { workspace = true, features = ["std"] }
 sp-api = { workspace = true, features = ["std"] }
 serial_test = "2.0"
 uomi-primitives = { path = "../../primitives", package = "uomi-primitives", features = ["std"] }
+wat = "1.0"
+
+[build-dependencies]
+wat = "1.0"
 
 [features]
 default = ["std"]

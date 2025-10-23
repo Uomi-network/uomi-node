@@ -108,6 +108,7 @@ pub mod pallet {
     // Here are defined the constants and types that will be used by the pallet.
     parameter_types! {
         pub const MaxDataSize: u32 = 1024 * 1024; // bytes
+        pub const BlobMaxDataSize: u32 = 5 * 1024 * 1024; // bytes
         pub const BlockTime: u64 = 3; // seconds
     }
     
@@ -185,6 +186,11 @@ pub mod pallet {
             account_id: T::AccountId, // The account ID of the validator.
             inference_index: u32, // The inference index.
             inference_proof: Data, // The inference proof.
+        },
+        NodeOpocL0HttpRequestReceived {
+            request_id: RequestId, // The request ID.
+            account_id: T::AccountId, // The account ID of the validator.
+            http_request: (Data, Data, Data, Data), // The HTTP request (method, url, body, response) as bounded bytes.
         },
         // --- Offence reporting (structure only, no logic yet) ---
         EngineOffenceReported {
@@ -372,6 +378,22 @@ pub mod pallet {
         ValueQuery
 	>;
 
+    // NodesOpocL0HttpRequests storage is used to store the http requests executed by the opoc at level 0.
+    #[pallet::storage]
+    pub type NodesOpocL0HttpRequests<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId, // request_id
+        Blake2_128Concat,
+        T::AccountId, // account_id
+        (
+            Data, // http_method
+            Data, // http_url
+            Data, // http_body
+            Data // http_response
+        ),
+        ValueQuery
+    >;
     // Inputs storage is used to store the inputs of the requests received by the run_request function.
 	#[pallet::storage]
 	pub type Inputs<T: Config> = StorageMap<
@@ -634,6 +656,18 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 },
+                Call::store_nodes_opoc_l0_http_request { payload, signature } => {
+                    if !Self::verify_signature(payload.public.clone(), payload, signature) {
+                        return InvalidTransaction::BadProof.into();
+                    }
+
+                    ValidTransaction::with_tag_prefix("UomiEnginePallet")
+                        .priority(TransactionPriority::MAX)
+                        .and_provides(&call)
+                        .longevity(64_u64)
+                        .propagate(true)
+                        .build()
+                },
                 _ => {
                     InvalidTransaction::Call.into()
                 }
@@ -865,6 +899,27 @@ pub mod pallet {
             NodesOpocL0Inferences::<T>::insert(request_id, public_account_id.clone(), (inference_index, inference_proof.clone()));
 
             Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof });
+
+            Ok(())
+        }
+        #[pallet::call_index(6)]
+        #[pallet::weight(10_000)]
+        pub fn store_nodes_opoc_l0_http_request(
+            origin: OriginFor<T>, 
+            payload: payloads::PayloadNodesOpocL0HttpRequests<T::Public>,
+            _signature: T::Signature,
+        ) -> DispatchResult {
+            ensure_none(origin)?;
+            let payloads::PayloadNodesOpocL0HttpRequests { public, request_id, http_request } = payload;
+            let public_account_id = public.into_account();
+
+            if !Self::address_is_active_validator(&public_account_id) {
+                return Err("Only validators can call this function".into());
+            }
+
+            NodesOpocL0HttpRequests::<T>::insert(request_id, public_account_id.clone(), http_request.clone());
+
+            Self::deposit_event(Event::NodeOpocL0HttpRequestReceived { request_id, account_id: public_account_id, http_request });
 
             Ok(())
         }

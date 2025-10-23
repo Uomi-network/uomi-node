@@ -8,6 +8,7 @@ use sp_std::{
     vec::Vec,
 };
 use sp_core::Get;
+use crate::NodesOpocL0HttpRequests;
 use scale_info::prelude::string::String;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -147,11 +148,12 @@ use crate::OpocLevel;
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
     ipfs::IpfsInterface,
-    payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
+    payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences, PayloadNodesOpocL0HttpRequests},
     types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
     {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels, NodesOpocL0Inferences},
 };
 
+/// Call Ai request and response structures 
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiRequestWithProof {
     request_id: String,
@@ -177,6 +179,20 @@ struct CallAiResponse {
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiResponseCleaned {
     response: String,
+}
+
+/// Call HTTP Request request and response structures
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallHttpRequest {
+    method: String,
+    url: String,
+    body: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+pub struct CallHttpResponse {
+    pub status: u16,
+    pub body: String,
 }
 
 
@@ -515,6 +531,51 @@ impl<T: Config> Pallet<T> {
             memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
         };
 
+        let call_http_counter = std::sync::RwLock::new(0u32);
+        let call_http = move |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32, output_ptr: i32, _: i32| {
+            *call_http_counter.write().unwrap() += 1;
+            let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
+            let http_request_str = match sp_std::str::from_utf8(&buffer) {
+                Ok(s) => s,
+                Err(error) => {
+                    log::error!("Error decoding HTTP request bytes to UTF-8: {:?}", error);
+                    return;
+                }
+            };
+            let mut http_request: CallHttpRequest = match miniserde::json::from_str(http_request_str) {
+                Ok(request) => request,
+                Err(error) => {
+                    log::error!("Error deserializing HTTP request: {:?}", error);
+                    return;
+                }
+            };
+            let http_response: CallHttpResponse = match Self::offchain_worker_call_http_request_url(
+                // method: String, url: String, body: String, request_id: RequestId, required_consensus: U256, counter: u32, opoc_level: OpocLevel
+                http_request.method,
+                http_request.url,
+                http_request.body,
+                request_id,
+                nft_required_consensus,
+                *call_http_counter.read().unwrap(),
+                opoc_level,
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    log::error!("Error calling HTTP request: {:?}", error);
+                    CallHttpResponse {
+                        status: 0,
+                        body: String::new(),
+                    }
+                }
+            };
+            let response_json = miniserde::json::to_string(&http_response);
+            let data_to_write = Self::offchain_worker_generate_data_for_wasm(response_json.into_bytes());
+            
+            memory.write(caller, output_ptr as usize, &data_to_write).expect("Failed to write memory");
+        };
+
         // --- New: read_chain_state host function ---
         let read_chain_state = move |mut caller: wasmtime::Caller<'_, HostState>, pallet_ptr: i32, pallet_len: i32, storage_ptr: i32, storage_len: i32, key_ptr: i32, key_len: i32, output_ptr: i32| {
             let memory = caller.get_export("memory").and_then(|x| x.into_memory()).expect("Failed to get memory export");
@@ -546,6 +607,7 @@ impl<T: Config> Pallet<T> {
         linker.func_wrap("env", "get_request_sender", get_request_sender).unwrap();
         linker.func_wrap("env", "console_log", console_log).unwrap();
         linker.func_wrap("env", "call_ai", call_ai).unwrap();
+        linker.func_wrap("env", "call_http", call_http).unwrap();
         linker.func_wrap("env", "read_chain_state", read_chain_state).unwrap();
 
         let instance = match linker.instantiate(&mut store, &module) {
@@ -587,7 +649,7 @@ impl<T: Config> Pallet<T> {
         }
     }
 
-    fn offchain_worker_generate_data_for_wasm(data: Vec<u8>) -> Vec<u8> {
+    pub fn offchain_worker_generate_data_for_wasm(data: Vec<u8>) -> Vec<u8> {
         let data_len = data.len();
         let mut wasm_data = Vec::new();
 
@@ -739,6 +801,133 @@ impl<T: Config> Pallet<T> {
             Ok(output.to_vec())
         }
     
+    }
+
+
+
+
+    /**
+    *
+
+
+    */
+
+
+    #[cfg(feature = "std")]
+    pub fn offchain_worker_call_http_request_url(method: String, url: String, body: String, request_id: RequestId, required_consensus: U256, counter: u32, opoc_level: OpocLevel) -> Result<CallHttpResponse, DispatchError> {
+        let request_id_as_string = format!("{:?}", request_id);
+
+
+        if opoc_level == OpocLevel::Level0 {
+
+            let output = Self::offchain_worker_call_http_send_post_request(url.as_str(), body.clone())?;
+            let output_string = output.body.clone();
+            let output_string = output_string.trim();
+            
+            // Store the inference on OpocL0H
+            let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
+            if !signer.can_sign() {
+                log::error!("No accounts available to sign the transaction");
+                return Err(DispatchError::Other("No accounts available to sign"));
+            }
+
+            let _ = signer.send_unsigned_transaction(
+                |acct| PayloadNodesOpocL0HttpRequests { 
+                    request_id: request_id.clone(),
+                    http_request: (
+                        // method
+                        "POST".as_bytes().to_vec().try_into().unwrap_or_default(),
+                        // url
+                        url.as_bytes().to_vec().try_into().unwrap_or_default(),
+                        // body
+                        body.as_bytes().to_vec().try_into().unwrap_or_default(),
+                        // response
+                        output_string.as_bytes().to_vec().try_into().unwrap_or_default(),
+                    ),
+                    public: acct.public.clone(), 
+                },
+                |payload, signature| Call::store_nodes_opoc_l0_http_request { 
+                    payload, 
+                    signature 
+                },
+            );
+            
+
+            Ok(output)
+        } else {
+            // In case of HTTP URLs we naively return the output stored during OPOC level 0 execution from the storage NodesOpocL0HttpRequests
+            let mut stored_response: Option<String> = None;
+            for (account_id, http_request_data) in NodesOpocL0HttpRequests::<T>::iter_prefix(request_id) { 
+                let (http_method, http_url, http_body, http_response) = http_request_data;
+                let http_method_str = String::from_utf8(http_method.to_vec()).unwrap_or_default();
+                let http_url_str = String::from_utf8(http_url.to_vec()).unwrap_or_default();
+                let http_body_str = String::from_utf8(http_body.to_vec()).unwrap_or_default();
+
+                if http_method_str == "POST" && http_url_str == url && http_body_str == body {
+                    let opoc_assignment = OpocAssignment::<T>::try_get(request_id, account_id);
+                    if opoc_assignment.is_ok() && opoc_assignment.unwrap().1 == OpocLevel::Level0 {
+                        stored_response = Some(String::from_utf8(http_response.to_vec()).unwrap_or_default());
+                        break;
+                    }
+                }
+            }
+            if stored_response.is_none() {
+                log::error!("UOMI-ENGINE: No output data found for request_id {:?} and HTTP request", request_id);
+                return Err(DispatchError::Other("No output data found for the requested HTTP request"));
+            }
+
+            Ok(CallHttpResponse { status: 200, body: stored_response.unwrap() })
+        }
+    
+    }
+
+    /////
+    ///
+    
+
+
+
+
+    fn offchain_worker_call_http_send_request(url: &str, body: String, method: &str) -> Result<CallHttpResponse, DispatchError> {
+        // For now, we only support POST requests
+        match method {
+            "POST" => Self::offchain_worker_call_http_send_post_request(url, body),
+            _ => {
+                log::error!("UOMI-ENGINE: Unsupported HTTP method: {}", method);
+                Err(DispatchError::Other("Unsupported HTTP method"))
+            }
+        }
+    }
+
+
+
+    fn offchain_worker_call_http_send_post_request(url: &str, body: String) -> Result<CallHttpResponse, DispatchError> {
+        let mut request = sp_runtime::offchain::http::Request::post(url, vec![body.as_bytes()]);
+        request = request
+            .add_header("Content-Type", "application/json")
+            .add_header("Accept", "application/json");
+
+        let pending = match request.send() {
+            Ok(pending_request) => pending_request,
+            Err(e) => {
+                log::error!("UOMI-ENGINE: Failed to send HTTP request: {:?}", e);
+                return Err(DispatchError::Other("Failed to send HTTP request"));
+            }
+        };
+    
+        let response = match pending.wait() {
+            Ok(response) => response,
+            Err(e) => {
+                log::error!("UOMI-ENGINE: HTTP request failed after sending: {:?}", e);
+                return Err(DispatchError::Other("HTTP request failed after sending"));
+            }
+        };
+
+        let response_body = response.body().collect::<Vec<u8>>();
+        Ok(CallHttpResponse {
+            status: response.code,
+            body: String::from_utf8(response_body).unwrap_or_default(),
+        })
     }
     
     fn offchain_worker_call_ai_send_request(body: String) -> Result<Data, DispatchError> {
