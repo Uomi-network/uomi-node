@@ -13,7 +13,7 @@ mod tests;
 #[cfg(test)]
 mod prop_tests;
 
-mod fsa;
+pub mod fsa;
 mod multichain;
 mod payloads;
 pub mod crypto;

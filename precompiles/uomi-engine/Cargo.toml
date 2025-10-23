@@ -12,6 +12,7 @@ repository.workspace = true
 pallet-uomi-engine = { workspace = true }
 precompile-utils = { workspace = true }
 log = { workspace = true }
+pallet-tss = { workspace = true }
 
 # Frontier
 fp-evm = { workspace = true }

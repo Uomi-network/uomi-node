@@ -4701,7 +4701,7 @@ checksum = "52051878f80a721bb68ebfbc930e07b65ba72f2da88968ea5c06fd6ca3d3a127"
 
 [[package]]
 name = "finney-runtime"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "array-bytes 6.2.3",
  "ethereum",
@@ -8562,7 +8562,7 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 
 [[package]]
 name = "local-runtime"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "array-bytes 6.2.3",
  "ethereum",
@@ -10851,6 +10851,7 @@ dependencies = [
  "hex",
  "log",
  "pallet-evm",
+ "pallet-tss",
  "pallet-uomi-engine",
  "parity-scale-codec",
  "precompile-utils",
@@ -22084,7 +22085,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uomi"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "async-trait",
  "clap",
@@ -22223,7 +22224,7 @@ dependencies = [
 
 [[package]]
 name = "uomi-runtime"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "array-bytes 6.2.3",
  "ethereum",

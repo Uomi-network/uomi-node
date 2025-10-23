@@ -7,6 +7,9 @@ use frame_support::pallet_prelude::IsType;
 use sp_std::vec::Vec;
 use core::marker::PhantomData;
 use sp_core::{U256, H160};
+// Import pallet-tss types/fn
+use pallet_tss::types::NftId as TssNftId;
+use pallet_tss::{self};
 
 /// A precompile that exposes `call_agent` function.
 pub struct UomiEnginePrecompile<T>(PhantomData<T>);
@@ -14,7 +17,7 @@ pub struct UomiEnginePrecompile<T>(PhantomData<T>);
 #[precompile_utils::precompile]
 impl<R> UomiEnginePrecompile<R>
 where
-    R: pallet_evm::Config + pallet_uomi_engine::Config,
+    R: pallet_evm::Config + pallet_uomi_engine::Config + pallet_tss::Config,
     R::AccountId: IsType<sp_core::crypto::AccountId32>,
 {
     #[precompile::public("call_agent(uint256,uint256,address,bytes,bytes,uint256,uint256)")]
@@ -36,7 +39,7 @@ where
         let sender: H160 = caller.into();
 
         //check if sender is 0x609a8AEeef8b89BE02C5b59A936A520547252824
-        let agent_address = H160::from_slice(&hex::decode("Db8434F12f21a678F749cb34E6CE0c168776461c").expect("Invalid hex"));
+        let agent_address = H160::from_slice(&hex::decode("9e37B350bde0C386E228a091fC0C3004110933D1").expect("Invalid hex"));
 
         if sender != agent_address {
             return Err(revert("Only the agent contract can call this function"));
@@ -83,5 +86,37 @@ where
             U256::from(total_executions),
             U256::from(total_consensus)
         ))
+    }
+
+    // View: derive agent wallet address from NFT id via TSS aggregated key
+    // Returns (address) or zero address if not found
+    #[precompile::public("get_agent_wallet(uint256)")]
+    #[precompile::view]
+    fn get_agent_wallet(
+        _: &mut impl PrecompileHandle,
+        nft_id: U256,
+    ) -> EvmResult<Address> {
+        // Convert U256 -> bytes little endian limbs similar to usage inside pallet_tss (see fsa.rs)
+        // fsa.rs builds bytes via: nft_id.0.iter().flat_map(|&x| x.to_le_bytes())
+        let le_bytes: Vec<u8> = nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+        // Try into bounded vec (crate::types::NftId alias imported as TssNftId)
+        let tss_nft: TssNftId = match TssNftId::try_from(le_bytes) {
+            Ok(v) => v,
+            Err(_) => return Ok(Address(H160::zero())),
+        };
+        // Call derive_from_address (pub(crate) function) reachable via module path pallet_tss::fsa
+        let maybe_hex = pallet_tss::fsa::derive_from_address::<R>(tss_nft);
+        if let Some(hex_str) = maybe_hex {
+            // Parse hex string into H160
+            if let Some(stripped) = hex_str.strip_prefix("0x") {
+                if stripped.len() == 40 {
+                    if let Ok(bytes) = hex::decode(stripped) {
+                        let addr = H160::from_slice(&bytes);
+                        return Ok(Address(addr));
+                    }
+                }
+            }
+        }
+        Ok(Address(H160::zero()))
     }
 }

@@ -175,7 +175,8 @@ impl<T: Config> crate::pallet::Pallet<T> {
 /// 3. Normalize key to 64-byte uncompressed form (strip 0x04 prefix if 65 bytes).
 /// 4. keccak256(pubkey[0..64]) and take last 20 bytes -> H160.
 /// 5. Return hex string 0x + lowercase.
-pub(crate) fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String> {
+/// Public so EVM precompiles (uomi-engine) can derive an agent wallet address for a given NFT.
+pub fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String> {
     // Find session id with this nft_id (linear scan; could be optimized with reverse index later)
     let mut found_session: Option<crate::types::SessionId> = None;
     for (sid, sess) in DkgSessions::<T>::iter() { if sess.nft_id == nft_id { found_session = Some(sid); break; } }
