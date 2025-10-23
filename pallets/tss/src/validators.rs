@@ -78,7 +78,7 @@ impl<T: Config> Pallet<T> {
 
     /// Reset report counts for all validators at the end of an era
     pub fn reset_validator_report_counts() -> DispatchResult {
-        log::info!("[TSS] Resetting validator report counts at era end");
+        log::debug!("[TSS] Resetting validator report counts at era end");
         
         // Get all validators with report counts
         let reported_validators: Vec<(T::AccountId, u32)> = ParticipantReportCount::<T>::iter()
@@ -101,7 +101,7 @@ impl<T: Config> Pallet<T> {
                 ParticipantReportCount::<T>::insert(validator, 0);
             }
         } else {
-            log::info!("[TSS] No validators with positive report counts to reset");
+            log::debug!("[TSS] No validators with positive report counts to reset");
         }
         
         Ok(())

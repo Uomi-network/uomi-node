@@ -767,7 +767,7 @@ pub mod pallet {
         // Store FSA transaction request (nft_id + chain_id + message bytes) if not already stored
         if !FsaTransactionRequests::<T>::contains_key(&payload.request_id) {
             FsaTransactionRequests::<T>::insert(&payload.request_id, (nft_id.clone(), payload.chain_id, payload.message.clone()));
-            log::info!("[TSS] Stored FSA transaction request for request_id {:?} on chain {}", payload.request_id, payload.chain_id);
+            log::debug!("[TSS] Stored FSA transaction request for request_id {:?} on chain {}", payload.request_id, payload.chain_id);
         }
 
         Self::create_signing_session(
@@ -799,7 +799,7 @@ pub mod pallet {
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        log::info!("[TSS] Call::submit_dkg_result");
+        log::debug!("[TSS] Call::submit_dkg_result");
 
         let who = payload.public().into_account();
         let session_id = payload.session_id;
@@ -809,7 +809,7 @@ pub mod pallet {
         let mut session =
             DkgSessions::<T>::get(session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
 
-        log::info!("[TSS] Current session state: {:?}", session.state);
+        log::debug!("[TSS] Current session state: {:?}", session.state);
     // Only allow result submission while session is in creation or in-progress
     ensure!(matches!(session.state, SessionState::DKGCreated | SessionState::DKGInProgress), Error::<T>::InvalidSessionState);
 
@@ -818,8 +818,8 @@ pub mod pallet {
 
         // Check if the validator was involved in the DKG session
         let validator_id = ValidatorIds::<T>::get(who.clone()).ok_or(Error::<T>::UnauthorizedParticipation)?;
-        log::info!("[TSS] Validator ID: {:?}", validator_id);
-        log::info!("[TSS] Is participant: {:?}", session.participants.contains(&who));
+        log::debug!("[TSS] Validator ID: {:?}", validator_id);
+        log::debug!("[TSS] Is participant: {:?}", session.participants.contains(&who));
         ensure!(
             session.participants.contains(&who),
             Error::<T>::UnauthorizedParticipation
@@ -828,7 +828,7 @@ pub mod pallet {
         // Add the vote to the proposed public keys
         ProposedPublicKeys::<T>::insert(nft_id.clone(), validator_id, aggregated_key.clone());
 
-        log::info!("[TSS] Proposed public key inserted");
+        log::debug!("[TSS] Proposed public key inserted");
 
         let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
 
@@ -844,7 +844,7 @@ pub mod pallet {
         let total_validators = session.participants.len() as u32;
         let required_votes = (total_validators * threshold) / 100;
 
-        log::info!("[TSS] Votes: {}, Required: {}", votes, required_votes);
+        log::debug!("[TSS] Votes: {}, Required: {}", votes, required_votes);
 
         if votes >= required_votes {
             // If the threshold is met, finalize the DKG session
@@ -1969,7 +1969,7 @@ impl<T: Config> Pallet<T> {
         offence_type: TssOffenceType,
         offenders: Vec<[u8; 32]>,
     ) -> DispatchResult {
-        log::info!("[TSS] Reporting offence from client: {:?} for session {} with {} offenders", 
+        log::debug!("[TSS] Reporting offence from client: {:?} for session {} with {} offenders", 
             offence_type, session_id, offenders.len());
 
         let offenders_count = offenders.len() as u32;
@@ -2051,7 +2051,7 @@ impl<T: Config> Pallet<T> {
         let pending: Vec<(SessionId, (TssOffenceType, T::AccountId, BoundedVec<T::AccountId, T::MaxNumberOfShares>))> =
             PendingTssOffences::<T>::iter().collect();
         if pending.is_empty() { return Ok(()); }
-        log::info!("[TSS] Processing {} pending offences", pending.len());
+        log::debug!("[TSS] Processing {} pending offences", pending.len());
 
         for (session_id, (offence_type, reporter, offenders)) in pending.into_iter() {
             // Acquire DKG session for validator set size; skip if missing

@@ -33,7 +33,7 @@ impl MessageProcessor {
         B: sp_runtime::traits::Block,
         C: ClientManager<B>,
     {
-        log::info!("[TSS] 📨 SessionManager RECEIVED SIGNED MESSAGE: {:?} from public key: {:?}", 
+        log::debug!("[TSS] 📨 SessionManager RECEIVED SIGNED MESSAGE: {:?} from public key: {:?}", 
             std::mem::discriminant(&signed_message.message),
             signed_message.sender_public_key);
         
@@ -45,7 +45,7 @@ impl MessageProcessor {
         
     // Block-age validation is performed in the gossip validator stage.
         
-    log::info!("[TSS] ✅ Signed message signature and block number verified successfully");
+    log::debug!("[TSS] ✅ Signed message signature and block number verified successfully");
         
         // Extract the inner message and sender info
     let message = signed_message.message.clone();
@@ -146,7 +146,7 @@ impl MessageProcessor {
         match &message {
             TssMessage::GetInfo(ref _public_key, challenge_nonce) => {
                 // Someone's asking about ourselves, we need to announce ourselves
-                log::info!("[TSS] Received GetInfo message from {:?}", sender_peer_id);                
+                log::debug!("[TSS] Received GetInfo message from {:?}", sender_peer_id);                
                 if let Some(mut announcement) = session_manager.announcement.clone() {
                     // Inject the challenge nonce by re-signing announcement with the nonce influencing the signature payload (along with block number).
                     // For now we simply log it; future work could bind challenge into inner announcement signature.
@@ -411,7 +411,7 @@ impl MessageProcessor {
             TssMessage::Announce(nonce, peer_id_bytes, public_key_data, signature, challenge_answer) => {
                 // Handle the announcement by extracting peer information and adding to peer_mapper
                 if let Ok(announcing_peer_id) = PeerId::from_bytes(&peer_id_bytes[..]) {
-                    log::info!("[TSS] 📢 Processing signed announcement from peer: {} with public key: {:?}", 
+                    log::debug!("[TSS] 📢 Processing signed announcement from peer: {} with public key: {:?}", 
                         announcing_peer_id.to_base58(), 
                         public_key_data);
                     
@@ -471,7 +471,7 @@ impl MessageProcessor {
                         peer_mapper.add_peer(announcing_peer_id.clone(), public_key_data.clone());
                         drop(peer_mapper);
                         
-                        log::info!("[TSS] ✅ Successfully added peer {} to peer_mapper", announcing_peer_id.to_base58());
+                        log::debug!("[TSS] ✅ Successfully added peer {} to peer_mapper", announcing_peer_id.to_base58());
                         
                         // Now consume any queued messages for this peer
                         // We need to check both the real peer_id and messages stored by public key
@@ -479,7 +479,7 @@ impl MessageProcessor {
                         let mut messages_by_key = session_manager.consume_unknown_peer_queue_by_public_key(&public_key_data);
                         messages.append(&mut messages_by_key);
                         for queued_signed in messages {
-                            log::info!("[TSS] 🔄 Processing queued signed message for newly announced peer: {:?}", 
+                            log::debug!("[TSS] 🔄 Processing queued signed message for newly announced peer: {:?}", 
                                 std::mem::discriminant(&queued_signed.message));
                             // Re-verify signature now that we trust the peer mapping
                             if verification::verify_signature(&queued_signed) {
@@ -506,7 +506,7 @@ impl MessageProcessor {
             }
 
             TssMessage::ECDSARetryRequest(session_id, phase, round, missing_participants) => {
-                log::info!("[TSS] Received retry request for session {} phase {:?} round {}", session_id, phase, round);
+                log::debug!("[TSS] Received retry request for session {} phase {:?} round {}", session_id, phase, round);
                 if let Some(msg) = session_manager.retry_mechanism.handle_retry_request(*session_id, phase.clone(), *round, missing_participants.clone(), &session_manager.session_core.peer_mapper) {
                     if let Err(e) = session_manager.send_signed_message(msg) {
                         log::error!("[TSS] Failed to send retry response: {:?}", e);
@@ -515,7 +515,7 @@ impl MessageProcessor {
             }
 
             TssMessage::ECDSARetryResponse(session_id, phase, round, sender_index, message_data) => {
-                log::info!("[TSS] Received retry response for session {} phase {:?} round {} from {}", 
+                log::debug!("[TSS] Received retry response for session {} phase {:?} round {} from {}", 
                     session_id, phase, round, sender_index);
                 if let Some(msg) = session_manager.retry_mechanism.handle_retry_response(*session_id, phase.clone(), *round, sender_index.clone(), message_data.clone()) {
                     // Re-inject the message into the system

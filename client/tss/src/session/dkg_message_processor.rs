@@ -76,7 +76,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         drop(storage);
 
-        log::info!("[TSS] calling handle_verification_to_complete_round1()");
+        log::debug!("[TSS] calling handle_verification_to_complete_round1()");
         self.dkg_handle_verification_to_complete_round1(session_id);
 
         Ok(())
@@ -103,7 +103,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let round1_packages = storage.fetch_round1_packages(session_id).unwrap();
         drop(storage); // Release lock
 
-        log::info!("[TSS] debug round1_packages = {:?}", round1_packages);
+        log::debug!("[TSS] debug round1_packages = {:?}", round1_packages);
 
         if round1_packages.keys().len() >= (n - 1).into() {
             self.dkg_verify_and_start_round2(session_id, data, round1_packages)
@@ -149,20 +149,20 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                         log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
                     } else {
-                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for round1 verification failure", session_id);
+                        log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for round1 verification failure", session_id);
                     }
                 }
             }
             Ok((secret, round2_packages)) => {
-                log::info!("[TSS] Round 1 Verification completed. Continuing now with Round 2");
+                log::debug!("[TSS] Round 1 Verification completed. Continuing now with Round 2");
                 // Update session state to Round1Completed
                 self.state_managers.dkg_state_manager.set_state(session_id, DKGSessionState::Round1Completed);
-                log::info!("[TSS] 1");
+                log::debug!("[TSS] 1");
 
                 let empty = empty_hash_map();
                 let handle_participants = self.participant_manager.sessions_participants.lock().unwrap();
                 let participants = handle_participants.get(&session_id).unwrap_or(&empty); // Use HashMap::new() directly
-                log::info!("[TSS] 2");
+                log::debug!("[TSS] 2");
 
                 for (identifier, package) in round2_packages {
                     let account_id = participants.get(&identifier);
@@ -184,13 +184,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                         );
                         continue;
                     }
-                    log::info!("[TSS] 3");
+                    log::debug!("[TSS] 3");
 
                     let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
                     if let Some(peer_id) =
                         peer_mapper.get_peer_id_from_account_id(account_id.unwrap())
                     {
-                        log::info!("[TSS] 4");
+                        log::debug!("[TSS] 4");
                         let dkg_message = crate::types::TssMessage::DKGRound2(
                             session_id,
                             package.serialize().unwrap(),
@@ -202,12 +202,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     } else {
                         log::error!("[TSS] PeerID not found, cannot send message")
                     }
-                    log::info!("[TSS] 5");
+                    log::debug!("[TSS] 5");
 
                     drop(peer_mapper);
                 }
                 drop(handle_participants);
-                log::info!("[TSS] 6");
+                log::debug!("[TSS] 6");
                 let mut storage = self.storage_manager.storage.lock().unwrap();
                 storage
                     .store_data(
@@ -218,12 +218,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     )
                     .unwrap();
                 drop(storage);
-                log::info!("[TSS] 7");
+                log::debug!("[TSS] 7");
 
                 // Update session state to Round2Initiated after sending Round2 messages
                 self.state_managers.dkg_state_manager.set_state(session_id, DKGSessionState::Round2Initiated);
                 // drop(session_state_lock);
-                log::info!("[TSS] 8");
+                log::debug!("[TSS] 8");
 
                 // This is not gonna happen but just in case
                 if let Err(e) = self.dkg_verify_and_complete(session_id) {
@@ -306,7 +306,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                 log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
             } else {
-                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender {:?}", session_id, sender);
+                log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender {:?}", session_id, sender);
             }
             
             return Err(SessionManagerError::DeserializationError);
@@ -340,7 +340,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             &self.session_core.validator_key,
         ) {
             Ok(_) => {
-                log::info!("[TSS] DKG session {} completed successfully", session_id);
+                log::debug!("[TSS] DKG session {} completed successfully", session_id);
             }
             Err(SessionManagerError::DkgPart3Failed(_)) => {
                 // Handle DKG part 3 failure with offence reporting
@@ -367,7 +367,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     if let Err(e) = self.client.report_tss_offence(best_hash, session_id, uomi_runtime::pallet_tss::TssOffenceType::InvalidCryptographicData, offenders) {
                         log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
                     } else {
-                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for DKG part3 failure", session_id);
+                        log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for DKG part3 failure", session_id);
                     }
                 }
             }
@@ -417,7 +417,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         // Send round 1 message
         let dkg_round1_message = crate::types::TssMessage::DKGRound1(session_id, r1.serialize().unwrap());
         match self.send_signed_message(dkg_round1_message) {
-            Ok(_) => log::info!("[TSS] Signed Round 1 message broadcasted for session {}", session_id),
+            Ok(_) => log::debug!("[TSS] Signed Round 1 message broadcasted for session {}", session_id),
             Err(e) => {
                 log::error!("[TSS] Failed to send signed round 1 message for session {}: {:?}", session_id, e);
                 return Err(SessionError::GenericError(format!("Failed to send signed round 1 message: {:?}", e)));

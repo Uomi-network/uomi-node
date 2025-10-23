@@ -43,7 +43,7 @@ where
 
     /// Start listening for runtime events and processing them
     pub async fn run(self) {
-        log::info!("[TSS] Listening for messages from Runtime");
+        log::debug!("[TSS] Listening for messages from Runtime");
         let notification_stream = self.client.storage_changes_notification_stream(None, None);
 
         if let Err(error) = notification_stream {

@@ -90,7 +90,7 @@ pub fn handle_session_created<S: Storage>(
     handle_state.insert(session_id, DKGSessionState::Round1Initiated);
     drop(handle_state);
 
-    log::info!("[TSS] DKG session {} created successfully", session_id);
+    log::debug!("[TSS] DKG session {} created successfully", session_id);
     
     Ok((r1, secret))
 }
@@ -228,7 +228,7 @@ pub fn verify_and_start_round2<S: Storage>(
             session_state_lock.insert(session_id, DKGSessionState::Round2Initiated);
             drop(session_state_lock);
 
-            log::info!("[TSS] Round 2 initiated for session {}", session_id);
+            log::debug!("[TSS] Round 2 initiated for session {}", session_id);
             Ok(round2_packages)
         }
         Err(e) => {

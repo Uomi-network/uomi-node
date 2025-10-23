@@ -120,7 +120,7 @@ fn create_signed_announcement(
         Ok(Some(signature_bytes)) => {
             match signature_bytes.try_into() {
                 Ok(signature) => {
-                    log::info!("[TSS] ✅ Created signed announcement for gossip validator");
+                    log::debug!("[TSS] ✅ Created signed announcement for gossip validator");
                     Some(SignedTssMessage {
                         message: announcement_msg.clone(),
                         sender_public_key: validator_key[..32].try_into().unwrap(),
@@ -399,7 +399,7 @@ where
             if let Err(e) = gossip_handler.broadcast_signed_message(a) {
                 log::error!("[TSS] Failed to broadcast signed announcement: {:?}", e);
             } else {
-                log::info!("[TSS] Signed announcement broadcasted successfully");
+                log::debug!("[TSS] Signed announcement broadcasted successfully");
             }
         }
         

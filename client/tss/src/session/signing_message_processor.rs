@@ -113,7 +113,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 Ok(_) => {
                     // Update session state to Round1Completed
                     self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round1Completed);
-                    log::info!("[TSS] Setting Round1Completed");
+                    log::debug!("[TSS] Setting Round1Completed");
                 }
             }
         }
@@ -165,7 +165,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         }
 
         if self.is_coordinator(&session_id) {
-            log::info!("[TSS] calling signing_handle_verification_to_complete_round1()");
+            log::debug!("[TSS] calling signing_handle_verification_to_complete_round1()");
             self.signing_handle_verification_to_complete_round1(session_id);
         }
         Ok(())
@@ -263,7 +263,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             }
         }
         self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round2Completed);
-        log::info!("[TSS] Setting Round2Completed");
+        log::debug!("[TSS] Setting Round2Completed");
 
         drop(peer_mapper_handle);
     }
@@ -278,7 +278,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         log::debug!("[TSS] Debug SigningPackage = {:?}", signing_package);
 
-        log::info!("[TSS] Handling signing package from coordinator");
+        log::debug!("[TSS] Handling signing package from coordinator");
 
         // Update session state to Round1Completed
         self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round2Initiated);
@@ -308,7 +308,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                 log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
             } else {
-                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} ", session_id);
+                log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} ", session_id);
             }
             
             return Err(SessionManagerError::DeserializationError);
@@ -328,7 +328,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let mut peer_mapper_handle = self.session_core.peer_mapper.lock().unwrap();
         let whoami_identifier = peer_mapper_handle.get_identifier_from_account_id(&session_id, &self.session_core.validator_key);
 
-        log::info!("[TSS] WHOAMI Id: {:?}", whoami_identifier);
+        log::debug!("[TSS] WHOAMI Id: {:?}", whoami_identifier);
 
         if let None = whoami_identifier {
             log::error!("[TSS] We are not allowed to participate in the signing phase");
@@ -348,7 +348,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
         // If there are not enough signing commitments, we cannot proceed
         if (&signing_package.as_ref()).unwrap().signing_commitments().len() < (*(&key_package.as_ref()).unwrap().min_signers()).into() {
-            log::info!("[TSS] FROST round 2 signing requires at least {:?} signers, for now only {:?} provided", key_package.unwrap().min_signers(), signing_package.unwrap().signing_commitments().len());
+            log::debug!("[TSS] FROST round 2 signing requires at least {:?} signers, for now only {:?} provided", key_package.unwrap().min_signers(), signing_package.unwrap().signing_commitments().len());
             return Ok(());
         }
 
@@ -357,7 +357,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             .signing_commitments()
             .get(&whoami_identifier.unwrap())
         {
-            log::info!("[TSS] Signing commitment not found for participant {:?}, waiting...", whoami_identifier.unwrap());
+            log::debug!("[TSS] Signing commitment not found for participant {:?}, waiting...", whoami_identifier.unwrap());
             return Ok(());
         }
 
@@ -368,7 +368,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         )
         .unwrap();
 
-        log::info!("[TSS] Signature share generated, ready to send");
+        log::debug!("[TSS] Signature share generated, ready to send");
 
         drop(storage);
 
@@ -395,10 +395,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     error
                 ),
                 Ok(_) => {
-                    log::info!("[TSS] Signed Signing Share sent to coordinator {:?}", coordinator);
+                    log::debug!("[TSS] Signed Signing Share sent to coordinator {:?}", coordinator);
                     // Update session state to Round1Completed
                     self.state_managers.signing_state_manager.set_state(session_id, SigningSessionState::Round2Completed);
-                    log::info!("[TSS] Signin State updated to SigningSessionState::Round2Completed");
+                    log::debug!("[TSS] Signin State updated to SigningSessionState::Round2Completed");
                 }
             }
         } else {
@@ -440,7 +440,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             if let Err(e) = self.client.report_tss_offence(best_hash, session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                 log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
             } else {
-                log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {}", session_id);
+                log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {}", session_id);
             }
             
             return Err(SessionManagerError::DeserializationError);

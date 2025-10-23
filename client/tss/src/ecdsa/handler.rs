@@ -20,13 +20,13 @@ impl ECDSAManager {
         let keygen = self.get_keygen(session_id);
 
         if keygen.is_some() {
-            log::info!("[TSS] handling key gen message");
+            log::debug!("[TSS] handling key gen message");
             let mut keygen = keygen.unwrap();
-            log::info!("[tss] 1");
+            log::debug!("[TSS] 1");
             let to_ret = keygen
                 .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::KeygenMsgHandlerError(format!("{:?}", e), index.clone())));
-            log::info!("[tss] 2");
+            log::debug!("[TSS] 2");
 
             // Debug log the to_ret
             if let Ok(ref sm) = to_ret {
@@ -39,13 +39,13 @@ impl ECDSAManager {
             }
 
             drop(keygen);
-            log::info!("[tss] 3");
+            log::debug!("[TSS] 3");
             self.log_internal_state(session_id, "post-handle_keygen_message");
             return to_ret;
         }
         drop(keygen);
         // buffer the messages and throw an error
-        log::info!("[TSS] buffering message to keygen");
+        log::debug!("[TSS] buffering message to keygen");
         self.buffer_keygen
             .entry(session_id)
             .or_insert(Vec::new())
@@ -70,7 +70,7 @@ impl ECDSAManager {
             // Inner scope to ensure the write guard is dropped before logging.
             let res = {
                 let mut sign = self.get_sign(session_id).expect("sign phase exists");
-                log::info!("[TSS] handling Sign offline message");
+                log::debug!("[TSS] handling Sign offline message");
                 let r = sign
                     .msg_handler(index.get_index(), message)
                     .or_else(|e| Err(ECDSAError::SignMsgHandlerError(format!("{:?}", e), index.clone())));
@@ -83,7 +83,7 @@ impl ECDSAManager {
             self.log_internal_state(session_id, "post-handle_sign_offline_message");
             return res;
         }
-        log::info!("[TSS] buffering message to sign");
+        log::debug!("[TSS] buffering message to sign");
         self.buffer_sign
             .entry(session_id)
             .or_insert(Vec::new())
@@ -107,7 +107,7 @@ impl ECDSAManager {
         if self.get_sign_online(session_id).is_some() {
             let res = {
                 let mut sign = self.get_sign_online(session_id).expect("sign online phase exists");
-                log::info!("[TSS] handling Sign online message");
+                log::debug!("[TSS] handling Sign online message");
                 let r = sign
                     .msg_handler(index.get_index(), message)
                     .or_else(|e| Err(ECDSAError::SignOnlineMsgHandlerError(format!("{:?}", e), index.clone())));
@@ -120,7 +120,7 @@ impl ECDSAManager {
             self.log_internal_state(session_id, "post-handle_sign_online_message");
             return res;
         }
-        log::info!("[TSS] buffering message to sign online");
+        log::debug!("[TSS] buffering message to sign online");
         self.buffer_sign_online
             .entry(session_id)
             .or_insert(Vec::new())
@@ -133,7 +133,7 @@ impl ECDSAManager {
         &mut self,
         session_id: SessionId,
     ) -> Result<Vec<SendingMessages>, ECDSAError> {
-        log::info!("[tss] 3.1");
+        log::debug!("[TSS] 3.1");
         if let Some(messages) = self.buffer_keygen.get(&session_id).cloned() {
             log::info!("4");
             log::debug!(
@@ -245,7 +245,7 @@ impl ECDSAManager {
             message.len()
         );
         let res = if let Some(mut reshare) = self.get_reshare(session_id) {
-            log::info!("[TSS] handling reshare message");
+            log::debug!("[TSS] handling reshare message");
             let inner = reshare
                 .msg_handler(index.get_index(), message)
                 .or_else(|e| Err(ECDSAError::ReshareMsgHandlerError(format!("{:?}", e), index.clone())));

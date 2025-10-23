@@ -37,7 +37,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                         log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
                     } else {
-                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                        log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
                     }
                 }
             },
@@ -85,7 +85,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                         log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
                     } else {
-                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                        log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
                     }
                 }
             },
@@ -137,7 +137,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                         log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
                     } else {
-                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                        log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
                     }
                 }
             },
@@ -195,7 +195,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                     if let Err(e) = self.client.report_tss_offence(best_hash, *session_id, TssOffenceType::InvalidCryptographicData, offenders) {
                         log::error!("[TSS] Failed to report InvalidCryptographicData offence for session {}: {:?}", session_id, e);
                     } else {
-                        log::info!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
+                        log::debug!("[TSS] Successfully reported InvalidCryptographicData offence for session {} for sender", session_id);
                     }
                 }
             },
@@ -335,13 +335,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         data: Vec<u8>,
         phase: &ECDSAPhase,
     ) {
-        log::info!("[TSS] Acquired lock on mapper");
+        log::debug!("[TSS] Acquired lock on mapper");
         let mut peer_mapper = self.session_core.peer_mapper.lock().unwrap();
         let recipient = peer_mapper
             .get_peer_id_from_id(&session_id, recipient_id.parse::<u16>().unwrap())
             .cloned();
         drop(peer_mapper);
-        log::info!("[TSS] Dropped lock on mapper");
+        log::debug!("[TSS] Dropped lock on mapper");
 
         if let Some(recipient) = recipient {
             let ecdsa_message = crate::types::TssMessage::ECDSAMessageP2p(
@@ -392,7 +392,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         ecdsa_manager: &mut MutexGuard<'_, ECDSAManager>,
         phase: ECDSAPhase,
     ) {
-        log::info!("[TSS] SendingMessages::P2pMessage");
+        log::debug!("[TSS] SendingMessages::P2pMessage");
         
         let index = match self.get_local_index(&session_id) {
             Some(idx) => idx,
@@ -489,7 +489,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         msg: String,
         ecdsa_manager: &mut MutexGuard<'_, ECDSAManager>,
     ) {
-        log::info!("[TSS] ECDSA Keygen successful, storing keys {:?}", msg);
+        log::debug!("[TSS] ECDSA Keygen successful, storing keys {:?}", msg);
 
         if self.store_result_data(
             session_id,
@@ -551,7 +551,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         msg: String,
         ecdsa_manager: &mut MutexGuard<'_, ECDSAManager>,
     ) {
-        log::info!("[TSS] ECDSA Reshare successful, storing keys {:?}", msg);
+        log::debug!("[TSS] ECDSA Reshare successful, storing keys {:?}", msg);
 
         if self.store_result_data(
             session_id,
@@ -639,7 +639,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             if let Err(e) = self.client.submit_signature_result(self.client.best_hash(), session_id, sig_bytes.clone()) {
                 log::error!("[TSS] Failed to submit online signature result unsigned extrinsic: {}", e);
             } else {
-                log::info!("[TSS] Submitted online signature result for session {} ({} bytes)", session_id, sig_bytes.len());
+                log::debug!("[TSS] Submitted online signature result for session {} ({} bytes)", session_id, sig_bytes.len());
             }
         } else {
             log::warn!("[TSS] Could not extract signature bytes from online sign result to submit on-chain");
@@ -665,7 +665,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         drop(peer_mapper);
 
         let _id = index.unwrap();
-        log::info!("[TSS] My Id is {:?}", _id);
+        log::debug!("[TSS] My Id is {:?}", _id);
         let _id: frost_ed25519::Identifier = _id.try_into().unwrap();
         _id
     }

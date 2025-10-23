@@ -83,24 +83,24 @@ impl<B: BlockT> GossipHandler<B> {
 }
 impl<B:BlockT> TssMessageHandler for GossipHandler<B> {
     fn send_signed_message(&mut self, message: TssMessage, peer_id: PeerId) -> Result<(), String> {
-        log::info!("[TSS] 📤 GossipHandler CREATING SIGNED P2P MESSAGE: {:?} for peer: {}", 
+        log::debug!("[TSS] 📤 GossipHandler CREATING SIGNED P2P MESSAGE: {:?} for peer: {}", 
             std::mem::discriminant(&message), peer_id.to_base58());
         
         let signed_message = self.create_signed_message(message)?;
         
-        log::info!("[TSS] 🚀 Sending signed direct message to peer: {}", peer_id.to_base58());
+        log::debug!("[TSS] 🚀 Sending signed direct message to peer: {}", peer_id.to_base58());
         self.gossip_engine.send_message(vec![peer_id], signed_message.encode());
         Ok(())
     }
 
     fn broadcast_signed_message(&mut self, message: TssMessage) -> Result<(), String> {
-        log::info!("[TSS] 📤 GossipHandler CREATING SIGNED BROADCAST MESSAGE: {:?}", 
+        log::debug!("[TSS] 📤 GossipHandler CREATING SIGNED BROADCAST MESSAGE: {:?}", 
             std::mem::discriminant(&message));
         
         let signed_message = self.create_signed_message(message)?;
         
         let topic = <<B::Header as HeaderT>::Hashing as HashT>::hash("tss_topic".as_bytes());
-        log::info!("[TSS] 📡 Broadcasting signed message to all peers");
+        log::debug!("[TSS] 📡 Broadcasting signed message to all peers");
         self.gossip_engine.gossip_message(topic, signed_message.encode(), false);
         Ok(())
     }
@@ -427,7 +427,7 @@ pub fn process_gossip_notification<T: TssMessageHandler>(
     // Try to decode as SignedTssMessage first
     match SignedTssMessage::decode(&mut &notification.message[..]) {
         Ok(signed_message) => {
-            log::info!("[TSS] 🔄 GossipHandler forwarding SIGNED MESSAGE: {:?} from sender: {:?}", 
+            log::debug!("[TSS] 🔄 GossipHandler forwarding SIGNED MESSAGE: {:?} from sender: {:?}", 
                 std::mem::discriminant(&signed_message.message),
                 sender.to_base58());
             
@@ -435,7 +435,7 @@ pub fn process_gossip_notification<T: TssMessageHandler>(
             if let Err(e) = handler.forward_to_session_manager(signed_message, Some(sender.clone())) {
                 log::error!("[TSS] Failed to forward signed message to session manager: {:?}", e);
             } else {
-                log::info!("[TSS] ✅ Successfully forwarded signed message to session manager");
+                log::debug!("[TSS] ✅ Successfully forwarded signed message to session manager");
             }
         }
         Err(_) => {
@@ -468,7 +468,7 @@ impl<B: BlockT> Future for GossipHandler<B> {
         // Process gossip notifications
         while let Poll::Ready(Some(notification)) = self.gossip_handler_message_receiver.poll_next_unpin(cx) {
             if notification.sender.is_none() {
-                log::info!("[TSS] Received notification without sender: {:?}", notification.message);
+                log::debug!("[TSS] Received notification without sender: {:?}", notification.message);
                 continue;
             }
 

@@ -66,7 +66,7 @@ impl<B: BlockT> Validator<B> for TssValidator {
         let mut sent_announcements = self.sent_announcements.lock().unwrap();
 
         if sent_announcements.contains_key(who) {
-            log::info!("[TSS]: Already sent announcement to peer {}", who.to_base58());
+            log::debug!("[TSS]: Already sent announcement to peer {}", who.to_base58());
             return;
         }
 
@@ -76,7 +76,7 @@ impl<B: BlockT> Validator<B> for TssValidator {
 
         // Send the pre-signed announcement message to the new peer
         if let Some(signed_announcement) = &self.signed_announcement {
-            log::info!("[TSS] 📤 Sending SIGNED ANNOUNCEMENT to new peer: {}", who.to_base58());
+            log::debug!("[TSS] 📤 Sending SIGNED ANNOUNCEMENT to new peer: {}", who.to_base58());
             context.send_message(
                 who,
                 signed_announcement.encode(),
@@ -97,7 +97,7 @@ impl<B: BlockT> Validator<B> for TssValidator {
         // Try to decode as SignedTssMessage first
         match SignedTssMessage::decode(&mut &data[..]) {
             Ok(signed_message) => {
-                log::info!("[TSS]: ✅ RECEIVED SIGNED MESSAGE from {} - message type: {:?}", 
+                log::debug!("[TSS]: ✅ RECEIVED SIGNED MESSAGE from {} - message type: {:?}", 
                     sender.to_base58(), 
                     std::mem::discriminant(&signed_message.message));
                 
@@ -113,7 +113,7 @@ impl<B: BlockT> Validator<B> for TssValidator {
                 //     return ValidationResult::Discard;
                 // }
 
-                log::info!("[TSS]: ✅ Verified signed message from {} - signature and block number valid", sender.to_base58());
+                log::debug!("[TSS]: ✅ Verified signed message from {} - signature and block number valid", sender.to_base58());
             }
             Err(_) => {
                 log::warn!("[TSS]: Failed to decode message from {}", sender.to_base58());

@@ -219,7 +219,7 @@ impl PeerMapper {
             entry_sessions_participants.insert(identifier, val.to_vec());
             entry_sessions_participants_u16.insert(u16::try_from(validator_id).unwrap(), val.to_vec());
             
-            log::info!("[TSS] Added participant with validator ID {} to session {} with index {}", validator_id, session_id, index);
+            log::debug!("[TSS] Added participant with validator ID {} to session {} with index {}", validator_id, session_id, index);
         }
         drop(sessions_participants);
         drop(sessions_participants_u16);
@@ -251,7 +251,7 @@ impl PeerMapper {
     }
 
     pub fn set_validator_id(&mut self, public_key: TSSPublic, id: u32) {
-        log::info!("[TSS] Set validator ID {} for public key {:?}", id, public_key);
+        log::debug!("[TSS] Set validator ID {} for public key {:?}", id, public_key);
         let mut validator_ids = self.validator_ids.lock().unwrap();
         validator_ids.insert(public_key, id);
         drop(validator_ids);

@@ -43,7 +43,7 @@ impl SessionCore {
     /// Set Session Timeout
     pub fn set_session_timeout(&mut self, session_id: &SessionId, timeout: u64) {
        (self.session_timeout) = timeout;
-        log::info!("[TSS] Session timeout for session {} set to {} seconds", session_id, timeout);
+        log::debug!("[TSS] Session timeout for session {} set to {} seconds", session_id, timeout);
     }
 
 
@@ -119,7 +119,7 @@ impl SessionCore {
         timestamps.insert(session_id, std::time::Instant::now());
         drop(timestamps);
         
-        log::info!("[TSS] Successfully created session {}", session_id);
+        log::debug!("[TSS] Successfully created session {}", session_id);
         Ok(())
     }
 

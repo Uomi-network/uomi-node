@@ -152,12 +152,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     
     /// Send a signed message to the gossip handler
     pub fn send_signed_message(&self, message: TssMessage) -> Result<(), String> {
-        log::info!("[TSS] 📤 SessionManager CREATING SIGNED MESSAGE: {:?}", std::mem::discriminant(&message));
+        log::debug!("[TSS] 📤 SessionManager CREATING SIGNED MESSAGE: {:?}", std::mem::discriminant(&message));
         
     let block_number: u64 = self.client.best_number().saturated_into::<u64>();
     let signed_message = verification::create_signed_message(message, &self.auth_manager.validator_public_key, &self.auth_manager.keystore, block_number)?;
         
-        log::info!("[TSS] ✅ Signed message created successfully, sending to gossip handler");
+        log::debug!("[TSS] ✅ Signed message created successfully, sending to gossip handler");
         
         self.communication_manager.session_manager_to_gossip_tx.unbounded_send(signed_message)
             .map_err(|e| format!("Failed to send signed message: {:?}", e))
@@ -180,7 +180,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
     // Add a TssMessage we received from an unknown peer until they announce themselves
     pub fn add_unknown_peer_message(&self, peer_id: PeerId, signed_message: SignedTssMessage) {
-        log::info!("[TSS] Adding unknown peer SIGNED message from {:?}", peer_id);
+        log::debug!("[TSS] Adding unknown peer SIGNED message from {:?}", peer_id);
         let mut unknown_peer_queue = self.participant_manager.unknown_peer_queue.lock().unwrap();
         let messages = unknown_peer_queue.entry(peer_id).or_insert_with(Vec::new);
         messages.push(signed_message);
@@ -188,7 +188,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
 
     // Consume the queue of an unknown peer as soon as they have announced themselves
     pub fn consume_unknown_peer_queue(&self, peer_id: PeerId) -> Vec<SignedTssMessage> {
-        log::info!("[TSS] Consuming unknown peer queue for {:?}", peer_id);
+        log::debug!("[TSS] Consuming unknown peer queue for {:?}", peer_id);
         let mut unknown_peer_queue = self.participant_manager.unknown_peer_queue.lock().unwrap();
         unknown_peer_queue.remove(&peer_id).unwrap_or_default()
     }
@@ -210,7 +210,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let best = self.client.best_hash();
         let id_pairs = self.client.get_all_validator_ids(best);
         if id_pairs.is_empty() {
-            log::info!("[TSS] No validator IDs fetched at startup (maybe not initialized yet)");
+            log::debug!("[TSS] No validator IDs fetched at startup (maybe not initialized yet)");
             return;
         }
         let mut mapper = self.session_core.peer_mapper.lock().unwrap();
@@ -219,7 +219,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             mapper.set_validator_id(account.to_vec(), id);
         }
         drop(mapper);
-        log::info!("[TSS] Initialized {} validator IDs in PeerMapper", len);
+        log::debug!("[TSS] Initialized {} validator IDs in PeerMapper", len);
     }
 
     /// Add session data with validation
@@ -249,7 +249,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     // Removed insecure process_queued_message_directly: queued messages now retain original signature & are re-verified.
 
     pub async fn run(mut self) {
-        log::info!("[TSS] Listening for messages inside Session Manager from Gossip and Runtime");
+        log::debug!("[TSS] Listening for messages inside Session Manager from Gossip and Runtime");
         
         // Set up a timer for periodic session cleanup
         let mut cleanup_interval = interval(Duration::from_secs(60));
@@ -302,7 +302,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 }
             }
             TSSRuntimeEvent::DKGReshareSessionInfoReady(id, t, n, participants, old_participants, old_id) => {
-                log::info!("[TSS] Processing reshare event new_id={} old_id={}", id, old_id);
+                log::debug!("[TSS] Processing reshare event new_id={} old_id={}", id, old_id);
                 if let Err(e) = self.add_and_initialize_dkg_reshare_session(id, t, n, participants, old_participants, old_id) {
                     log::error!("[TSS] Failed to process DKG reshare session {} (old {}) : {:?}", id, old_id, e);
                 }
@@ -330,7 +330,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         self.add_session_data(id, t, n, [0; 32], participants.clone(), Vec::new())
             .map_err(|e| format!("Failed to add data: {:?}", e))?;
         
-        log::info!("[TSS] Successfully added data for DKG session {}", id);
+        log::debug!("[TSS] Successfully added data for DKG session {}", id);
         
         // Check if the node is authorized for this session
         if !self.is_authorized_for_session(&id) {
@@ -342,7 +342,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         self.dkg_handle_session_created(id, n.into(), t.into(), participants.clone())
             .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
         
-        log::info!("[TSS] Successfully initialized DKG session {}", id);
+        log::debug!("[TSS] Successfully initialized DKG session {}", id);
         
         self.ecdsa_create_keygen_phase(id, n.into(), t.into(), participants);
         
@@ -353,12 +353,12 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         self.add_session_data(id, t, n, [0; 32], participants.clone(), Vec::new())
             .map_err(|e| format!("Failed to add data: {:?}", e))?;
         
-        // log::info!("[TSS] Successfully added data for DKG session {}", id);
+        // log::debug!("[TSS] Successfully added data for DKG session {}", id);
         
         // self.dkg_handle_session_created(id, n.into(), t.into(), participants.clone())
         //     .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
         
-        log::info!("[TSS] Successfully initialized DKG session {}", id);
+        log::debug!("[TSS] Successfully initialized DKG session {}", id);
 
         // Preload OLD session participant mapping into PeerMapper if it's missing so we can resolve indices
         {
@@ -370,13 +370,13 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             if !have_old_mapping {
                 // Only create mapping if we actually have old participants list (non-empty)
                 if !old_participants.is_empty() {
-                    log::info!("[TSS][Reshare] Preloading old session mapping old_id={} participants_len={}", old_id, old_participants.len());
+                    log::debug!("[TSS][Reshare] Preloading old session mapping old_id={} participants_len={}", old_id, old_participants.len());
                     pm.create_session(old_id, old_participants.clone());
                 } else {
                     log::warn!("[TSS][Reshare] old_participants list empty; cannot preload mapping for old_id={}", old_id);
                 }
             } else {
-                log::info!("[TSS][Reshare] Old session mapping already present old_id={}", old_id);
+                log::debug!("[TSS][Reshare] Old session mapping already present old_id={}", old_id);
             }
         }
         
@@ -403,7 +403,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
                 .map_err(|e| format!("Failed to add data for missing DKG session: {:?}", e))?;
         }
 
-        log::info!("[TSS] Successfully added data for signing session {} (dkg source {})", signing_id, dkg_id);
+        log::debug!("[TSS] Successfully added data for signing session {} (dkg source {})", signing_id, dkg_id);
 
         // Record mapping for key material resolution
         {
@@ -411,7 +411,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             map.insert(signing_id, dkg_id);
         }
 
-        log::info!("[TSS] Successfully initialized FROST Signing session {}", signing_id);
+        log::debug!("[TSS] Successfully initialized FROST Signing session {}", signing_id);
 
         // message needs to be hashed and use the keccak for the signing process
         let message_hash = keccak_256(&message);
@@ -446,7 +446,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
             guard.remove(&session_id)
         };
         if let Some(list) = pending {
-            log::info!("[TSS][P2P][QUEUE] Flushing {} queued outbound messages session_id={}", list.len(), session_id);
+            log::debug!("[TSS][P2P][QUEUE] Flushing {} queued outbound messages session_id={}", list.len(), session_id);
             for (recipient_id, sender_index, data, phase) in list {
                 // Re-attempt send; if still missing, requeue
                 if let Err(_) = self.try_send_p2p_once(session_id, &recipient_id, &sender_index, data.clone(), &phase) {
@@ -526,7 +526,7 @@ impl<B: BlockT, C: ClientManager<B>> TssMessageHandler for SessionManager<B, C> 
     fn handle_announcment(&mut self, sender: PeerId, message: TssMessage) {
         // Handle announcement messages - typically used for peer discovery
         if let TssMessage::Announce(nonce, _peer_id, _public_key_data, _signature, challenge_answer) = message {
-            log::info!("[TSS] Handling announcement from peer: {} nonce {} challenge {}", sender.to_base58(), nonce, challenge_answer);
+            log::debug!("[TSS] Handling announcement from peer: {} nonce {} challenge {}", sender.to_base58(), nonce, challenge_answer);
             // Signature & challenge binding verified in gossip/router::process_announcement.
         }
     }

@@ -332,12 +332,12 @@ impl RetryMechanism {
 
     pub fn set_retry_timeout(&mut self, retry_timeout_secs: u64) {
         self.retry_timeout = retry_timeout_secs;
-        log::info!("[TSS] Retry timeout set to {} seconds", retry_timeout_secs);
+        log::debug!("[TSS] Retry timeout set to {} seconds", retry_timeout_secs);
     }
 
     pub fn set_max_retry_attempts(&mut self, max_retry_attempts: u8) {
         self.max_retry_attempts = max_retry_attempts;
-        log::info!("[TSS] Max retry attempts set to {}", max_retry_attempts);
+        log::debug!("[TSS] Max retry attempts set to {}", max_retry_attempts);
     }
 
 }
