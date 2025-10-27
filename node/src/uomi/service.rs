@@ -26,7 +26,7 @@ use sc_client_api::{Backend, BlockBackend, BlockchainEvents};
 use sc_consensus_grandpa::SharedVoterState;
 use sc_consensus::BoxBlockImport;
 use sc_network::NetworkBackend;
-use sc_executor::NativeElseWasmExecutor;
+use sc_executor::WasmExecutor;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker};
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
@@ -34,6 +34,7 @@ use sp_runtime::traits::Block as BlockT;
 use uomi_runtime::Runtime;
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 use ipfs_manager::IpfsManager;
+use sc_service::TFullClient;
 use tss::{get_config, setup_gossip};
 #[cfg(not(feature = "manual-seal"))]
 use sc_consensus_babe::{BabeLink, BabeWorkerHandle, SlotProportion};
@@ -52,38 +53,37 @@ type GrandpaBlockImport<C> =
     sc_consensus_grandpa::GrandpaBlockImport<FullBackend, Block, C, FullSelectChain>;
 
 /// Extra host functions
-/// Include Cumulus parachain host functions to provide `storage_proof_size`.
 #[cfg(feature = "runtime-benchmarks")]
 pub type HostFunctions = (
     sp_io::SubstrateHostFunctions,
     frame_benchmarking::benchmarking::HostFunctions,
     moonbeam_primitives_ext::moonbeam_ext::HostFunctions,
-    cumulus_client_executor_common::ParachainHostFunctions,
 );
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 pub type HostFunctions = (
     sp_io::SubstrateHostFunctions,
     moonbeam_primitives_ext::moonbeam_ext::HostFunctions,
-	cumulus_primitives_proof_size_hostfunction::storage_proof_size::HostFunctions,
 );
 
-/// uomi runtime native executor.
-pub struct Executor;
+// /// uomi runtime native executor.
+// pub struct Executor;
 
-impl sc_executor::NativeExecutionDispatch for Executor {
-    type ExtendHostFunctions = HostFunctions;
+// impl sc_executor::NativeExecutionDispatch for Executor {
+//     type ExtendHostFunctions = HostFunctions;
 
-    fn dispatch(method: &str, data: &[u8]) -> Option<Vec<u8>> {
-        uomi_runtime::api::dispatch(method, data)
-    }
+//     fn dispatch(method: &str, data: &[u8]) -> Option<Vec<u8>> {
+//         uomi_runtime::api::dispatch(method, data)
+//     }
 
-    fn native_version() -> sc_executor::NativeVersion {
-        uomi_runtime::native_version()
-    }
-}
+//     fn native_version() -> sc_executor::NativeVersion {
+//         uomi_runtime::native_version()
+//     }
+// }
 
-type FullClient = sc_service::TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>;
+
+
+type FullClient = sc_service::TFullClient<Block, RuntimeApi, WasmExecutor<HostFunctions>>;
 type FullBackend = sc_service::TFullBackend<Block>;
 type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 type BasicImportQueue = sc_consensus::DefaultImportQueue<Block>;
@@ -124,7 +124,11 @@ sc_service::PartialComponents<
         })
         .transpose()?;
 
-    let executor = sc_service::new_native_or_wasm_executor(&config);
+    let executor = WasmExecutor::<HostFunctions>::builder()
+        .with_execution_method(config.executor.wasm_method)
+        .with_max_runtime_instances(config.executor.max_runtime_instances)
+        .with_runtime_cache_size(config.executor.runtime_cache_size)
+        .build();
 
     let (client, backend, keystore_container, task_manager) =
     sc_service::new_full_parts_record_import::<Block, RuntimeApi, _>(
@@ -465,7 +469,7 @@ pub fn start_node<N>(
             frontier_backend.clone(),
             3,
             0,
-            fc_mapping_sync::SyncStrategy::Parachain,
+            fc_mapping_sync::SyncStrategy::Normal,
             sync_service.clone(),
             pubsub_notification_sinks.clone(),
         )
