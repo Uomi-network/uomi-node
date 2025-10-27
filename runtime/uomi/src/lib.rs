@@ -991,7 +991,7 @@ parameter_types! {
 pub struct StateRootProvider;
 impl sp_core::Get<H256> for StateRootProvider { fn get() -> H256 { H256::default() } }
 impl pallet_ethereum::Config for Runtime {
-    type StateRoot = StateRootProvider; // TODO restore intermediate root provider
+	type StateRoot = pallet_ethereum::IntermediateStateRoot<Self::Version>;
     type PostLogContent = PostBlockAndTxnHashes;
     // Maximum length (in bytes) of revert message to include in Executed event
     type ExtraDataLength = ConstU32<30>;
