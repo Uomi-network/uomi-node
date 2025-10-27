@@ -339,8 +339,9 @@ pub mod pallet {
                 let existing_cid = AgentsPins::<T>::get(nft_id);
 
                 if existing_cid == cid {
-                    log::info!("IPFS: Agent already pinned, cid is the same");
-                    return Err(Error::<T>::SomethingWentWrong.into());
+                    //ritorna ok e non fare nulla
+                    log::info!("IPFS: Agent already pinned with the same cid, no action needed");
+                    return Ok(());
                 }
 
                 log::info!("IPFS: Agent already pinned, cid is different");

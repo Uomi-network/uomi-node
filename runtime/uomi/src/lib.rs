@@ -136,7 +136,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("uomi"),
     impl_name: create_runtime_str!("uomi"),
     authoring_version: 1,
-    spec_version: 11, 
+    spec_version: 12, 
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1, // Extrinsic payload shape change
@@ -991,7 +991,7 @@ parameter_types! {
 pub struct StateRootProvider;
 impl sp_core::Get<H256> for StateRootProvider { fn get() -> H256 { H256::default() } }
 impl pallet_ethereum::Config for Runtime {
-    type StateRoot = StateRootProvider; // TODO restore intermediate root provider
+    type StateRoot = pallet_ethereum::IntermediateStateRoot<Self::Version>;
     type PostLogContent = PostBlockAndTxnHashes;
     // Maximum length (in bytes) of revert message to include in Executed event
     type ExtraDataLength = ConstU32<30>;
