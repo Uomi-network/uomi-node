@@ -72,12 +72,14 @@ pub type HostFunctions = (
     sp_io::SubstrateHostFunctions,
     frame_benchmarking::benchmarking::HostFunctions,
     moonbeam_primitives_ext::moonbeam_ext::HostFunctions,
+    cumulus_primitives_proof_size_hostfunction::storage_proof_size::HostFunctions,
 );
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 pub type HostFunctions = (
     sp_io::SubstrateHostFunctions,
     moonbeam_primitives_ext::moonbeam_ext::HostFunctions,
+    cumulus_primitives_proof_size_hostfunction::storage_proof_size::HostFunctions,
 );
 
 /// Local runtime native executor.
