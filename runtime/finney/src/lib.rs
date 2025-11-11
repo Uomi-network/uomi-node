@@ -1049,13 +1049,9 @@ parameter_types! {
     pub const PostBlockAndTxnHashes: PostLogContent = PostLogContent::BlockAndTxnHashes;
 }
 
-pub struct StateRootProvider;
-impl sp_core::Get<H256> for StateRootProvider { fn get() -> H256 { H256::default() } }
-
 impl pallet_ethereum::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    // TODO restore intermediate state root when Runtime implements Get<RuntimeVersion> as required.
-    type StateRoot = StateRootProvider;
+    type StateRoot = pallet_ethereum::IntermediateStateRoot<Version>;
     type PostLogContent = PostBlockAndTxnHashes;
     // Maximum length (in bytes) of revert message to include in Executed event
     type ExtraDataLength = ConstU32<30>;
