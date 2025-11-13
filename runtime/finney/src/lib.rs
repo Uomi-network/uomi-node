@@ -2777,6 +2777,7 @@ impl_runtime_apis! {
             Ok(())
         }
     }
+    // Removed obsolete TxPoolRuntimeApi implementation
 
     // Removed obsolete TxPoolRuntimeApi implementation
 
