@@ -48,7 +48,7 @@ impl<T: Config> Pallet<T> {
         let mut nodes_works_operations = BTreeMap::<T::AccountId, BTreeMap<RequestId, bool>>::new();
         let mut opoc_timeouts_operations = BTreeMap::<RequestId, BTreeMap<T::AccountId, bool>>::new();
         let mut opoc_errors_operations = BTreeMap::<RequestId, BTreeMap<T::AccountId, bool>>::new();
-    let mut outputs_operations = BTreeMap::<RequestId, (Data, u32, u32, U256)>::new();
+        let mut outputs_operations = BTreeMap::<RequestId, (Data, u32, u32, U256)>::new();
 
         let ipfs_min_expire_duration = U256::from(MinExpireDuration::get());
 
@@ -1286,7 +1286,6 @@ impl<T: Config> Pallet<T> {
         Self::opoc_timeouts_operations_add(opoc_timeouts_operations, validator, request_id);
         // Set the validator as blacklisted
         Self::opoc_blacklist_operations_add(opoc_blacklist_operations, validator, nft_id);
-
 
         Ok(())
     }

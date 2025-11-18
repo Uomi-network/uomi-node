@@ -690,7 +690,6 @@ impl<T: Config> Pallet<T> {
 
             Ok(output.to_vec())
         } else {
-
             let mut proof: Data = Data::default();
             for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
                 let (inference_index, inference_proof) = inference_data;

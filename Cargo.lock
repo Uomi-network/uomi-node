@@ -11740,6 +11740,7 @@ dependencies = [
  "pallet-staking-reward-curve",
  "pallet-timestamp",
  "parity-scale-codec",
+ "parking_lot 0.12.5",
  "scale-info",
  "serial_test",
  "sp-api 37.0.0",

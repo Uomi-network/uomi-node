@@ -542,7 +542,7 @@ pub mod pallet {
                 },
             };
 
-            // TEMPORARY MOD FOR TURING TESTNET: Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
+            // Every 1000 blocks we reset the OpocBlacklist storage to permit blacklisted validators to be selected again
             let divisor = U256::from(1000);
             if current_block_number % divisor == U256::zero() {
                 log::info!("UOMI-ENGINE: Resetting OpocBlacklist storage");
