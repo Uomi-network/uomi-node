@@ -8,22 +8,25 @@ use frame_support::{
     construct_runtime,
     derive_impl,
     parameter_types,
-    traits::EstimateNextSessionRotation,
+    traits::{EstimateNextSessionRotation, Nothing},
     weights::Weight,
 };
 use frame_system::offchain::{
+    CreateBare,
+    CreateTransactionBase,
     AppCrypto,
     CreateSignedTransaction,
     SigningTypes,
 };
 use pallet_session::{ SessionHandler, ShouldEndSession };
 use pallet_staking::TestBenchmarkingConfig;
-use sp_core::{ sr25519::{ Public, Signature }, ConstU16, ConstU32, ConstU64, Get, H256, ConstU128 };
+use sp_core::{ sr25519::{ Public, Signature }, ConstU16, ConstU32, ConstU64, Get, H256, ConstU128, ConstBool };
 
 use sp_runtime::{
     curve::PiecewiseLinear,
     testing::{ TestXt, UintAuthorityId },
-    traits::{ BlakeTwo256, IdentityLookup },
+    traits::{ ConvertInto, BlakeTwo256, IdentityLookup },
+    generic::UncheckedExtrinsic,
     BuildStorage,
     KeyTypeId,
     Perbill,
@@ -66,6 +69,7 @@ parameter_types! {
     pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
     pub static ElectionsBounds: ElectionBounds = ElectionBoundsBuilder::default().build();
     pub const MaxValidationDataLength: u32 = 1024;
+    pub MaxActiveValidators: u32 = 1000;
 }
 
 pallet_staking_reward_curve::build! {
@@ -167,7 +171,6 @@ impl pallet_staking::Config for Test {
     type Currency = Balances;
     type CurrencyBalance = Balance;
     type UnixTime = Timestamp;
-    type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
     type CurrencyToVote = SaturatingCurrencyToVote;
     type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
     type GenesisElectionProvider = Self::ElectionProvider;
@@ -191,6 +194,10 @@ impl pallet_staking::Config for Test {
     type EventListeners = ();
     type BenchmarkingConfig = TestBenchmarkingConfig;
     type WeightInfo = ();
+    type OldCurrency = Balances;
+    type RuntimeHoldReason = RuntimeHoldReason;
+    type MaxValidatorSet = MaxActiveValidators;
+    type Filter = Nothing;
 }
 
 // REQUIRED BY type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
@@ -199,19 +206,40 @@ impl onchain::Config for OnChainSeqPhragmen {
     type Solver = SequentialPhragmen<AccountId, Perbill>;
     type DataProvider = Staking;
     type WeightInfo = ();
-    type MaxWinners = ConstU32<100>;
     type Bounds = ElectionsBounds;
+    type Sort = ConstBool<true>;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
+    type MaxWinnersPerPage = MaxActiveValidators;
 }
 
+pub type Extrinsic = TestXt<RuntimeCall, ()>;
+
+impl CreateBare<crate::Call<Test>> for Test {
+    fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic<u64, RuntimeCall, (), ()>
+    {
+        UncheckedExtrinsic::new_bare(call)
+    }
+}
+
+impl CreateTransactionBase<crate::Call<Test>> for Test {
+    type Extrinsic = Extrinsic;
+    type RuntimeCall = RuntimeCall;
+}
 
 impl CreateSignedTransaction<crate::Call<Test>> for Test {
-    fn create_transaction<C: AppCrypto<Self::Public, Self::Signature>>(
-        call: crate::Call<Test>,
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
         _public: Self::Public,
         _account: <Test as frame_system::Config>::AccountId,
         nonce: <Test as frame_system::Config>::Nonce
-    ) -> Option<(crate::Call<Test>, (u64, (u64, ())))> {
-        Some((call, (nonce, (nonce, ()))))
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
     }
 }
 
@@ -228,20 +256,22 @@ impl pallet_balances::Config for Test {
     type WeightInfo = ();
     type FreezeIdentifier = ();
     type MaxFreezes = ();
-    type RuntimeHoldReason = ();
+    type RuntimeHoldReason = RuntimeHoldReason;
     type RuntimeFreezeReason = ();
+    type DoneSlashHandler = ();
 }
 // SESSION
 impl pallet_session::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type ValidatorId = AccountId;
-    type ValidatorIdOf = pallet_staking::StashOf<Self>;
+    type ValidatorIdOf = ConvertInto;
     type ShouldEndSession = TestShouldEndSession;
     type NextSessionRotation = TestNextSessionRotation;
     type SessionManager = ();
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+    type DisablingStrategy = ();
 }
 
 impl EstimateNextSessionRotation<BlockNumber> for TestNextSessionRotation {
@@ -286,7 +316,10 @@ impl pallet_timestamp::Config for Test {
 pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut t = frame_system::GenesisConfig::<Test>::default().build_storage().unwrap();
 
-    (pallet_balances::GenesisConfig::<Test> { balances: vec![] })
+    (pallet_balances::GenesisConfig::<Test> {
+        balances: vec![],
+        ..Default::default()
+    })
         .assimilate_storage(&mut t)
         .unwrap();
 
