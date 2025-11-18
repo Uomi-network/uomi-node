@@ -20,6 +20,7 @@ use crate::{self as pallet_collective_proxy};
 
 use uomi_primitives::{Balance, BlockNumber};
 use frame_support::{
+    derive_impl,
     construct_runtime, ord_parameter_types, parameter_types,
     traits::{ConstU128, ConstU32, InstanceFilter},
     weights::Weight,
@@ -53,6 +54,7 @@ parameter_types! {
         frame_system::limits::BlockWeights::simple_max(Weight::from_parts(1024, 0));
 }
 
+#[derive_impl(frame_system::config_preludes::TestDefaultConfig as frame_system::DefaultConfig)]
 impl frame_system::Config for Test {
     type BaseCallFilter = frame_support::traits::Everything;
     type BlockWeights = ();
@@ -99,6 +101,7 @@ impl pallet_balances::Config for Test {
     type RuntimeFreezeReason = RuntimeFreezeReason;
     type MaxFreezes = ConstU32<1>;
     type WeightInfo = ();
+    type DoneSlashHandler = ();
 }
 
 parameter_types! {
@@ -143,7 +146,10 @@ impl ExtBuilder {
             .collect();
         balances.push((COMMUNITY_ACCOUNT, 1000));
 
-        pallet_balances::GenesisConfig::<Test> { balances: balances }
+        pallet_balances::GenesisConfig::<Test> {
+            balances: balances,
+            ..Default::default()
+        }
             .assimilate_storage(&mut storage)
             .ok();
 
