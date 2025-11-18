@@ -9,10 +9,10 @@ use frame_support::{
     derive_impl,
     inherent::{InherentData, InherentIdentifier, ProvideInherent},
     parameter_types,
-    traits::{ConstU16, ConstU32, ConstU64, EstimateNextSessionRotation},
+    traits::{ConstU16, ConstU32, ConstU64, EstimateNextSessionRotation, Nothing},
     weights::Weight,
 };
-use frame_system::offchain::{CreateSignedTransaction, SigningTypes};
+use frame_system::offchain::{CreateBare, CreateTransactionBase, CreateSignedTransaction, SigningTypes};
 use pallet_ipfs::{
     self,
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
@@ -22,13 +22,15 @@ use pallet_staking::TestBenchmarkingConfig;
 use sp_core::{
     sr25519::{Public, Signature},
     ConstU128,
+    ConstBool,
     Get,
     H256,
     U256,
 };
 use sp_runtime::{
     curve::PiecewiseLinear,
-    traits::{BlakeTwo256, IdentityLookup},
+    traits::{ConvertInto, BlakeTwo256, IdentityLookup},
+    generic::UncheckedExtrinsic,
     testing::UintAuthorityId,
     BuildStorage,
     DispatchError,
@@ -39,6 +41,7 @@ use sp_runtime::{
 };
 use sp_staking::currency_to_vote::SaturatingCurrencyToVote;
 use sp_std::collections::btree_map::BTreeMap;
+use sp_runtime::testing::TestXt;
 
 // Local imports
 use crate::{
@@ -71,6 +74,7 @@ parameter_types! {
     pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
     pub const ExpectedBlockTime: u64 = 6_000;
     pub const TestMaxOffchainConcurrent: u32 = 5; // NOTE: This config is not used anymore, but kept for retro-compatibility.
+    pub MaxActiveValidators: u32 = 1000;
 }
 
 pub struct IpfsWrapper;
@@ -128,8 +132,10 @@ impl onchain::Config for OnChainSeqPhragmen {
 	type Solver = SequentialPhragmen<AccountId, Perbill>;
 	type DataProvider = Staking;
 	type WeightInfo = ();
-	type MaxWinners = ConstU32<100>;
 	type Bounds = ElectionsBounds;
+    type Sort = ConstBool<true>;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
+    type MaxWinnersPerPage = MaxActiveValidators;
 }
 
 impl MockInherentDataProvider {
@@ -189,7 +195,6 @@ impl pallet_staking::Config for Test {
    type Currency = Balances;
    type CurrencyBalance = Balance;
    type UnixTime = Timestamp;
-   type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
    type CurrencyToVote = SaturatingCurrencyToVote;
    type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
    type GenesisElectionProvider = Self::ElectionProvider;
@@ -213,6 +218,10 @@ impl pallet_staking::Config for Test {
    type EventListeners = ();
    type BenchmarkingConfig = TestBenchmarkingConfig;
    type WeightInfo = ();
+   type OldCurrency = Balances;
+   type RuntimeHoldReason = RuntimeHoldReason;
+   type MaxValidatorSet = MaxActiveValidators;
+   type Filter = Nothing;
 }
 
 pallet_staking_reward_curve::build! {
@@ -264,13 +273,14 @@ impl<AId> SessionHandler<AId> for TestSessionHandler {
 impl pallet_session::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type ValidatorId = AccountId;
-    type ValidatorIdOf = pallet_staking::StashOf<Self>;
+    type ValidatorIdOf = ConvertInto;
     type ShouldEndSession = TestShouldEndSession;
     type NextSessionRotation = TestNextSessionRotation;
     type SessionManager = ();
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+    type DisablingStrategy = ();
 }
 
 impl SigningTypes for Test {
@@ -304,26 +314,63 @@ impl frame_system::Config for Test {
    type MaxConsumers = ConstU32<16>;
 }
 
-impl CreateSignedTransaction<UomiCall<Test>> for Test {
-   fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-       call: UomiCall<Test>,
-       _public: Self::Public,
-       _account: <Test as frame_system::Config>::AccountId,
-       nonce: <Test as frame_system::Config>::Nonce
-   ) -> Option<(UomiCall<Test>, (u64, (u64, ())))> {
-       Some((call, (nonce, (nonce, ()))))
-   }
+pub type Extrinsic = TestXt<RuntimeCall, ()>;
+
+impl CreateBare<UomiCall<Test>> for Test {
+    fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic<u64, RuntimeCall, (), ()>
+    {
+        UncheckedExtrinsic::new_bare(call)
+    }
 }
 
+impl CreateTransactionBase<UomiCall<Test>> for Test {
+    type Extrinsic = Extrinsic;
+    type RuntimeCall = RuntimeCall;
+}
 
-impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
-    fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: pallet_ipfs::Call<Test>,
+impl CreateSignedTransaction<UomiCall<Test>> for Test {
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
         _public: Self::Public,
         _account: <Test as frame_system::Config>::AccountId,
         nonce: <Test as frame_system::Config>::Nonce
-    ) -> Option<(pallet_ipfs::Call<Test>, (u64, (u64, ())))> {
-        Some((call, (nonce, (nonce, ()))))
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
+    }
+}
+
+impl CreateBare<pallet_ipfs::Call<Test>> for Test {
+    fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic<u64, RuntimeCall, (), ()>
+    {
+        UncheckedExtrinsic::new_bare(call)
+    }
+}
+
+impl CreateTransactionBase<pallet_ipfs::Call<Test>> for Test {
+    type Extrinsic = Extrinsic;
+    type RuntimeCall = RuntimeCall;
+
+}
+
+impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
+        _public: Self::Public,
+        _account: <Test as frame_system::Config>::AccountId,
+        nonce: <Test as frame_system::Config>::Nonce
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
     }
 }
 
@@ -384,6 +431,7 @@ impl sp_runtime::traits::Convert<AccountId, Option<AccountId>> for IdentityOf {
 }
 
 impl pallet_session::historical::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
     type FullIdentification = AccountId; // minimal
     type FullIdentificationOf = IdentityOf; // simple identity mapping
 }
@@ -429,8 +477,9 @@ impl pallet_balances::Config for Test {
    type WeightInfo = ();
    type FreezeIdentifier = ();
    type MaxFreezes = ();
-   type RuntimeHoldReason = ();
+   type RuntimeHoldReason = RuntimeHoldReason;
    type RuntimeFreezeReason = ();
+   type DoneSlashHandler = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
@@ -438,6 +487,8 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 
     pallet_balances::GenesisConfig::<Test> {
        balances: vec![],
+       ..Default::default()
+       
     }
     .assimilate_storage(&mut t)
     .unwrap();
