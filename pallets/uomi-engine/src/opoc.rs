@@ -131,7 +131,6 @@ impl<T: Config> Pallet<T> {
             }
 
             let opoc_assignment_count = OpocAssignment::<T>::iter_prefix(*request_id).count();
-
             match opoc_assignment_count {
                 0 => {
                     // No assignments for input, so we need to assign it to a validator for opoc level 0
@@ -160,126 +159,25 @@ impl<T: Config> Pallet<T> {
                 }
                 x if x == opoc_assignments_of_level_0 => {
                     // One assignment for input, so we need to check the output of the first validator and assign the input to validators for opoc level 1
-                    let (output, validators_not_completed, validators_in_timeout) =
-                        Self::opoc_get_outputs(&request_id, &current_block)?;
-
+                    let (output, validators_not_completed, validators_in_timeout) = Self::opoc_get_outputs(&request_id, &current_block)?;
                     // Continue if validators_not_completed is not empty (wait next block to check again)
-                    if validators_not_completed.len() > 0 {
-                        continue;
-                    }
+                    if validators_not_completed.len() > 0 { continue; }
 
-                    // Manage timeout if validators_in_timeout is not empty (remove assignment from validator, register timeout, re-assign to another validator)
+                    // Manage timeout if validators_in_timeout is not empty
                     if validators_in_timeout.len() > 0 {
                         let validator = validators_in_timeout[0].clone();
+                        let number_of_retries = Self::opoc_timeouts_operations_count(&opoc_timeouts_operations, &request_id);
 
-                        // Deassign the request from the validator
-                        match
-                            Self::opoc_deassignment_per_timeout(
+                        // If reached max retries, complete the request with Data::default() and clean timeouts
+                        if number_of_retries + 1 >= MAX_REQUEST_RETRIES {
+                            match Self::opoc_complete_per_timeout(
                                 &mut opoc_blacklist_operations,
-                                &mut opoc_assignment_operations,
                                 &mut opoc_timeouts_operations,
                                 &mut nodes_works_operations,
-                                &request_id,
-                                &nft_id,
-                                &validator
-                            )
-                        {
-                            Err(error) => {
-                                log::error!(
-                                    "Failed to deassign request from validator of OPoC level 0 for timeout. error: {:?}",
-                                    error
-                                );
-                                // NOTE: This case should not happen, but if it does, we need to handle it is some way...
-                            }
-                            _ =>(),
-                        }
-
-                        // Build an exclude list: include the timed-out validator, any currently assigned validators for this
-                        // request, and any validators that already produced an output (answered). This avoids reassigning an
-                        // already-answered or already-assigned node when the validator pool is small.
-                        let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
-                            &request_id,
-                            vec![validator.clone()]
-                        );
-
-
-                        // Reassign the request to another validator
-                        match
-                            Self::opoc_assignment(
-                                &mut opoc_blacklist_operations,
-                                &mut opoc_assignment_operations,
-                                &mut nodes_works_operations,
-                                &request_id,
-                                &current_block,
-                                OpocLevel::Level0,
-                                1,
-                                validators_to_exclude,
-                                true,
-                                &nft_id
-                            )
-                        {
-                            Err(error) => {
-                                log::error!(
-                                    "Failed to assign request to a random validator for OPoC level 0 after timeout. error: {:?}",
-                                    error
-                                );
-                            }
-                            _ => (),
-                        }
-
-                        continue;
-                    }
-
-                    // Load validator and output of the validator
-                    let validator = output.keys().next().unwrap().clone();
-                    let final_output = output.get(&validator).unwrap();
-
-                    // Manage final_output equal to Data::default(); in this case we need to deassign the request from the validator and assign it to another validator for a limited number of retries
-                    if final_output == &Data::default() {
-                        let number_of_retries = Self::opoc_timeouts_operations_count(
-                            &opoc_timeouts_operations,
-                            &request_id,
-                        );
-
-                        if number_of_retries + 1 >= MAX_REQUEST_RETRIES { // +1 because we consider the current retry
-                            // Clean all timeouts for the request
-                            Self::opoc_timeouts_operations_clean(
-                                &mut opoc_timeouts_operations,
-                                &mut opoc_blacklist_operations,
+                                &mut outputs_operations,
                                 &request_id,
                                 &nft_id
-                            );
-
-                            // Deassign the request from the validator per completion
-                            match
-                                Self::opoc_deassignment_per_completed(
-                                    &mut nodes_works_operations,
-                                    &validator,
-                                    &request_id
-                                )
-                            {
-                                Err(error) => {
-                                    log::error!(
-                                        "Failed to deassign request from validator of OPoC level 0 for completion. error: {:?}",
-                                        error
-                                    );
-                                    // NOTE: This case should not happen, but if it does, we need to handle it is some way...
-                                }
-                                _ => (),
-                            }
-
-                            // Complete the request with Data::default()
-                            let executions = 0 as u32;
-                            match
-                                Self::opoc_complete(
-                                    &mut outputs_operations,
-                                    &request_id,
-                                    &final_output,
-                                    &executions,
-                                    &executions,
-                                    &nft_id
-                                )
-                            {
+                            ) {
                                 Err(error) => {
                                     log::error!(
                                         "Failed to complete request at OPoC level 0 per max retries. error: {:?}",
@@ -288,6 +186,10 @@ impl<T: Config> Pallet<T> {
                                 }
                                 _ => (),
                             }
+
+                            continue;
+
+                        // Else, reassign the request to another validator
                         } else {
                             // Deassign the request from the validator
                             match
@@ -308,15 +210,16 @@ impl<T: Config> Pallet<T> {
                                     );
                                     // NOTE: This case should not happen, but if it does, we need to handle it is some way...
                                 }
-                                _ => (),
+                                _ =>(),
                             }
 
-                            // Build exclude list to avoid reassigning the same or already-answered validators
+                            // Build an exclude list: include the timed-out validator, any currently assigned validators for this
+                            // request, and any validators that already produced an output (answered). This avoids reassigning an
+                            // already-answered or already-assigned node when the validator pool is small.
                             let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
                                 &request_id,
                                 vec![validator.clone()]
                             );
-                            
 
                             // Reassign the request to another validator
                             match
@@ -338,12 +241,34 @@ impl<T: Config> Pallet<T> {
                                         "Failed to assign request to a random validator for OPoC level 0 after timeout. error: {:?}",
                                         error
                                     );
+
+                                    match Self::opoc_complete_per_timeout(
+                                        &mut opoc_blacklist_operations,
+                                        &mut opoc_timeouts_operations,
+                                        &mut nodes_works_operations,
+                                        &mut outputs_operations,
+                                        &request_id,
+                                        &nft_id
+                                    ) {
+                                        Err(error) => {
+                                            log::error!(
+                                                "Failed to complete request at OPoC level 0 per no available validators. error: {:?}",
+                                                error
+                                            );
+                                        }
+                                        _ => (),
+                                    }
                                 }
                                 _ => (),
                             }
+
+                            continue;
                         }
-                        continue;
                     }
+
+                    // Load validator and output of the validator
+                    let validator = output.keys().next().unwrap().clone();
+                    let final_output = output.get(&validator).unwrap();
 
                     // Manage completed request from validator
                     match
@@ -371,7 +296,6 @@ impl<T: Config> Pallet<T> {
                             &request_id,
                             vec![validator.clone()]
                         );
-                    
 
                         match
                             Self::opoc_assignment(
@@ -507,8 +431,7 @@ impl<T: Config> Pallet<T> {
                             Self::opoc_timeouts_operations_clean(
                                 &mut opoc_timeouts_operations,
                                 &mut opoc_blacklist_operations,
-                                &request_id,
-                                &nft_id
+                                &request_id
                             );
 
                             // Deassign the request from all validators per completion
@@ -1301,18 +1224,10 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    // This function is used to get informations about the execution of a request by the validators that has an assignment.
-    // It take the request_id and the current_block as input and return:
-    // - A BTreeMap with the validator as key and the output as value
-    // - A vector with the validators that have not responded to the request and are not in timeout
-    // - A vector with the validators that are in timeout
     fn opoc_get_outputs(
         request_id: &RequestId,
         current_block: &BlockNumber
-    ) -> Result<
-        (BTreeMap<T::AccountId, Data>, Vec<T::AccountId>, Vec<T::AccountId>),
-        DispatchError
-    > {
+    ) -> Result<(BTreeMap<T::AccountId, Data>, Vec<T::AccountId>, Vec<T::AccountId>),DispatchError> {
         let mut outputs = BTreeMap::<T::AccountId, Data>::new();
         let mut validators_not_completed = Vec::<T::AccountId>::new();
         let mut validators_in_timeout = Vec::<T::AccountId>::new();
@@ -1327,10 +1242,19 @@ impl<T: Config> Pallet<T> {
                     ::iter_prefix(*request_id)
                     .find(|(account_id, _output_data)| account_id == &validator) != None;
 
-            // If the validator has responded, add the output to the outputs BTreeMap and continue
+            // If the validator has responded manage the output
             if is_validator_output {
                 let node_output = NodesOutputs::<T>::get(*request_id, validator.clone());
-                outputs.insert(validator.clone(), node_output);
+
+                // If the output is empty consider the validator in timeout
+                if node_output == Data::default() {
+                    validators_in_timeout.push(validator.clone());
+                
+                // If the output is valid add the output to the outputs BTreeMap and continue
+                } else {
+                    outputs.insert(validator.clone(), node_output);
+                }
+
                 continue;
             }
 
@@ -1590,7 +1514,6 @@ impl<T: Config> Pallet<T> {
         opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
         opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
         request_id: &RequestId,
-        nft_id: &NftId
     ) -> bool {
         opoc_timeouts_operations.remove(request_id);
 
@@ -1602,13 +1525,74 @@ impl<T: Config> Pallet<T> {
         }
         opoc_timeouts_operations.insert(request_id.clone(), timeouts);
 
-       
-
         true
     }
 
+    fn opoc_complete_per_timeout(
+        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
+        opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
+        nodes_works_operations: &mut BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>,
+        outputs_operations: &mut BTreeMap<RequestId, (Data, u32, u32, U256)>,
+        request_id: &RequestId,
+        nft_id: &U256
+    ) -> DispatchResult {
+        // Clean all timeouts for the request
+        Self::opoc_timeouts_operations_clean(
+            opoc_timeouts_operations,
+            opoc_blacklist_operations,
+            request_id,
+        );
+
+        // Deassign the request from the validators per completion
+        let validators: Vec<T::AccountId> = OpocAssignment::<T>::iter_prefix(request_id)
+            .map(|(validator, _)| validator)
+            .collect();
+        for validator in validators.iter() {
+            match
+                Self::opoc_deassignment_per_completed(
+                    nodes_works_operations,
+                    validator,
+                    request_id
+                )
+            {
+                Err(error) => {
+                    log::error!(
+                        "Failed to deassign request from validator of OPoC level 0 for completion. error: {:?}",
+                        error
+                    );
+                    // NOTE: This case should not happen, but if it does, we need to handle it is some way...
+                }
+                _ => (),
+            }
+        }
+
+        // Complete the request with Data::default()
+        let executions = 0 as u32;
+        let final_output = Data::default();
+        match
+            Self::opoc_complete(
+                outputs_operations,
+                request_id,
+                &final_output,
+                &executions,
+                &executions,
+                nft_id
+            )
+        {
+            Err(error) => {
+                log::error!(
+                    "Failed to complete request at OPoC level 0 per max retries. error: {:?}",
+                    error
+                );
+            }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
     fn opoc_complete(
-    outputs_operations: &mut BTreeMap<RequestId, (Data, u32, u32, U256)>,
+        outputs_operations: &mut BTreeMap<RequestId, (Data, u32, u32, U256)>,
         request_id: &RequestId,
         output: &Data,
         total_executions: &u32,

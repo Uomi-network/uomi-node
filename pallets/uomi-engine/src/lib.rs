@@ -370,8 +370,8 @@ pub mod pallet {
         RequestId, // request_id
         (
             Data, // output_data
-            u32, // total executions
-            u32, // total consensus
+            u32, // total_executions
+            u32, // total_consensus
             U256, // nft_id (agent id)
         ),
         ValueQuery
