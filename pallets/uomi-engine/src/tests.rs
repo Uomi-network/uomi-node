@@ -715,6 +715,184 @@ fn test_offchain_run_wasm_case_2() {
     });
 }
 
+// CASE 3:
+// check an execution fail caused by a wasm with an infinite loop
+// EXPECTED 🚨:
+// the function should return an error indicating that the execution timed out
+#[test]
+fn test_offchain_run_wasm_case_3() {
+    make_logger();
+    
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let wasm = include_bytes!("./test_agents/agent1.wasm").to_vec();
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let address = H160::repeat_byte(0xAA);
+        let block_number = U256::from(System::block_number());
+        let expiration_block_number = U256::from(System::block_number() + 10);
+        let nft_required_consensus = U256::from(1);
+        let nft_execution_max_time = U256::from(99);
+        let request_id = U256::from(1);
+        let result = TestingPallet::offchain_run_wasm(
+            wasm.clone(),
+            input_data.clone(),
+            input_file_cid.clone(),
+            address,
+            block_number,
+            expiration_block_number, 
+            nft_required_consensus,
+            nft_execution_max_time,
+            request_id,
+            OpocLevel::Level0
+        );
+        assert!(result.is_err());
+    });
+}
+
+// CASE 4:
+// check a successful execution of a wasm agent that uses the call_ai function to run a local model
+// EXPECTED ✅:
+// the function should return the correct output data from the local model (in test it is the input data reversed)
+#[test]
+fn test_offchain_run_wasm_case_4() {
+    make_logger();
+    
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let wasm = include_bytes!("./test_agents/agent2.wasm").to_vec();
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let address = H160::repeat_byte(0xAA);
+        let block_number = U256::from(System::block_number());
+        let expiration_block_number = U256::from(System::block_number() + 10);
+        let nft_required_consensus = U256::from(1);
+        let nft_execution_max_time = U256::from(99);
+        let request_id = U256::from(1);
+        let result = TestingPallet::offchain_run_wasm(
+            wasm.clone(),
+            input_data.clone(),
+            input_file_cid.clone(),
+            address,
+            block_number,
+            expiration_block_number, 
+            nft_required_consensus,
+            nft_execution_max_time,
+            request_id,
+            OpocLevel::Level0
+        );
+        assert!(result.is_ok());
+
+        // Be sure result is input_data reversed
+        let input_data_reversed = input_data.iter().rev().cloned().collect::<Vec<u8>>();
+        assert_eq!(result.unwrap(), input_data_reversed);
+    });
+}
+
+// CASE 5:
+// check a successful execution of a wasm agent that uses the get_cid_file function to read the input file from its cid
+// EXPECTED ✅:
+// the function should return a success (NOTE: should be improved to check the actual output data)
+#[test]
+fn test_offchain_run_wasm_case_5() {
+    make_logger();
+    
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let wasm = include_bytes!("./test_agents/agent3.wasm").to_vec();
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let address = H160::repeat_byte(0xAA);
+        let block_number = U256::from(System::block_number());
+        let expiration_block_number = U256::from(System::block_number() + 10);
+        let nft_required_consensus = U256::from(1);
+        let nft_execution_max_time = U256::from(99);
+        let request_id = U256::from(1);
+        let result = TestingPallet::offchain_run_wasm(
+            wasm.clone(),
+            input_data.clone(),
+            input_file_cid.clone(),
+            address,
+            block_number,
+            expiration_block_number, 
+            nft_required_consensus,
+            nft_execution_max_time,
+            request_id,
+            OpocLevel::Level0
+        );
+        assert!(result.is_ok());
+    });
+}
+
+// CASE 6:
+// check a successful execution of a wasm agent that uses the get_request_sender function to read the address of the request sender
+// EXPECTED ✅:
+// the function should return the correct output data from the local model (in test it is the address readed with the function)
+#[test]
+fn test_offchain_run_wasm_case_6() {
+    make_logger();
+    
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
+        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let address = H160::repeat_byte(0xAA);
+        let block_number = U256::from(System::block_number());
+        let expiration_block_number = U256::from(System::block_number() + 10);
+        let nft_required_consensus = U256::from(1);
+        let nft_execution_max_time = U256::from(99);
+        let request_id = U256::from(1);
+        let result = TestingPallet::offchain_run_wasm(
+            wasm.clone(),
+            input_data.clone(),
+            input_file_cid.clone(),
+            address,
+            block_number,
+            expiration_block_number, 
+            nft_required_consensus,
+            nft_execution_max_time,
+            request_id,
+            OpocLevel::Level0
+        );
+        assert!(result.is_ok());
+
+        // Be sure result is address as bytes
+        let address_as_vec: BoundedVec::<u8, MaxDataSize> = address.as_ref().to_vec().try_into().unwrap_or_else(|_| BoundedVec::<u8, MaxDataSize>::default());
+        assert_eq!(result.unwrap(), address_as_vec);
+    });
+}
+
+// 🚀 TEST FUNCTIONALITY opoc
+// The opoc is executed on the on_finalize hook and to manage the requests assignment and outputs.
+// --------------------------------------------------------------------------------------------------------------
+
+// CASE 1:
+// check opoc execution without any requests
+// EXPECTED ✅:
+// the function should complete without errors even if there are no requests to process
+// the storages should not have any changes
+#[test]
+fn test_opoc_case_1() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        // Run on_finalize to trigger opoc
+        TestingPallet::on_finalize(System::block_number());
+        System::set_block_number(2);
+
+        // Check OpocAssignment and NodesWorks storages are empty
+        assert!(OpocAssignment::<Test>::iter().next().is_none());
+        assert!(NodesWorks::<Test>::iter().next().is_none());
+    });
+}
+
 // HELPERS
 //////////////////////////////////////////////////////////////////////////////////
 

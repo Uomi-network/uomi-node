@@ -604,110 +604,110 @@ fn test_sample() {
 //     });
 // }
 
-#[test]
-fn test_offchain_run_wasm_function_with_infinite_wasm() {
-    make_logger();
+// #[test]
+// fn test_offchain_run_wasm_function_with_infinite_wasm() {
+//     make_logger();
 
-    let mut ext = new_test_ext();
+//     let mut ext = new_test_ext();
 
-    ext.execute_with(|| {
-        let wasm = include_bytes!("./test_agents/agent1.wasm").to_vec();
-        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
-        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//     ext.execute_with(|| {
+//         let wasm = include_bytes!("./test_agents/agent1.wasm").to_vec();
+//         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(3), 
-        U256::from(1),
-        U256::from(3),
+//         let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(3), 
+//         U256::from(1),
+//         U256::from(3),
 
-        U256::from(3),
-        OpocLevel::Level0
-    );
-        assert!(result.is_err());
+//         U256::from(3),
+//         OpocLevel::Level0
+//     );
+//         assert!(result.is_err());
 
-        // Be sure error message is "WASM execution error"
-        let error = result.err().unwrap();
-        assert_eq!(error.to_string(), "WASM execution error");
-    });
-}
+//         // Be sure error message is "WASM execution error"
+//         let error = result.err().unwrap();
+//         assert_eq!(error.to_string(), "WASM execution error");
+//     });
+// }
 
-#[test]
-fn test_offchain_run_wasm_function_with_call_ai() {
-    make_logger();
+// #[test]
+// fn test_offchain_run_wasm_function_with_call_ai() {
+//     make_logger();
 
-    let mut ext = new_test_ext();
+//     let mut ext = new_test_ext();
 
-    ext.execute_with(|| {
-        let wasm = include_bytes!("./test_agents/agent2.wasm").to_vec();
-        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
-        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//     ext.execute_with(|| {
+//         let wasm = include_bytes!("./test_agents/agent2.wasm").to_vec();
+//         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), 
+//         let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(1), U256::from(99), 
         
         
-        U256::from(1),
-        U256::from(99),
+//         U256::from(1),
+//         U256::from(99),
 
-        U256::from(99), OpocLevel::Level0);
-        assert!(result.is_ok());
+//         U256::from(99), OpocLevel::Level0);
+//         assert!(result.is_ok());
 
-        // Be sure result is input_data reversed
-        let input_data_reversed = input_data.iter().rev().cloned().collect::<Vec<u8>>();
-        assert_eq!(result.unwrap(), input_data_reversed);
-    });
-}
+//         // Be sure result is input_data reversed
+//         let input_data_reversed = input_data.iter().rev().cloned().collect::<Vec<u8>>();
+//         assert_eq!(result.unwrap(), input_data_reversed);
+//     });
+// }
 
-#[test]
-fn test_offchain_run_wasm_function_with_get_file_cid() {
-    make_logger();
+// #[test]
+// fn test_offchain_run_wasm_function_with_get_file_cid() {
+//     make_logger();
 
-    new_test_ext().execute_with(|| {
-        System::set_block_number(2);
-        let wasm = include_bytes!("./test_agents/agent3.wasm").to_vec();
-        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
-        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//     new_test_ext().execute_with(|| {
+//         System::set_block_number(2);
+//         let wasm = include_bytes!("./test_agents/agent3.wasm").to_vec();
+//         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        // Insert the input_file_cid on Ipfs Pallet on storage CidsStatus
-        CidsStatus::<Test>::insert(input_file_cid.clone(), (
-            U256::from(0), // expiration_block_number
-            U256::from(1) // usable_from_block_number
-        ));
+//         // Insert the input_file_cid on Ipfs Pallet on storage CidsStatus
+//         CidsStatus::<Test>::insert(input_file_cid.clone(), (
+//             U256::from(0), // expiration_block_number
+//             U256::from(1) // usable_from_block_number
+//         ));
 
-        // Run the offchain_run_wasm function
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(2), U256::from(99), 
+//         // Run the offchain_run_wasm function
+//         let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), H160::repeat_byte(0xAA), U256::from(2), U256::from(99), 
         
         
-        U256::from(1),
-        U256::from(99),
+//         U256::from(1),
+//         U256::from(99),
 
-        U256::from(99), OpocLevel::Level0);
-        assert!(result.is_ok());
-    });
-}
+//         U256::from(99), OpocLevel::Level0);
+//         assert!(result.is_ok());
+//     });
+// }
 
-#[test]
-fn test_offchain_run_wasm_function_with_get_request_sender() {
-    make_logger();
+// #[test]
+// fn test_offchain_run_wasm_function_with_get_request_sender() {
+//     make_logger();
 
-    new_test_ext().execute_with(|| {
-        System::set_block_number(2);
-        let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
-        let address = H160::repeat_byte(0xAA);
-        let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
-        let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//     new_test_ext().execute_with(|| {
+//         System::set_block_number(2);
+//         let wasm = include_bytes!("./test_agents/agent4.wasm").to_vec();
+//         let address = H160::repeat_byte(0xAA);
+//         let input_data = BoundedVec::<u8, MaxDataSize>::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+//         let input_file_cid = Cid::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
 
-        // Run the offchain_run_wasm function
-        let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), address, U256::from(2), U256::from(99),
+//         // Run the offchain_run_wasm function
+//         let result = TestingPallet::offchain_run_wasm(wasm.clone(), input_data.clone(), input_file_cid.clone(), address, U256::from(2), U256::from(99),
         
-        U256::from(1),
-        U256::from(99),
-        U256::from(99), OpocLevel::Level0);
-        assert!(result.is_ok());
+//         U256::from(1),
+//         U256::from(99),
+//         U256::from(99), OpocLevel::Level0);
+//         assert!(result.is_ok());
 
-        // Be sure result is the address
-        let address_as_vec: BoundedVec::<u8, MaxDataSize> = address.as_ref().to_vec().try_into().unwrap_or_else(|_| BoundedVec::<u8, MaxDataSize>::default());
-        assert_eq!(result.unwrap(), address_as_vec);
-    });
-}
+//         // Be sure result is the address
+//         let address_as_vec: BoundedVec::<u8, MaxDataSize> = address.as_ref().to_vec().try_into().unwrap_or_else(|_| BoundedVec::<u8, MaxDataSize>::default());
+//         assert_eq!(result.unwrap(), address_as_vec);
+//     });
+// }
 
 // OPOC
 //////////////////////////////////////////////////////////////////////////////////
