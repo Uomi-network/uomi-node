@@ -712,102 +712,102 @@ fn test_sample() {
 // OPOC
 //////////////////////////////////////////////////////////////////////////////////
 
-#[test]
-fn test_on_finalize_opoc_no_assignment() {
-    make_logger();
+// #[test]
+// fn test_on_finalize_opoc_no_assignment() {
+//     make_logger();
     
-    new_test_ext().execute_with(|| {
-        let empty_cid = Cid::default();
-        let empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
+//     new_test_ext().execute_with(|| {
+//         let empty_cid = Cid::default();
+//         let empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
 
-        let stake = 10_000_000_000_000_000_000;
-        let num_validators = 1;
-        let validators = create_validators(num_validators, stake);
-        let validator = validators[0].clone();
+//         let stake = 10_000_000_000_000_000_000;
+//         let num_validators = 1;
+//         let validators = create_validators(num_validators, stake);
+//         let validator = validators[0].clone();
 
-        // Set current block
-        System::set_block_number(1);
-        let current_block_number = System::block_number();
+//         // Set current block
+//         System::set_block_number(1);
+//         let current_block_number = System::block_number();
 
-        // Insert an input on the Inputs storage
-        let request_id: U256 = U256::from(1);
-        Inputs::<Test>::insert(request_id, (
-            U256::zero(),
-            H160::repeat_byte(0xAA),
-            U256::zero(), // nft_id
-            U256::from(5), // nft_required_consensus
-            U256::from(25), // nft_execution_max_time
-            empty_cid.clone(),
-            empty_bounded_vec.clone(),
-            empty_cid.clone(),
-        ));
+//         // Insert an input on the Inputs storage
+//         let request_id: U256 = U256::from(1);
+//         Inputs::<Test>::insert(request_id, (
+//             U256::zero(),
+//             H160::repeat_byte(0xAA),
+//             U256::zero(), // nft_id
+//             U256::from(5), // nft_required_consensus
+//             U256::from(25), // nft_execution_max_time
+//             empty_cid.clone(),
+//             empty_bounded_vec.clone(),
+//             empty_cid.clone(),
+//         ));
 
-        let inherent_data = InherentData::new();
-        let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
-        assert!(TestingPallet::is_inherent(&inherent_call));
-        let runtime_call: RuntimeCall = inherent_call.into();
-        assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+//         let inherent_data = InherentData::new();
+//         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
+//         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
+//         assert!(TestingPallet::is_inherent(&inherent_call));
+//         let runtime_call: RuntimeCall = inherent_call.into();
+//         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
 
-        TestingPallet::on_finalize(current_block_number);
-        System::set_block_number(2);
+//         TestingPallet::on_finalize(current_block_number);
+//         System::set_block_number(2);
         
-        // After the execution of the inherent, should exist 1 assignment for the request_id 1 and the validator
-        let (opoc_assignment, level) = OpocAssignment::<Test>::get(request_id, validator.clone());
-        assert_ne!(opoc_assignment, U256::zero());
-        // After the execution of the inherent, the opoc assignment should have the expiration block number set to the current block number + the input lifetime
-        assert_eq!(opoc_assignment, U256::from(current_block_number + 25));
-        // The level of the opoc should be Level0
-        assert_eq!(level, OpocLevel::Level0);
-        // After the execution of the inherent, the NodesWorks storage should contain a record assigned to the validator with the value 1
-        let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
-        assert_eq!(nodes_works_number, true);
-    });
-}
+//         // After the execution of the inherent, should exist 1 assignment for the request_id 1 and the validator
+//         let (opoc_assignment, level) = OpocAssignment::<Test>::get(request_id, validator.clone());
+//         assert_ne!(opoc_assignment, U256::zero());
+//         // After the execution of the inherent, the opoc assignment should have the expiration block number set to the current block number + the input lifetime
+//         assert_eq!(opoc_assignment, U256::from(current_block_number + 25));
+//         // The level of the opoc should be Level0
+//         assert_eq!(level, OpocLevel::Level0);
+//         // After the execution of the inherent, the NodesWorks storage should contain a record assigned to the validator with the value 1
+//         let nodes_works_number = NodesWorks::<Test>::get(validator.clone(), request_id);
+//         assert_eq!(nodes_works_number, true);
+//     });
+// }
 
-#[test]
-fn test_on_finalize_opoc_no_assignment_without_validators_available() {
-    make_logger();
+// #[test]
+// fn test_on_finalize_opoc_no_assignment_without_validators_available() {
+//     make_logger();
     
-    new_test_ext().execute_with(|| {
-        let empty_cid = Cid::default();
-        let empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
+//     new_test_ext().execute_with(|| {
+//         let empty_cid = Cid::default();
+//         let empty_bounded_vec = BoundedVec::<u8, MaxDataSize>::default();
 
-        // Set current block
-        System::set_block_number(1);
-        let current_block_number = System::block_number();
+//         // Set current block
+//         System::set_block_number(1);
+//         let current_block_number = System::block_number();
 
-        // Insert an input on the Inputs storage
-        let request_id: U256 = U256::from(1);
-        Inputs::<Test>::insert(request_id, (
-            U256::zero(),
-            H160::repeat_byte(0xAA),
-            U256::zero(),
-            U256::from(5), // nft_required_consensus
-            U256::from(25), // nft_execution_max_time
-            empty_cid.clone(),
-            empty_bounded_vec.clone(),
-            empty_cid.clone(),
-        ));
+//         // Insert an input on the Inputs storage
+//         let request_id: U256 = U256::from(1);
+//         Inputs::<Test>::insert(request_id, (
+//             U256::zero(),
+//             H160::repeat_byte(0xAA),
+//             U256::zero(),
+//             U256::from(5), // nft_required_consensus
+//             U256::from(25), // nft_execution_max_time
+//             empty_cid.clone(),
+//             empty_bounded_vec.clone(),
+//             empty_cid.clone(),
+//         ));
 
-        let inherent_data = InherentData::new();
-        let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
-        assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
-        assert!(TestingPallet::is_inherent(&inherent_call));
-        let runtime_call: RuntimeCall = inherent_call.into();
-        assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
+//         let inherent_data = InherentData::new();
+//         let inherent_call = TestingPallet::create_inherent(&inherent_data).expect("Should create inherent");
+//         assert!(TestingPallet::check_inherent(&inherent_call, &inherent_data).is_ok());
+//         assert!(TestingPallet::is_inherent(&inherent_call));
+//         let runtime_call: RuntimeCall = inherent_call.into();
+//         assert_ok!(runtime_call.dispatch(RuntimeOrigin::none()));
 
-        TestingPallet::on_finalize(current_block_number);
-        System::set_block_number(2);
+//         TestingPallet::on_finalize(current_block_number);
+//         System::set_block_number(2);
         
-        // After the execution of the inherent, the OpocAssignment storage should contain 0 assignment for the request_id 1
-        let opoc_assignment = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
-        assert_eq!(opoc_assignment.len(), 0);
-        // After the execution of the inherent, the NodesWorks storage should contain 0 assignment
-        let nodes_works_number = NodesWorks::<Test>::iter().collect::<Vec<_>>();
-        assert_eq!(nodes_works_number.len(), 0);
-    });
-}
+//         // After the execution of the inherent, the OpocAssignment storage should contain 0 assignment for the request_id 1
+//         let opoc_assignment = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+//         assert_eq!(opoc_assignment.len(), 0);
+//         // After the execution of the inherent, the NodesWorks storage should contain 0 assignment
+//         let nodes_works_number = NodesWorks::<Test>::iter().collect::<Vec<_>>();
+//         assert_eq!(nodes_works_number.len(), 0);
+//     });
+// }
 
 #[test]
 fn test_on_finalize_opoc_level_0_no_timeout() {
