@@ -1,15 +1,13 @@
 use pallet_ipfs::types::Cid;
 use pallet_ipfs::CidsStatus;
 use crate::{
-    mock::*, Event, InherentDidUpdate, Inputs, MaxDataSize, OpocErrors, NodesOutputs, NodesVersions, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
+    mock::*, Event, Inputs, MaxDataSize, OpocErrors, NodesOutputs, NodesVersions, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs
 };
 use crate::types::{Address, NftId, RequestId};
 use sp_std::vec;
 use env_logger::Builder;
 use frame_support::{
     assert_ok,
-    inherent::ProvideInherent,
-    pallet_prelude::InherentData,
     traits::{Currency, OffchainWorker, OnFinalize, OnInitialize},
     BoundedVec,
 };

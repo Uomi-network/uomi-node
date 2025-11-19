@@ -34,7 +34,6 @@ use frame_support::{
     Blake2_128Concat,
     Parameter,
     ensure,
-    inherent::{InherentData, InherentIdentifier, IsFatalError, ProvideInherent},
     pallet_prelude::{
         DispatchError, DispatchResultWithPostInfo, Hooks, InvalidTransaction, IsType, 
         MaxEncodedLen, Member, RuntimeDebug, StorageDoubleMap, StorageMap, DecodeWithMemTracking,
@@ -71,31 +70,11 @@ use types::{Address, AiModelKey, BlockNumber, Data, NftId, RequestId, Version};
 
 use crate::ipfs::IpfsInterface;
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo)]
-pub struct EmptyInherent; 
-
-// Prima delle implementazioni del pallet, aggiungi:
-#[derive(Encode)]
-#[cfg_attr(feature = "std", derive(Debug, Decode))]
-pub enum InherentError {
-    // Definisci qui i tuoi errori specifici
-    InvalidInherentValue,
-}
-
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, Default, Copy, DecodeWithMemTracking)]
 pub enum OpocLevel {
     #[default] Level0,
     Level1,
     Level2
-}
-
-// Implementa IsFatalError per il tuo enum
-impl IsFatalError for InherentError {
-    fn is_fatal_error(&self) -> bool {
-        match self {
-            InherentError::InvalidInherentValue => true,
-        }
-    }
 }
 
 // PALLET DECLARATION
@@ -131,7 +110,6 @@ pub mod pallet {
         type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
         type MaxOffchainConcurrent: Get<u32>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
-        type InherentDataType: Default + Encode + Decode + Clone + Parameter + Member + MaxEncodedLen;
         type OffenceReporter: ReportOffence<
             <Self as frame_system::Config>::AccountId,
             pallet_session::historical::IdentificationTuple<Self>,
@@ -314,14 +292,6 @@ pub mod pallet {
 
     // Limit how many pending offences we process per block to bound weight.
     parameter_types! { pub const MaxEngineOffencesPerBlock: u32 = 10; }
-
-    // InherentDidUpdate storage is used to store the execution of the inherent function.
-	#[pallet::storage]
-	pub(super) type InherentDidUpdate<T: Config> = StorageValue<
-        _,
-        bool,
-        ValueQuery
-    >; // TODO: Verificare se il (super) serve veramente, se funziona senza, toglierlo
 
 	// NodesOutputs storage is used to store the outputs of the requests received by the run_request function.
 	#[pallet::storage]
@@ -568,10 +538,6 @@ pub mod pallet {
             Self::reset_validators_current_era_points_for_current_era().unwrap_or_else(|e| {
                 log::error!("Error resetting validators' current era points: {:?}", e);
             });
-
-            // Be sure that the InherentDidUpdate is set to true and reset it to false.
-            // This is required to be sure that the inherent function is executed once in the block.
-            assert!(InherentDidUpdate::<T>::take(), "UOMI-ENGINE: inherent must be updated once in the block");
 		}
 
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
@@ -588,14 +554,6 @@ pub mod pallet {
     
         fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
             match call {
-                Call::set_inherent_data { .. } => {
-                    ValidTransaction::with_tag_prefix("UomiEnginePallet")
-                        .priority(TransactionPriority::MAX)
-                        .and_provides(consts::PALLET_INHERENT_IDENTIFIER)
-                        .longevity(64_u64)
-                        .propagate(true)
-                        .build()
-                },
                 Call::store_nodes_outputs {  payload, signature } => {
                     if !Self::verify_signature(payload.public.clone(), payload, signature) {
                         return InvalidTransaction::BadProof.into();
@@ -743,28 +701,6 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
 
-        // NOTE: Set inherent data is not used anymore, but kept for reference.
-		#[pallet::call_index(0)]
-		#[pallet::weight((500_000, DispatchClass::Mandatory))]
-		pub fn set_inherent_data(
-			origin: OriginFor<T>,
-            opoc_operations: (
-                BTreeMap<T::AccountId, bool>,
-                BTreeMap<(RequestId, T::AccountId), (BlockNumber, OpocLevel)>, 
-                BTreeMap<T::AccountId, BTreeMap<RequestId, bool>>, // nodes_works_operations
-                BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_timeouts_operations
-                BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>, // opoc_errors_operations
-                BTreeMap<RequestId, (Data, u32, u32, U256)>
-            ),
-            aimodelscalc_operations: BTreeMap<AiModelKey, (Data, Data, BlockNumber)>,
-		) -> DispatchResultWithPostInfo {
-			ensure_none(origin)?;
-            assert!(!InherentDidUpdate::<T>::exists(), "Inherent data must be updated only once in the block");
-
-			InherentDidUpdate::<T>::set(true);
-			Ok(().into())
-		}
-        
         #[pallet::call_index(1)]
         #[pallet::weight(0)]
         pub fn store_nodes_outputs(
@@ -823,22 +759,6 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(3)]
-        #[pallet::weight(0)]
-        pub fn temporary_cleanup_inputs(origin: OriginFor<T>) -> DispatchResult {
-            log::info!("UOMI-ENGINE: Cleaning up inputs");
-            let _ = ensure_signed(origin)?;
-            
-            // remove all data on Inputs storage
-            // let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
-            // for (request_id, _) in inputs {
-            //    Inputs::<T>::remove(request_id);
-            // }
-
-            Ok(())
-        }
-       
-
         #[pallet::call_index(4)]
         #[pallet::weight(0)]
         pub fn store_nodes_opoc_l0_inferences(
@@ -891,31 +811,6 @@ pub mod pallet {
             OpocBlacklist::<T>::remove_all(None);
 
             Ok(())
-        }
-    }
-
-    // Inherent functions are used to execute code at the beginning of each block.
-    // NOTE: Inherent are not used anymore, but the structure is kept for future use.
-    #[pallet::inherent]
-    impl<T: Config> ProvideInherent for Pallet<T> {
-        type Call = Call<T>;
-        type Error = InherentError;
-        const INHERENT_IDENTIFIER: InherentIdentifier = consts::PALLET_INHERENT_IDENTIFIER;
-    
-        fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
-            Some(Call::set_inherent_data { 
-                opoc_operations: (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
-                aimodelscalc_operations: BTreeMap::new(),
-            })
-        }
-    
-        fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
-            Ok(())        
-        }
-        
-        fn is_inherent(call: &Self::Call) -> bool {
-            let is_inherent = matches!(call, Call::set_inherent_data { .. });
-            is_inherent
         }
     }
 }
