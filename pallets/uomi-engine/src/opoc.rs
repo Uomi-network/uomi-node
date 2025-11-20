@@ -166,6 +166,30 @@ impl<T: Config> Pallet<T> {
                     // Manage timeout if validators_in_timeout is not empty
                     if validators_in_timeout.len() > 0 {
                         let validator = validators_in_timeout[0].clone();
+
+                        // Deassign the request from the validator
+                        match
+                            Self::opoc_deassignment_per_timeout(
+                                &mut opoc_blacklist_operations,
+                                &mut opoc_assignment_operations,
+                                &mut opoc_timeouts_operations,
+                                &mut nodes_works_operations,
+                                &request_id,
+                                &nft_id,
+                                &validator
+                            )
+                        {
+                            Err(error) => {
+                                log::error!(
+                                    "Failed to deassign request from validator of OPoC level 0 for timeout. error: {:?}",
+                                    error
+                                );
+                                // NOTE: This case should not happen, but if it does, we need to handle it is some way...
+                            }
+                            _ =>(),
+                        }
+
+                        // Load number of retries for the request
                         let number_of_retries = Self::opoc_timeouts_operations_count(&opoc_timeouts_operations, &request_id);
 
                         // If reached max retries, complete the request with Data::default() and clean timeouts
@@ -191,28 +215,6 @@ impl<T: Config> Pallet<T> {
 
                         // Else, reassign the request to another validator
                         } else {
-                            // Deassign the request from the validator
-                            match
-                                Self::opoc_deassignment_per_timeout(
-                                    &mut opoc_blacklist_operations,
-                                    &mut opoc_assignment_operations,
-                                    &mut opoc_timeouts_operations,
-                                    &mut nodes_works_operations,
-                                    &request_id,
-                                    &nft_id,
-                                    &validator
-                                )
-                            {
-                                Err(error) => {
-                                    log::error!(
-                                        "Failed to deassign request from validator of OPoC level 0 for timeout. error: {:?}",
-                                        error
-                                    );
-                                    // NOTE: This case should not happen, but if it does, we need to handle it is some way...
-                                }
-                                _ =>(),
-                            }
-
                             // Build an exclude list: include the timed-out validator, any currently assigned validators for this
                             // request, and any validators that already produced an output (answered). This avoids reassigning an
                             // already-answered or already-assigned node when the validator pool is small.
@@ -316,6 +318,23 @@ impl<T: Config> Pallet<T> {
                                     "Failed to assign request to random validators for OPoC level 1. error: {:?}",
                                     error
                                 );
+
+                                match Self::opoc_complete_per_timeout(
+                                    &mut opoc_blacklist_operations,
+                                    &mut opoc_timeouts_operations,
+                                    &mut nodes_works_operations,
+                                    &mut outputs_operations,
+                                    &request_id,
+                                    &nft_id
+                                ) {
+                                    Err(error) => {
+                                        log::error!(
+                                            "Failed to complete request at OPoC level 0 per no available validators. error: {:?}",
+                                            error
+                                        );
+                                    }
+                                    _ => (),
+                                }
                             }
                             _ => (),
                         }
