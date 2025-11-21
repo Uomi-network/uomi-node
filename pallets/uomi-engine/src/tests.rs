@@ -2204,6 +2204,96 @@ fn test_opoc_case_19() {
     });
 }
 
+// 🚀 TEST FUNCTION opoc_assignment_get_random_validators
+// The opoc_assignment_get_random_validators function is used in OPOC assignment to select a random set of validators for processing a request.
+// --------------------------------------------------------------------------------------------------------------
+
+#[test]
+fn test_opoc_assignment_get_random_validators_cases() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 100;
+        let _validators = create_validators(num_validators, stake);
+
+        let opoc_blacklist_operations = BTreeMap::<(AccountId, U256), bool>::new();
+        let nodes_works_operations = BTreeMap::<AccountId, BTreeMap<U256, bool>>::new();
+
+        // Request 100 validators, all available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
+            &nodes_works_operations,
+            U256::from(100),
+            false,
+            vec![],
+            &U256::from(1)
+        ).unwrap();
+        assert_eq!(validators.len(), 100);
+
+        // Request 50 validators, all available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
+            &nodes_works_operations,
+            U256::from(50),
+            false,
+            vec![],
+            &U256::from(1)
+        ).unwrap();
+        assert_eq!(validators.len(), 50);
+
+        // Request 1 validator, all available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
+            &nodes_works_operations,
+            U256::from(1),
+            false,
+            vec![],
+            &U256::from(1)
+        ).unwrap();
+        assert_eq!(validators.len(), 1);
+
+        // Request 101 validators, not enough available
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
+            &nodes_works_operations,
+            U256::from(101),
+            false,
+            vec![],
+            &U256::from(1)
+        );
+        assert_eq!(validators.is_err(), true);
+
+        // Request 50 validators, exclude 50 validators
+        let excluded_validators: Vec<AccountId> = (0..50).map(|i| AccountId::from_raw([i as u8; 32])).collect();
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
+            &nodes_works_operations,
+            U256::from(50),
+            false,
+            excluded_validators.clone(),
+            &U256::from(1)
+        ).unwrap();
+        assert_eq!(validators.len(), 50);
+        // be sure selected validators are not in the excluded_validators
+        for validator in validators {
+            assert_eq!(excluded_validators.contains(&validator), false);
+        }
+
+        // Request 50 validators, exclude 51 validators
+        let excluded_validators: Vec<AccountId> = (0..51).map(|i| AccountId::from_raw([i as u8; 32])).collect();
+        let validators = TestingPallet::opoc_assignment_get_random_validators(
+            &opoc_blacklist_operations,
+            &nodes_works_operations,
+            U256::from(50),
+            false,
+            excluded_validators,
+            &U256::from(1)
+        );
+        assert_eq!(validators.is_err(), true);
+    });
+}
+
 // HELPERS
 //////////////////////////////////////////////////////////////////////////////////
 
