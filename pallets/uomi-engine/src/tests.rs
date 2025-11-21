@@ -2195,7 +2195,12 @@ fn test_opoc_case_19() {
             }
             let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
             assert_eq!(is_blacklisted, false);
-        }        
+        }
+        // Check all validators are not in OpocErrors except the one at level 1 with different output
+        let opoc_errors = OpocErrors::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_errors.len(), 1);
+        let opoc_error = OpocErrors::<Test>::get(request_id, validator_level_1_different_output.clone());
+        assert_eq!(opoc_error, true);
     });
 }
 

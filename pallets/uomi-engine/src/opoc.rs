@@ -928,7 +928,7 @@ impl<T: Config> Pallet<T> {
             }
         }
 
-        // set outputs_operations
+        // set outputs_operations and run penalties and clean storages
         // NOTE: For every output, we need to clear other storages from data associated with the request_id
         for (
             request_id,
@@ -955,7 +955,6 @@ impl<T: Config> Pallet<T> {
             // Requirement summary:
             // 1. Apply only to validators that timed out (OpocTimeouts == true for this request).
             // 2. A later valid output does NOT cancel the penalty (once timed out, still penalized at completion).
-            // 3. TODO (open decision): Whether to skip this on failed (Data::default()) completions. Probably not, so this is ok for now
             for (account_id, is_timeout) in OpocTimeouts::<T>::iter_prefix(request_id) {
                 if is_timeout {
                     // Best-effort; failure shouldn't abort OPoC logic.
@@ -969,11 +968,16 @@ impl<T: Config> Pallet<T> {
                     }
                 }
             }
+
             // remove from Inputs
             Inputs::<T>::remove(request_id);
             // remove all assignments from OpocAssignment
             for (account_id, _) in OpocAssignment::<T>::iter_prefix(request_id) {
                 OpocAssignment::<T>::remove(request_id, account_id);
+            }
+            // remove all timeouts from OpocTimeouts
+            for (account_id, _) in OpocTimeouts::<T>::iter_prefix(request_id) {
+                OpocTimeouts::<T>::remove(request_id, account_id);
             }
             // remove all outputs from NodesOutputs
             for (account_id, _) in NodesOutputs::<T>::iter_prefix(request_id) {

@@ -519,20 +519,21 @@ pub mod pallet {
                 OpocBlacklist::<T>::remove_all(None);
             }
 
-            // Remove from the chain the Inputs that are older (block_number + nft_execution_max_time < current_block) and are not assigned to any validator.
-            let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
-            for (request_id, (block_number, _address, nft_id, _nft_required_consensus, nft_execution_max_time, _nft_file_cid, _input_data, _input_file_cid)) in inputs {
-                let expiration_block = block_number + nft_execution_max_time.saturated_into::<u32>();
-                if U256::from(expiration_block) < current_block_number {
-                    // Check if the request_id is assigned to any validator
-                    let is_assigned = OpocAssignment::<T>::iter_prefix(request_id).next().is_some();
-                    if !is_assigned {
-                        log::info!("UOMI-ENGINE: Removing expired input for request_id: {:?}", request_id);
-                        Inputs::<T>::remove(request_id);
-                        Self::deposit_event(Event::RequestExpired { request_id });
-                    }
-                }
-            }
+            // NOTE: Now all inputs that can not be managed because no nodes are available are removed during opoc so this code is not required anymore.
+            // // Remove from the chain the Inputs that are older (block_number + nft_execution_max_time < current_block) and are not assigned to any validator.
+            // let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
+            // for (request_id, (block_number, _address, nft_id, _nft_required_consensus, nft_execution_max_time, _nft_file_cid, _input_data, _input_file_cid)) in inputs {
+            //     let expiration_block = block_number + nft_execution_max_time.saturated_into::<u32>();
+            //     if U256::from(expiration_block) < current_block_number {
+            //         // Check if the request_id is assigned to any validator
+            //         let is_assigned = OpocAssignment::<T>::iter_prefix(request_id).next().is_some();
+            //         if !is_assigned {
+            //             log::info!("UOMI-ENGINE: Removing expired input for request_id: {:?}", request_id);
+            //             Inputs::<T>::remove(request_id);
+            //             Self::deposit_event(Event::RequestExpired { request_id });
+            //         }
+            //     }
+            // }
 
             // Reset validators' current era points at the end of each era to avoid overflow.
             Self::reset_validators_current_era_points_for_current_era().unwrap_or_else(|e| {
