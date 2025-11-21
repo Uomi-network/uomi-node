@@ -360,6 +360,17 @@ impl<T: Config> Pallet<T> {
                             _ => (),
                         }
                     }
+
+                    // Remove all timeouts and blacklist for the request
+                    // NOTE: This is needed to avoid penalizations for nodes that has a timeout during opoc level 0
+                    // because sometimes the same execution on different nodes can have different execution times
+                    // (for example because of llm inferences with thinking entering in a loop that exceed the max execution time)
+                    OpocTimeouts::<T>::iter_prefix(*request_id).for_each(|(validator, _)| {
+                        // remove the timeout from storage
+                        opoc_timeouts_operations.entry(*request_id).or_insert(BTreeMap::<T::AccountId, bool>::new()).insert(validator.clone(), false);
+                        // remove the blacklist from storage
+                        opoc_blacklist_operations.insert((validator.clone(), nft_id.clone()), false);
+                    });
                 }
                 x if x == opoc_assignments_of_level_1 => {
                     // Opoc level 1 + 1 assignments for input, so we need to check the output of the validators of opoc level 1 and choose if needs opoc level 2
@@ -1400,8 +1411,6 @@ impl<T: Config> Pallet<T> {
         }
     }
 
-    // This function is used to get the number of timeouts of a request_id by checking the storage and the operations
-    // NOTE: It should avoid to consider twice the same timeout stored both in the storage and in the operations
     fn opoc_timeouts_operations_count(
         opoc_timeouts_operations: &BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
         request_id: &RequestId
@@ -1428,11 +1437,8 @@ impl<T: Config> Pallet<T> {
         timeouts_per_account.len() as u32
     }
 
-    // This function is used to clean all the timeouts stored for a specific request_id
-    // NOTE: It should remove all the timeouts stored in opoc_timeouts_operations, then it should add on opoc_timeouts_operations all the timeouts stored in OpocTimeouts with false value
     fn opoc_timeouts_operations_clean(
         opoc_timeouts_operations: &mut BTreeMap<RequestId, BTreeMap<T::AccountId, bool>>,
-        opoc_blacklist_operations: &mut BTreeMap<(T::AccountId, NftId), bool>,
         request_id: &RequestId,
     ) -> bool {
         opoc_timeouts_operations.remove(request_id);
@@ -1459,7 +1465,6 @@ impl<T: Config> Pallet<T> {
         // Clean all timeouts for the request
         Self::opoc_timeouts_operations_clean(
             opoc_timeouts_operations,
-            opoc_blacklist_operations,
             request_id,
         );
 
