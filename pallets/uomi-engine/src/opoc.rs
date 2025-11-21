@@ -193,7 +193,7 @@ impl<T: Config> Pallet<T> {
                         let number_of_retries = Self::opoc_timeouts_operations_count(&opoc_timeouts_operations, &request_id);
 
                         // If reached max retries, complete the request with Data::default() and clean timeouts
-                        if number_of_retries + 1 >= MAX_REQUEST_RETRIES {
+                        if number_of_retries >= MAX_REQUEST_RETRIES {
                             match Self::opoc_complete_per_timeout(
                                 &mut opoc_blacklist_operations,
                                 &mut opoc_timeouts_operations,
@@ -363,11 +363,13 @@ impl<T: Config> Pallet<T> {
                 }
                 x if x == opoc_assignments_of_level_1 => {
                     // Opoc level 1 + 1 assignments for input, so we need to check the output of the validators of opoc level 1 and choose if needs opoc level 2
-                    let (output, validators_not_completed, validators_in_timeout) =
-                        Self::opoc_get_outputs(&request_id, &current_block)?;
+                    let (output, validators_not_completed, validators_in_timeout) = Self::opoc_get_outputs(&request_id, &current_block)?;
+                    // Continue if validators_not_completed is not empty (wait next block to check again)
+                    if validators_not_completed.len() > 0 { continue; }
 
-                    // Manage timouts if validators_in_timeout is not empty (remove assignment from validators, register timeout, re-assign to other validators)
+                    // Manage timeout if validators_in_timeout is not empty
                     if validators_in_timeout.len() > 0 {
+                        // Deassign the request from the validators in timeout
                         for validator in validators_in_timeout.iter() {
                             // Deassign the request from the validator
                             match
@@ -392,14 +394,38 @@ impl<T: Config> Pallet<T> {
                             }
                         }
 
-                        //create a vec with the validators to exclude from output keys and validators_not_completed to avoid reassigning the request to the same validators
-                        let mut validators_to_exclude = Vec::<T::AccountId>::new();
-                        for validator in validators_not_completed.iter() {
-                            validators_to_exclude.push(validator.clone());
+                        // Check the number of retries for the request
+                        let number_of_retries = Self::opoc_timeouts_operations_count(&opoc_timeouts_operations, &request_id);
+
+                        // If reached max retries, complete the request with Data::default() and clean timeouts
+                        if number_of_retries >= MAX_REQUEST_RETRIES {
+                            match Self::opoc_complete_per_timeout(
+                                &mut opoc_blacklist_operations,
+                                &mut opoc_timeouts_operations,
+                                &mut nodes_works_operations,
+                                &mut outputs_operations,
+                                &request_id,
+                                &nft_id
+                            ) {
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to complete request at OPoC level 1 per max retries. error: {:?}",
+                                        error
+                                    );
+                                }
+                                _ => (),
+                            }
+
+                            continue;
                         }
-                        output.keys().for_each(|validator| {
-                            validators_to_exclude.push(validator.clone());
-                        });
+
+                        // Build an exclude list: include the timed-out validators, any currently assigned validators for this
+                        // request, and any validators that already produced an output (answered). This avoids reassigning an
+                        // already-answered or already-assigned node when the validator pool is small.
+                        let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
+                            &request_id,
+                            validators_in_timeout.clone()
+                        );
 
                         // Reassign the request to other validators
                         match
@@ -421,136 +447,25 @@ impl<T: Config> Pallet<T> {
                                     "Failed to assign request to random validators for OPoC level 1 after timeout. error: {:?}",
                                     error
                                 );
-                            }
-                            _ => (),
-                        }
 
-                        continue;
-                    }
-
-                    // Continue if validators_not_completed is not empty (wait next block to check again)
-                    if validators_not_completed.len() > 0 {
-                        continue;
-                    }
-
-                    // Manage presence of outputs with Data::default(); in this case we need to deassign the request from the validator and assign it to another validator for a limited number of retries
-                    let validators_with_empty_output = output
-                        .iter()
-                        .filter(|(_, output)| output == &&Data::default())
-                        .map(|(validator, _)| validator.clone())
-                        .collect::<Vec<T::AccountId>>();
-                    if validators_with_empty_output.len() > 0 {
-                        let number_of_retries = Self::opoc_timeouts_operations_count(
-                            &opoc_timeouts_operations,
-                            &request_id,
-                        );
-
-                        if number_of_retries + validators_with_empty_output.len() as u32 >= MAX_REQUEST_RETRIES {
-                            // Clean all timeouts for the request
-                            Self::opoc_timeouts_operations_clean(
-                                &mut opoc_timeouts_operations,
-                                &mut opoc_blacklist_operations,
-                                &request_id
-                            );
-
-                            // Deassign the request from all validators per completion
-                            for validator in output.keys() {
-                                match
-                                    Self::opoc_deassignment_per_completed(
-                                        &mut nodes_works_operations,
-                                        &validator,
-                                        &request_id
-                                    )
-                                {
-                                    Err(error) => {
-                                        log::error!(
-                                            "Failed to deassign request from validator of OPoC level 1 for completion. error: {:?}",
-                                            error
-                                        );
-                                        // NOTE: This case should not happen, but if it does, we need to handle it is some way...
-                                    }
-                                    _ => (),
-                                }
-                            }
-
-                            // Complete the request with Data::default()
-                            let executions = 0 as u32;
-                            match
-                                Self::opoc_complete(
+                                match Self::opoc_complete_per_timeout(
+                                    &mut opoc_blacklist_operations,
+                                    &mut opoc_timeouts_operations,
+                                    &mut nodes_works_operations,
                                     &mut outputs_operations,
                                     &request_id,
-                                    &Data::default(),
-                                    &executions,
-                                    &executions,
                                     &nft_id
-                                )
-                            {
-                                Err(error) => {
-                                    log::error!(
-                                        "Failed to complete request at OPoC level 1 per max retries. error: {:?}",
-                                        error
-                                    );
-                                }
-                                _ => (),
-                            }
-                        } else {
-                            // Deassign the request from the validators with empty output
-                            for validator in validators_with_empty_output.iter() {
-                                match
-                                    Self::opoc_deassignment_per_timeout(
-                                        &mut opoc_blacklist_operations,
-                                        &mut opoc_assignment_operations,
-                                        &mut opoc_timeouts_operations,
-                                        &mut nodes_works_operations,
-                                        &request_id,
-                                        &nft_id,
-                                        &validator
-                                    )
-                                {
+                                ) {
                                     Err(error) => {
                                         log::error!(
-                                            "Failed to deassign request from validator of OPoC level 1 for timeout. error: {:?}",
+                                            "Failed to complete request at OPoC level 1 per no available validators. error: {:?}",
                                             error
                                         );
-                                        // NOTE: This case should not happen, but if it does, we need to handle it is some way...
                                     }
                                     _ => (),
                                 }
                             }
-
-
-                            // Build an exclude list: include the timed-out validator, any currently assigned validators for this
-                            // request, and any validators that already produced an output (answered). This avoids reassigning an
-                            // already-answered or already-assigned node when the validator pool is small.
-                            let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
-                                &request_id,
-                                validators_with_empty_output.clone()
-                            );
-                           
-
-                            // Reassign the request to other validators
-                            match
-                                Self::opoc_assignment(
-                                    &mut opoc_blacklist_operations,
-                                    &mut opoc_assignment_operations,
-                                    &mut nodes_works_operations,
-                                    &request_id,
-                                    &current_block,
-                                    OpocLevel::Level1,
-                                    validators_with_empty_output.len() as u32,
-                                    validators_to_exclude,
-                                    false,
-                                    &nft_id
-                                )
-                            {
-                                Err(error) => {
-                                    log::error!(
-                                        "Failed to assign request to random validators for OPoC level 1 after timeout. error: {:?}",
-                                        error
-                                    );
-                                }
-                                _ => (),
-                            }
+                            _ => (),
                         }
 
                         continue;
@@ -575,11 +490,10 @@ impl<T: Config> Pallet<T> {
                             _ => (),
                         }
                     }
-
-                    // check if every outputs are the same
+                    
+                    // Manage case where all outputs are the same by completing the request directly
                     let mut output_values = output.values();
                     let first_output = output_values.next().unwrap();
-
                     if output_values.all(|output| output == first_output) {
                         let output_values_len = output.len() as u32;
 
@@ -601,61 +515,74 @@ impl<T: Config> Pallet<T> {
                             }
                             _ => (),
                         }
-                    } else {
-                        let mut validators_to_exclude = Vec::<T::AccountId>::new();
-                        output.keys().for_each(|validator| {
-                            validators_to_exclude.push(validator.clone());
-                        });
-
-                        // BACKUP OLD CODE: is possible that some validators to exclude are not in the active validators list so we take less validators than expected
-                        // let validators_active_count = Self::get_active_validators_count();
-                        // let number_of_validators = validators_active_count - (validators_to_exclude.len() as u32);
-
-                        // NEW CODE
-                        let active_validators = Self::get_active_validators();
-                        let active_validators_without_exclude = active_validators
-                            .into_iter()
-                            .filter(|account_id| !validators_to_exclude.contains(account_id))
-                            .collect::<Vec<T::AccountId>>();
-
-                        // TO CHECK: QUI STIAMO PRENDENDO number_of_validators NON COME 2/3+1 DELLA CHAIN, MA 2/3+1 DEI NODI DELLA CHAIN TOLTI QUELLI CHE HANNO GIA ESEGUITO LA RICHIESTA
-                        // DA CAPIRE SE E CORRETTO O MENO
-                        let number_of_validators = active_validators_without_exclude.len() as u32;
-                        let number_of_validators = (number_of_validators * 2 / 3) + 1;
                         
-                        // Assign the request to validators for opoc level 2 to all validators
-                        match
-                            Self::opoc_assignment(
+                        continue;
+                    }
+
+                    // Build an exclude list: include the timed-out validators, any currently assigned validators for this
+                    // request, and any validators that already produced an output (answered). This avoids reassigning an
+                    // already-answered or already-assigned node when the validator pool is small.
+                    let validators_to_exclude = Self::opoc_build_exclude_with_assigned(
+                        &request_id,
+                        validators_in_timeout.clone()
+                    );
+
+                    // Detect all active validators without considering the validators to exclude
+                    let active_validators = Self::get_active_validators();
+                    let active_validators_without_exclude: Vec<T::AccountId> = active_validators
+                        .into_iter()
+                        .filter(|validator| !validators_to_exclude.contains(validator))
+                        .collect();
+
+                    // Detect the number of validators needed for opoc level 2
+                    let number_of_validators = active_validators_without_exclude.len() as u32;
+                    let number_of_validators = (number_of_validators * 2 / 3) + 1;
+
+                    // Assign the request to validators for opoc level 2 to all validators
+                    match
+                        Self::opoc_assignment(
+                            &mut opoc_blacklist_operations,
+                            &mut opoc_assignment_operations,
+                            &mut nodes_works_operations,
+                            &request_id,
+                            &current_block,
+                            OpocLevel::Level2,
+                            number_of_validators,
+                            validators_to_exclude,
+                            false,
+                            &nft_id
+                        )
+                    {
+                        Err(error) => {
+                            log::error!(
+                                "Failed to assign request to all validators for OPoC level 2. error: {:?}",
+                                error
+                            );
+
+                            match Self::opoc_complete_per_timeout(
                                 &mut opoc_blacklist_operations,
-                                &mut opoc_assignment_operations,
+                                &mut opoc_timeouts_operations,
                                 &mut nodes_works_operations,
+                                &mut outputs_operations,
                                 &request_id,
-                                &current_block,
-                                OpocLevel::Level2,
-                                number_of_validators,
-                                validators_to_exclude,
-                                false,
                                 &nft_id
-                            )
-                        {
-                            Err(error) => {
-                                log::error!(
-                                    "Failed to assign request to all validators for OPoC level 2. error: {:?}",
-                                    error
-                                );
+                            ) {
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to complete request at OPoC level 1 per no available validators. error: {:?}",
+                                        error
+                                    );
+                                }
+                                _ => (),
                             }
-                            _ => (),
                         }
+                        _ => (),
                     }
                 }
                 x if x > opoc_assignments_of_level_1 => {
-                    let (output, validators_not_completed, validators_in_timeout) =
-                        Self::opoc_get_outputs(&request_id, &current_block)?;
-
+                    let (output, validators_not_completed, validators_in_timeout) = Self::opoc_get_outputs(&request_id, &current_block)?;
                     // If validators_not_completed is not empty, wait next block to check again
-                    if validators_not_completed.len() > 0 {
-                        continue;
-                    }
+                    if validators_not_completed.len() > 0 { continue; }
 
                     // If some validators are in timeout, remove the assignment from them, register the timeout
                     if validators_in_timeout.len() > 0 {
@@ -683,38 +610,9 @@ impl<T: Config> Pallet<T> {
                         }
                     }
 
-                    // Filter output by removing the records with Data::default() as value and deassign per timeout the validators
-                    let mut filtered_output = BTreeMap::<T::AccountId, Data>::new();
-                    for (validator, output) in output.iter() {
-                        if output != &Data::default() {
-                            filtered_output.insert(validator.clone(), output.clone());
-                        } else {
-                            match
-                                Self::opoc_deassignment_per_timeout(
-                                    &mut opoc_blacklist_operations,
-                                    &mut opoc_assignment_operations,
-                                    &mut opoc_timeouts_operations,
-                                    &mut nodes_works_operations,
-                                    &request_id,
-                                    &nft_id,
-                                    &validator
-                                )
-                            {
-                                Err(error) => {
-                                    log::error!(
-                                        "Failed to deassign request from validator of OPoC level 2 for timeout. error: {:?}",
-                                        error
-                                    );
-                                }
-                                _ => (),
-                            }
-                        }
-                    }
-
+                    // Count occurrences of each value
                     let mut value_counts: BTreeMap<&Data, usize> = BTreeMap::new();
-
-                    // Count occurrences of each value except for Data::default()
-                    for value in filtered_output.values() {
+                    for value in output.values() {
                         *value_counts.entry(value).or_insert(0) += 1;
                     }
 
@@ -723,11 +621,10 @@ impl<T: Config> Pallet<T> {
                         .iter()
                         .max_by_key(|&(_, count)| count)
                         .expect("Should have at least one value");
-
                     let output_completed = Some((*max_value).clone());
 
                     // loop the output
-                    filtered_output.iter().for_each(|(validator, output)| {
+                    output.iter().for_each(|(validator, output)| {
                         if Some(output) != output_completed.as_ref() {
                             match
                                 Self::opoc_deassignment_per_invalid_output(
@@ -767,7 +664,7 @@ impl<T: Config> Pallet<T> {
                         }
                     });
 
-                    let output_values_len = filtered_output.len() as u32;
+                    let output_values_len = output.len() as u32;
 
                     let consensus_output = output_completed.as_ref().unwrap();
                     let output_consensus_len = value_counts
@@ -794,7 +691,7 @@ impl<T: Config> Pallet<T> {
                         _ => (),
                     }
                 }
-                _ => {
+                _ => { // NOTE: THIS CASE SHOULD NEVER HAPPEN!!
                     // Collect diagnostics to help debug why we reached an unexpected state
                     let mut assignments: Vec<(T::AccountId, (BlockNumber, OpocLevel))> = Vec::new();
                     for (validator, (expiration, level)) in OpocAssignment::<T>::iter_prefix(request_id) {

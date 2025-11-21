@@ -1432,6 +1432,773 @@ fn test_opoc_case_10() {
     });
 }
 
+// CASE 11: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and all validators have not completed the work yet
+// EXPECTED:
+// the function should not change anything as the validators have not completed the work yet
+#[test]
+fn test_opoc_case_11() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 3;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) - 1); // move block number forward but not enough to simulate timeout
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has one entry for each required consensus
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), nft_required_consensus.as_usize());
+        // Check the NodesWorks storage has one entry for each validator of opoc level 1
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), nft_required_consensus.as_usize() - 1);
+        // Check the Outputs storage has no output for the request yet
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+        // Check OpocTimeouts storage has no entries for validators
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+        // Check OpocBlacklist storage has no entries for validators
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }
+    });
+}
+
+// CASE 12: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and one validator has completed the work successfully, the other is still working
+// EXPECTED:
+// the function should not change anything as the validators have not completed the work yet
+#[test]
+fn test_opoc_case_12() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 3;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for one validator at level 1
+        let validator_1 = validators[1].clone();
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output.clone());
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) - 1); // move block number forward but not enough to simulate timeout
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has one entry for each required consensus
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), nft_required_consensus.as_usize());
+        // Check the NodesWorks storage has one entry for each validator of opoc level 1
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), nft_required_consensus.as_usize() - 1);
+        // Check the Outputs storage has no output for the request yet
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+        // Check OpocTimeouts storage has no entries for validators
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+        // Check OpocBlacklist storage has no entries for validators
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }
+    });
+}
+
+// CASE 13: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and one validator has completed the work successfully, the other is in timeout, there are other validators available to assign the work
+// EXPECTED:
+// the function should assign the timeout validator work to another available validator at level 1
+#[test]
+fn test_opoc_case_13() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 4;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for one validator at level 1
+        let validator_1 = validators[1].clone();
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output.clone());
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1); 
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has one entry for each required consensus
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), nft_required_consensus.as_usize());
+        // Check the NodesWorks storage has one entry for each validator of opoc level 1
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), nft_required_consensus.as_usize() - 1);
+        // Check the Outputs storage has no output for the request yet
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+        // Check OpocTimeouts storage has one entry for the timeout validator
+        let timeout_validator = validators[2].clone();
+        let has_timeout = OpocTimeouts::<Test>::get(request_id, timeout_validator.clone());
+        assert_eq!(has_timeout, true);
+        // Check OpocBlacklist storage has one entry for the timeout validator
+        let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, timeout_validator.clone());
+        assert_eq!(is_blacklisted, true);
+        // Check OpocAssignment has assigned the work to another available validator at level 1
+        let new_validator = validators[3].clone();
+        let (expiration_block_number, level) = OpocAssignment::<Test>::get(request_id, new_validator.clone());
+        assert_eq!(expiration_block_number, U256::from(System::block_number()) + nft_execution_max_time);
+        assert_eq!(level, OpocLevel::Level1);
+        // Check NodesWorks has an entry for the new validator
+        let nodes_works_entry = NodesWorks::<Test>::get(new_validator.clone(), request_id);
+        assert_eq!(nodes_works_entry, true);
+        // Check OpocAssignment has removed the entry for the timeout validator
+        assert!(!OpocAssignment::<Test>::contains_key(request_id, timeout_validator.clone()));
+        // Check NodesWorks has removed the entry for the timeout validator
+        assert!(!NodesWorks::<Test>::contains_key(timeout_validator.clone(), request_id));
+    });
+}
+
+// CASE 14: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and one validator has completed the work successfully, the other is in timeout, there are no other validators available to assign the work
+// EXPECTED:
+// the function should complete the request with an error, no validators should have the timeout recorded
+#[test]
+fn test_opoc_case_14() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 3;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for one validator at level 1
+        let validator_1 = validators[1].clone();
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output.clone());
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1);
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has no assignment for the request
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), 0);
+        // Check the NodesWorks storage has no entry for the request
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), 0);
+        // Check the Outputs storage has an empty output for the request
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+        // Check the opoc blacklist has one entry for the timeout validator
+        let timeout_validator = validators[2].clone();
+        let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, timeout_validator.clone());
+        assert_eq!(is_blacklisted, true);
+        // Check other validators are not blacklisted
+        for i in 0..nft_required_consensus.as_usize() -1 {
+            let validator_i = validators[i].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }
+        // Check all validators do not have timeouts
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+    });
+}
+
+// CASE 15: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and one validator has completed the work successfully, the other is in timeout, we have reached the MAX_REQUEST_RETRIES for the request
+// EXPECTED:
+// the function should complete the request with an error, no validators should have the timeout recorded
+#[test]
+fn test_opoc_case_15() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 7;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for one validator at level 1
+        let validator_1 = validators[1].clone();
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output.clone());
+
+        // Simulate that the request has already reached the MAX_REQUEST_RETRIES - 1
+        for i in 0..MAX_REQUEST_RETRIES - 1 {
+            let validator_i = validators[3 + i as usize].clone();
+            OpocTimeouts::<Test>::insert(request_id, validator_i.clone(), true);
+            OpocBlacklist::<Test>::insert(nft_id, validator_i.clone(), true);
+        }
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1); 
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has no assignment for the request
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), 0);
+        // Check the NodesWorks storage has no entry for the request
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), 0);
+        // Check the Outputs storage has an empty output for the request
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+        // Check the opoc blacklist has entries for all validators except the first two (the one at level 0 and the one that completed the work at level 1)
+        for i in 2..num_validators {
+            let validator_i = validators[i as usize].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, true);
+        }
+        for i in 0..2 {
+            let validator_i = validators[i as usize].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }
+        // Check all validators do not have timeouts
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+    });
+}
+
+// CASE 16: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and both validators has completed the work successfully with the same output
+// EXPECTED:
+// the function should complete the request successfully
+#[test]
+fn test_opoc_case_16() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 3;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1 and complete their work
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+            NodesOutputs::<Test>::insert(request_id, validator_i.clone(), validator_output.clone());
+        }
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1);
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has no assignment for the request
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), 0);
+        // Check the NodesWorks storage has no entry for the request
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), 0);
+        // Check the Outputs storage has a correct output for the request
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, validator_output.clone());
+        assert_eq!(total_executions, nft_required_consensus.as_u32());
+        assert_eq!(total_consensus, nft_required_consensus.as_u32());
+        assert_eq!(output_nft_id, nft_id);
+        // Check all validators do not have timeouts
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+        // Check all validators are not blacklisted
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }
+    });
+}
+
+// CASE 17: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and both validators has completed the work but with different outputs and there are other validators available to assign the work
+// EXPECTED:
+// the function should move to OPOC LEVEL 2 by assigning the work to 2/3 of other validators that have not already worked on the request
+#[test]
+fn test_opoc_case_17() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 15;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1 and complete their work
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for both validators at level 1 with different outputs
+        let validator_1 = validators[1].clone();
+        let validator_2 = validators[2].clone();
+        let validator_output_1 = BoundedVec::try_from(vec![8, 9, 7]).expect("Vector exceeds the bound");
+        let validator_output_2 = BoundedVec::try_from(vec![7, 8, 9]).expect("Vector exceeds the bound");
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output_1.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_2.clone(), validator_output_2.clone());
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1);
+        TestingPallet::on_finalize(System::block_number());
+
+        // Calculate number of validators to assign at level 2
+        let number_of_validators = num_validators as u32 - nft_required_consensus.as_u32();
+        let num_level_2_validators = (number_of_validators * 2 / 3) + 1;
+        // Check the OpocAssignment storage has assignments for level 0 + level 1 + level 2 validators
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), (nft_required_consensus.as_usize() + num_level_2_validators as usize));
+        // Check that NodesWorks has entries for level 2 validators
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), num_level_2_validators as usize);
+        // Check the Outputs storage has no output for the request yet
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+    });
+}
+
+// CASE 18: OPOC LEVEL 1
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and assigned to 2 validators at level 1 and both validators has completed the work but with different outputs and there are not other validators available to assign the work
+// EXPECTED:
+// the function should complete the request with an error, no validators should have the timeout recorded
+#[test]
+fn test_opoc_case_18() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 3;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1 and complete their work
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for both validators at level 1 with different outputs
+        let validator_1 = validators[1].clone();
+        let validator_2 = validators[2].clone();
+        let validator_output_1 = BoundedVec::try_from(vec![8, 9, 7]).expect("Vector exceeds the bound");
+        let validator_output_2 = BoundedVec::try_from(vec![7, 8, 9]).expect("Vector exceeds the bound");
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output_1.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_2.clone(), validator_output_2.clone());
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1);
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has no assignment for the request
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), 0);
+        // Check the NodesWorks storage has no entry for the request
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), 0);
+        // Check the Outputs storage has an empty output for the request
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, Data::default());
+        assert_eq!(total_executions, 0 as u32);
+        assert_eq!(total_consensus, 0 as u32);
+        assert_eq!(output_nft_id, nft_id);
+        // Check all validators do not have timeouts
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+        // Check all validators are not blacklisted
+        for i in 0..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }
+    });
+}
+
+// CASE 19: OPOC LEVEL 2
+// check opoc execution with a single request (that require consensus of 3) already completed by validator at level 0 and level 1 and assigned to validators at level 2 and all validators at level 2 gives the same output
+// EXPECTED:
+// the function should complete the request successfully with the majority output
+#[test]
+fn test_opoc_case_19() {
+    make_logger();
+
+    new_test_ext().execute_with(|| {
+        let stake = 10_000_000_000_000_000_000;
+        let num_validators = 15;
+        let validators = create_validators(num_validators, stake);
+        let validator = validators[0].clone();
+
+        System::set_block_number(1);
+
+        // Create a sample request in Inputs storage
+        let request_id: RequestId = 1.into();
+        let address: Address = H160::repeat_byte(0xAA);
+        let nft_id: NftId = U256::zero(); // Agent 0 is always present in tests
+        let input_data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+        let input_file_cid: Cid = Cid::default();
+        let nft_required_consensus: U256 = U256::from(3);
+        let nft_execution_max_time: U256 = U256::from(10);
+        Inputs::<Test>::insert(request_id, (
+            U256::from(System::block_number() - 1), // block_number SET IT TO CURRENT BLOCK NUMBER - 1 TO SIMULATE A OLD REQUEST
+            address, // address
+            nft_id, // nft_id
+            nft_required_consensus, // nft_required_consensus
+            nft_execution_max_time, // nft_execution_max_time
+            Cid::default(), // nft_file_cid ONLY FOR TESTS WE FORCE ALWAYS DEFAULT AS nft_file_cid, WE USE nft_id TO LOAD THE TESTS AGENTS
+            input_data, // input_data
+            input_file_cid, // input_file_cid
+        ));
+
+        // Assign the request to the validator at level 0 and mark it as completed
+        let validator_output = BoundedVec::try_from(vec![9, 8, 7]).expect("Vector exceeds the bound");
+        OpocAssignment::<Test>::insert(request_id, validator.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level0));
+        NodesOutputs::<Test>::insert(request_id, validator.clone(), validator_output.clone());
+
+        // Assign the request to the other validators at level 1 and complete their work
+        for i in 1..nft_required_consensus.as_usize() {
+            let validator_i = validators[i].clone();
+            OpocAssignment::<Test>::insert(request_id, validator_i.clone(), (U256::from(System::block_number()) + nft_execution_max_time, OpocLevel::Level1));
+            NodesWorks::<Test>::insert(validator_i.clone(), request_id, true);
+        }
+        // Complete the work for both validators at level 1 with different outputs
+        let validator_1 = validators[1].clone();
+        let validator_2 = validators[2].clone();
+        let validator_output_2 = BoundedVec::try_from(vec![7, 8, 9]).expect("Vector exceeds the bound");
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), validator_output.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_2.clone(), validator_output_2.clone());
+
+        // Run on_finalize to trigger opoc on a new block number
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 1);
+        TestingPallet::on_finalize(System::block_number());
+
+        // Complete the work for level 2 validators with the same output
+        let mut validators_for_opoc_level_2 = Vec::new();
+        for validator_i in validators.iter() {
+            let (_, level) = OpocAssignment::<Test>::get(request_id, validator_i.clone());
+            if level == OpocLevel::Level2 {
+                validators_for_opoc_level_2.push(validator_i.clone());
+                NodesOutputs::<Test>::insert(request_id, validator_i.clone(), validator_output.clone());
+            }
+        }
+
+        // Run on_finalize again to process level 2 outputs
+        System::set_block_number(((U256::from(System::block_number()) + nft_execution_max_time).as_u64()) + 2);
+        TestingPallet::on_finalize(System::block_number());
+
+        // Check the OpocAssignment storage has no assignment for the request
+        let opoc_assignments = OpocAssignment::<Test>::iter_prefix_values(request_id).collect::<Vec<_>>();
+        assert_eq!(opoc_assignments.len(), 0);
+        // Check the NodesWorks storage has no entry for the request
+        let nodes_works_entries = NodesWorks::<Test>::iter().filter(|(_, req_id, _)| *req_id == request_id).collect::<Vec<_>>();
+        assert_eq!(nodes_works_entries.len(), 0);
+        // Check the Outputs storage has a correct output for the request
+        let (output_data, total_executions, total_consensus, output_nft_id) = Outputs::<Test>::get(request_id);
+        assert_eq!(output_data, validator_output.clone());
+        assert_eq!(total_executions, (nft_required_consensus.as_u32() + validators_for_opoc_level_2.len() as u32)); 
+        assert_eq!(total_consensus, (nft_required_consensus.as_u32() + validators_for_opoc_level_2.len() as u32 - 1)); // -1 because one validator at level 1 had a different output
+        assert_eq!(output_nft_id, nft_id);
+        // Check all validators do not have timeouts
+        for validator_i in validators.iter() {
+            let has_timeout = OpocTimeouts::<Test>::get(request_id, validator_i.clone());
+            assert_eq!(has_timeout, false);
+        }
+        // Check all validators are not blacklisted except the one at level 1 with different output
+        let validator_level_1_different_output = validators[2].clone();
+        let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_level_1_different_output.clone());
+        assert_eq!(is_blacklisted, true);
+        for validator_i in validators.iter() {
+            if validator_i == &validator_level_1_different_output {
+                continue;
+            }
+            let is_blacklisted = OpocBlacklist::<Test>::get(nft_id, validator_i.clone());
+            assert_eq!(is_blacklisted, false);
+        }        
+    });
+}
+
 // HELPERS
 //////////////////////////////////////////////////////////////////////////////////
 
