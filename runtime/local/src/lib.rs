@@ -1309,7 +1309,6 @@ impl pallet_uomi_engine::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type IpfsPallet = IpfsWrapper;
     type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
-    type InherentDataType = u16;
     type OffenceReporter = pallet_offences::Pallet<Runtime>;
     type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
 }

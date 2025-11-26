@@ -7,7 +7,6 @@ use frame_election_provider_support::{
 };
 use frame_support::{
     derive_impl,
-    inherent::{InherentData, InherentIdentifier, ProvideInherent},
     parameter_types,
     traits::{ConstU16, ConstU32, ConstU64, EstimateNextSessionRotation, Nothing},
     weights::Weight,
@@ -45,7 +44,7 @@ use sp_runtime::testing::TestXt;
 
 // Local imports
 use crate::{
-    types::{AiModelKey, BlockNumber, Data, RequestId}, Call, DispatchResult, InherentError, OpocLevel
+    types::{AiModelKey, BlockNumber, Data, RequestId}, Call, DispatchResult, OpocLevel
 };
 use crate as pallet_uomi_engine;
 use pallet_uomi_engine::Call as UomiCall;
@@ -136,56 +135,6 @@ impl onchain::Config for OnChainSeqPhragmen {
     type Sort = ConstBool<true>;
     type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
     type MaxWinnersPerPage = MaxActiveValidators;
-}
-
-impl MockInherentDataProvider {
-    fn opoc_run() -> Result<(
-        BTreeMap<AccountId, bool>,
-        BTreeMap<(RequestId, AccountId), (BlockNumber, OpocLevel)>,
-        BTreeMap<AccountId, BTreeMap<RequestId, bool>>,
-        BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
-        BTreeMap<RequestId, BTreeMap<AccountId, bool>>,
-        BTreeMap<RequestId, (Data, u32, u32, U256)>
-    ), DispatchError> {
-        Ok((
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-        ))
-    }
-
-    pub fn aimodelscalc_run() ->  BTreeMap<AiModelKey, (Data, Data, BlockNumber)> {
-        BTreeMap::new()
-    }
-}
-
-pub struct MockInherentDataProvider;
-
-impl ProvideInherent for MockInherentDataProvider {
-    type Call = Call<Test>;
-    type Error = InherentError;
-    const INHERENT_IDENTIFIER: InherentIdentifier = pallet_uomi_engine::consts::PALLET_INHERENT_IDENTIFIER;
-
-    fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
-        Some(Call::set_inherent_data { 
-            opoc_operations: (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
-            aimodelscalc_operations: BTreeMap::new(),
-        })
-    }
-
-    fn check_inherent(
-        _call: &Self::Call,
-        _data: &InherentData,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn is_inherent(call: &Self::Call) -> bool {
-        matches!(call, Call::set_inherent_data { .. })
-    }
 }
 
 pub type VoterList = pallet_staking::UseNominatorsAndValidatorsMap<Test>;
@@ -418,7 +367,6 @@ impl pallet_uomi_engine::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
-    type InherentDataType = ();
     type MaxOffchainConcurrent = TestMaxOffchainConcurrent; // NOTE: This config is not used anymore, but kept for retro-compatibility.
     type OffenceReporter = TestOffenceReporter;
 }
