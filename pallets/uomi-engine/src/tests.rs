@@ -319,6 +319,7 @@ fn test_offchain_worker_case_1() {
     let (mut ext, validator, state) = setup_offchain_worker_environment();
 
     ext.execute_with(|| {
+        TestingPallet::test_history_reset();
         System::set_block_number(1);
 
         // Run the offchain worker
@@ -345,6 +346,7 @@ fn test_offchain_worker_case_2() {
     let (mut ext, validator, state) = setup_offchain_worker_environment();
 
     ext.execute_with(|| {
+        TestingPallet::test_history_reset();
         System::set_block_number(1);
 
         // Create a sample request in Inputs storage
@@ -405,6 +407,7 @@ fn test_offchain_worker_case_3() {
     let (mut ext, validator, state) = setup_offchain_worker_environment();
 
     ext.execute_with(|| {
+        TestingPallet::test_history_reset();
         System::set_block_number(1);
 
         // Create a sample request in Inputs storage
@@ -465,6 +468,7 @@ fn test_offchain_worker_case_4() {
     let (mut ext, validator, state) = setup_offchain_worker_environment();
 
     ext.execute_with(|| {
+        TestingPallet::test_history_reset();
         System::set_block_number(1);
 
         // Create a sample request in Inputs storage
@@ -525,6 +529,7 @@ fn test_offchain_worker_case_5() {
     let (mut ext, validator, state) = setup_offchain_worker_environment();
 
     ext.execute_with(|| {
+        TestingPallet::test_history_reset();
         System::set_block_number(1);
 
         // Create a sample request in Inputs storage
@@ -585,6 +590,7 @@ fn test_offchain_worker_case_6() {
     let (mut ext, validator, state) = setup_offchain_worker_environment();
 
     ext.execute_with(|| {
+        TestingPallet::test_history_reset();
         System::set_block_number(1);
 
         // Create a sample request in Inputs storage

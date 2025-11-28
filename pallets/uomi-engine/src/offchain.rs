@@ -9,7 +9,7 @@ use sp_std::{
 };
 use sp_core::Get;
 use scale_info::prelude::string::String;
-use core::sync::atomic::{AtomicU64, Ordering, AtomicBool};
+use core::sync::atomic::{AtomicU64, Ordering, AtomicBool, AtomicUsize};
 use core::hint::spin_loop;
 
 // Semaphore implementation to limit the executions of requests in parallel
@@ -165,6 +165,59 @@ pub fn semaphore_list() -> Vec<U256> {
 }
 // --- End semaphore implementation ---
 
+// --- History implementation ---
+const HISTORY_MAX_ITEMS: usize = 50;
+static HISTORY_SLOTS: [SemaphoreAtomicSlot; HISTORY_MAX_ITEMS] = [
+    SEMAPHORE_ARRAY_REPEAT_VALUE; HISTORY_MAX_ITEMS
+];
+static HISTORY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+pub fn history_add(request_id: U256) {
+    // Acquire lock
+    while SEMAPHORE_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        spin_loop();
+    }
+
+    let index = HISTORY_INDEX.load(Ordering::Relaxed);
+    let slot = &HISTORY_SLOTS[index];
+
+    // Write the ID
+    let bytes = request_id.0;
+    slot.part0.store(bytes[0], Ordering::Relaxed);
+    slot.part1.store(bytes[1], Ordering::Relaxed);
+    slot.part2.store(bytes[2], Ordering::Relaxed);
+    slot.part3.store(bytes[3], Ordering::Relaxed);
+    slot.in_use.store(1, Ordering::Relaxed);
+
+    // Update index
+    let next_index = (index + 1) % HISTORY_MAX_ITEMS;
+    HISTORY_INDEX.store(next_index, Ordering::Relaxed);
+
+    // Release lock
+    SEMAPHORE_LOCK.store(false, Ordering::Release);
+}
+
+pub fn history_contains(request_id: U256) -> bool {
+    // Acquire lock
+    while SEMAPHORE_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        spin_loop();
+    }
+
+    let mut found = false;
+    for slot in &HISTORY_SLOTS {
+        if slot.matches(request_id) {
+            found = true;
+            break;
+        }
+    }
+
+    // Release lock
+    SEMAPHORE_LOCK.store(false, Ordering::Release);
+    found
+}
+// --- End history implementation ---
+
+
 use crate::OpocLevel;
 use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
@@ -219,6 +272,13 @@ impl<T: Config> Pallet<T> {
     #[cfg(test)]
     pub fn test_semaphore_list() -> Vec<U256> {
         semaphore_list()
+    }
+    #[cfg(test)]
+    pub fn test_history_reset() {
+        for slot in &HISTORY_SLOTS {
+            slot.clear();
+        }
+        HISTORY_INDEX.store(0, Ordering::Relaxed);
     }
 
     // Offchain worker entry point
@@ -278,6 +338,8 @@ impl<T: Config> Pallet<T> {
                 });
                 // Remove request_id from the semaphore
                 semaphore_remove(request_id);
+                // Add request_id to history
+                history_add(request_id);
                 return Ok(());
             }
         };
@@ -293,6 +355,8 @@ impl<T: Config> Pallet<T> {
                 });
                 // Remove request_id from the semaphore
                 semaphore_remove(request_id);
+                // Add request_id to history
+                history_add(request_id);
                 return Ok(());
             },
         };
@@ -318,6 +382,9 @@ impl<T: Config> Pallet<T> {
 
         // Remove request_id from the semaphore
         semaphore_remove(request_id);
+
+        // Add request_id to history
+        history_add(request_id);
         
         log::info!("UOMI-ENGINE: Finished processing request {:?}", request_id);
         Ok(())
@@ -343,6 +410,12 @@ impl<T: Config> Pallet<T> {
             // Be sure is not already running on the semaphore
             if semaphore_is_running(*request_id) {
                 log::info!("UOMI-ENGINE: Request {:?} is already running on another thread", request_id);
+                continue;
+            }
+
+            // Be sure is not recently executed
+            if history_contains(*request_id) {
+                log::info!("UOMI-ENGINE: Request {:?} was recently executed", request_id);
                 continue;
             }
 
