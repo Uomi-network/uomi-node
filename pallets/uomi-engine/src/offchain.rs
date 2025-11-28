@@ -9,7 +9,8 @@ use sp_std::{
 };
 use sp_core::Get;
 use scale_info::prelude::string::String;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering, AtomicBool};
+use core::hint::spin_loop;
 
 // Semaphore implementation to limit the executions of requests in parallel
 const SEMAPHORE_ARRAY_REPEAT_VALUE: SemaphoreAtomicSlot = SemaphoreAtomicSlot::new();
@@ -17,6 +18,8 @@ const SEMAPHORE_MAX_SLOTS: usize = 5; // Maximum number of concurrent requests
 static SEMAPHORE_SLOTS: [SemaphoreAtomicSlot; SEMAPHORE_MAX_SLOTS] = [
     SEMAPHORE_ARRAY_REPEAT_VALUE; SEMAPHORE_MAX_SLOTS
 ];
+static SEMAPHORE_LOCK: AtomicBool = AtomicBool::new(false);
+
 #[derive(Debug)]
 struct SemaphoreAtomicSlot {
     // U256 is represented as 4 x u64
@@ -82,21 +85,40 @@ impl SemaphoreAtomicSlot {
 /// Attempts to add a request_id to the semaphore
 /// Returns true if added successfully, false otherwise
 pub fn semaphore_try_to_add(request_id: U256) -> bool {
-    // First check if the request_id is already present
-    for slot in &SEMAPHORE_SLOTS[0..SEMAPHORE_MAX_SLOTS] {
-        if slot.matches(request_id) {
-            return false; // Already running
-        }
+    // Acquire the lock (Spinlock)
+    while SEMAPHORE_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        spin_loop();
     }
 
-    // Look for a free slot and acquire it
-    for slot in &SEMAPHORE_SLOTS[0..SEMAPHORE_MAX_SLOTS] {
-        if slot.try_set(request_id) {
-            return true;
+    let result = {
+        // First check if the request_id is already present
+        let mut already_exists = false;
+        for slot in &SEMAPHORE_SLOTS[0..SEMAPHORE_MAX_SLOTS] {
+            if slot.matches(request_id) {
+                already_exists = true;
+                break;
+            }
         }
-    }
 
-    false // No slot available
+        if already_exists {
+            false
+        } else {
+            // Look for a free slot and acquire it
+            let mut added = false;
+            for slot in &SEMAPHORE_SLOTS[0..SEMAPHORE_MAX_SLOTS] {
+                if slot.try_set(request_id) {
+                    added = true;
+                    break;
+                }
+            }
+            added
+        }
+    };
+
+    // Release the lock
+    SEMAPHORE_LOCK.store(false, Ordering::Release);
+
+    result
 }
 
 /// Removes a request_id from the semaphore
