@@ -153,6 +153,23 @@ impl<T: Config> Pallet<T> {
                                 "Failed to assign request to a random validator for OPoC level 0. error: {:?}",
                                 error
                             );
+
+                            match Self::opoc_complete_per_timeout(
+                                &mut opoc_blacklist_operations,
+                                &mut opoc_timeouts_operations,
+                                &mut nodes_works_operations,
+                                &mut outputs_operations,
+                                &request_id,
+                                &nft_id
+                            ) {
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to complete request at OPoC level -1 per no available validators. error: {:?}",
+                                        error
+                                    );
+                                }
+                                _ => (),
+                            }
                         }
                         _ => (),
                     }
