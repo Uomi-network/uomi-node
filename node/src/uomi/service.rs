@@ -273,36 +273,42 @@ pub fn start_node<N>(
                     Ok(json) => json,
                     Err(e) => {
                         log::error!("🚨 Failed to parse AI service status response: {}", e);
-                        std::process::exit(1);
+                        return Err(ServiceError::Other(format!("Failed to parse AI service status response: {}", e)));
                     }
                 }
             },
             Err(e) => {
                 log::error!("🚨 Failed to get AI service status: {}", e);
-                std::process::exit(1);
+                return Err(ServiceError::Other(format!("Failed to get AI service status: {}", e)));
             }
         };
         // Check if ai service UOMI_ENGINE_PALLET_VERSION is the same of pallet_uomi_engine
-        let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"].as_u64().unwrap() as pallet_uomi_engine::types::Version;
+        let service_version: pallet_uomi_engine::types::Version = ai_status["UOMI_ENGINE_PALLET_VERSION"]
+            .as_u64()
+            .ok_or_else(|| ServiceError::Other("AI service response missing UOMI_ENGINE_PALLET_VERSION".into()))? as pallet_uomi_engine::types::Version;
         if service_version != pallet_uomi_engine::consts::PALLET_VERSION {
             log::error!("🚨 AI service version is different from uomiEngine pallet version. Please update the AI service to the same version of uomiEngine pallet.");
-            std::process::exit(1);
+            return Err(ServiceError::Other("AI service version mismatch with uomiEngine pallet version".into()));
         } else {
             log::info!("✅ AI service version is the same of uomiEngine pallet version.");
         }
         // Check if ai service details.system_valid is true
-        let service_system_valid = ai_status["details"]["system_valid"].as_bool().unwrap();
+        let service_system_valid = ai_status["details"]["system_valid"]
+            .as_bool()
+            .ok_or_else(|| ServiceError::Other("AI service response missing details.system_valid".into()))?;
         if !service_system_valid {
             log::error!("🚨 AI service is not running on a valid system. Please check the AI service system requirements.");
-            std::process::exit(1);
+            return Err(ServiceError::Other("AI service is not running on a valid system".into()));
         } else {
             log::info!("✅ AI service is running on a valid system.");
         }
         // Check if ai service details.cuda_available is true
-        let service_cuda_available = ai_status["details"]["cuda_available"].as_bool().unwrap();
+        let service_cuda_available = ai_status["details"]["cuda_available"]
+            .as_bool()
+            .ok_or_else(|| ServiceError::Other("AI service response missing details.cuda_available".into()))?;
         if !service_cuda_available {
             log::error!("🚨 AI service is not available to use CUDA. Please enable CUDA on the AI service.");
-            std::process::exit(1);
+            return Err(ServiceError::Other("AI service is not available to use CUDA".into()));
         } else {
             log::info!("✅ AI service is available to use CUDA.");
         }
@@ -537,6 +543,8 @@ pub fn start_node<N>(
     let c = client.clone();
 
 
+    let shared_voter_state = SharedVoterState::empty();
+
     let rpc_extensions_builder = {
         let client = client.clone();
         let network = network.clone();
@@ -551,9 +559,10 @@ pub fn start_node<N>(
             backend.clone(),
             Some(shared_authority_set.clone()),
         );
+        let shared_voter_state_rpc = shared_voter_state.clone();
 
         Box::new(move |subscription: sc_rpc::SubscriptionTaskExecutor| {
-            let shared_voter_state = sc_consensus_grandpa::SharedVoterState::empty();
+            let shared_voter_state = shared_voter_state_rpc.clone();
             let deps = crate::rpc::FullDeps {
                 client: client.clone(),
                 select_chain: select_chain.clone(),
@@ -738,7 +747,7 @@ pub fn start_node<N>(
             notification_service: grandpa_notification_service,
             voting_rule: sc_consensus_grandpa::VotingRulesBuilder::default().build(),
             prometheus_registry,
-            shared_voter_state: SharedVoterState::empty(),
+            shared_voter_state: shared_voter_state,
             telemetry: telemetry.as_ref().map(|x| x.handle()),
             offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(transaction_pool.clone()),
         };

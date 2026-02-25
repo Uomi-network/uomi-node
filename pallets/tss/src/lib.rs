@@ -147,7 +147,10 @@ impl From<u8> for TssOffenceType {
         1 => TssOffenceType::SigningNonParticipation,
         2 => TssOffenceType::InvalidCryptographicData,
         3 => TssOffenceType::UnresponsiveBehavior,
-        _ => panic!("Invalid TSS offence type"),
+        _ => {
+            log::warn!("[TSS] Unknown offence type value: {}, treating as UnresponsiveBehavior", value);
+            TssOffenceType::UnresponsiveBehavior
+        }
     }
     }
 }
@@ -1668,6 +1671,9 @@ pub mod pallet {
         // Check expired sessions 
         Pallet::<T>::check_expired_sessions(n).ok();
 
+        // Count pending offences once before processing (used for weight below)
+        let offences_count: u64 = PendingTssOffences::<T>::iter().count() as u64;
+
         // Process any pending TSS offences
         Pallet::<T>::process_pending_tss_offences().ok();
 
@@ -1715,20 +1721,14 @@ pub mod pallet {
         }
         
         // Return weight for this operation
-        // We add additional weight for processing pending offences and FSA operations
-        let pending_offences_count = PendingTssOffences::<T>::iter().count() as u64;
-        let completed_signatures_count = SigningSessions::<T>::iter()
-            .filter(|(_, session)| session.aggregated_sig.is_some())
-            .count() as u64;
-        let pending_transactions_count = PendingTransactions::<T>::iter().count() as u64;
-        
+        // Use counters already tracked during processing above (no extra storage iterations)
         let base_weight = T::DbWeight::get().reads(5) + T::DbWeight::get().writes(3);
-        
-        // Add additional weight for each operation
-        let total_operations = pending_offences_count + completed_signatures_count + pending_transactions_count;
+
+        // ops_count: offences processed + signing sessions expired
+        let total_operations = offences_count + expired as u64;
         if total_operations > 0 {
             base_weight.saturating_add(
-                T::DbWeight::get().reads(total_operations * 2) 
+                T::DbWeight::get().reads(total_operations * 2)
                 .saturating_add(T::DbWeight::get().writes(total_operations))
             )
         } else {

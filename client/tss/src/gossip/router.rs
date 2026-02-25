@@ -486,6 +486,7 @@ impl<B: BlockT> Future for GossipHandler<B> {
         // Check if any channel has closed
         if self.gossip_handler_message_receiver.is_terminated() ||
             self.session_manager_to_gossip_rx.is_terminated() {
+            log::error!("[TSS] GossipHandler channel terminated unexpectedly, TSS gossip is shutting down");
             return Poll::Ready(());
         }
 
