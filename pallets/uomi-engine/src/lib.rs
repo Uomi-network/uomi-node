@@ -515,17 +515,23 @@ pub mod pallet {
             // Every 100 blocks we clean all NodesOutputs and NodesOpocL0Inferences storage from records related to not-existing requests
             let divisor = U256::from(100);
             if current_block_number % divisor == U256::zero() {
-                for (request_id, account_id, _output_data) in NodesOutputs::<T>::iter() {
-                    if !Inputs::<T>::contains_key(request_id) {
-                        log::info!("UOMI-ENGINE: Removing NodesOutputs for non-existing request_id: {:?}", request_id);
-                        NodesOutputs::<T>::remove(request_id, account_id);
-                    }
+                // Collect entries to remove FIRST, then remove them.
+                // Removing during iteration is non-deterministic between native/WASM execution.
+                let outputs_to_remove: sp_std::vec::Vec<_> = NodesOutputs::<T>::iter()
+                    .filter(|(request_id, _, _)| !Inputs::<T>::contains_key(request_id))
+                    .map(|(request_id, account_id, _)| (request_id, account_id))
+                    .collect();
+                for (request_id, account_id) in outputs_to_remove {
+                    log::info!("UOMI-ENGINE: Removing NodesOutputs for non-existing request_id: {:?}", request_id);
+                    NodesOutputs::<T>::remove(request_id, account_id);
                 }
-                for (request_id, account_id, _inference_data) in NodesOpocL0Inferences::<T>::iter() {
-                    if !Inputs::<T>::contains_key(request_id) {
-                        log::info!("UOMI-ENGINE: Removing NodesOpocL0Inferences for non-existing request_id: {:?}", request_id);
-                        NodesOpocL0Inferences::<T>::remove(request_id, account_id);
-                    }
+                let inferences_to_remove: sp_std::vec::Vec<_> = NodesOpocL0Inferences::<T>::iter()
+                    .filter(|(request_id, _, _)| !Inputs::<T>::contains_key(request_id))
+                    .map(|(request_id, account_id, _)| (request_id, account_id))
+                    .collect();
+                for (request_id, account_id) in inferences_to_remove {
+                    log::info!("UOMI-ENGINE: Removing NodesOpocL0Inferences for non-existing request_id: {:?}", request_id);
+                    NodesOpocL0Inferences::<T>::remove(request_id, account_id);
                 }
             }
 
@@ -946,12 +952,13 @@ impl<T: Config> Pallet<T> {
             return pallet_staking::Validators::<T>::iter().map(|(account_id, _)| account_id).collect();
         }
 
-        let validators: Vec<T::AccountId> = pallet_staking::Validators::<T>::iter().map(|(account_id, _)| account_id)
-            .into_iter()
-            .filter(|account_id| Self::address_is_active_validator(account_id))
-            .collect();
-    
-        validators
+        // Use pallet_session::Validators (a StorageValue<Vec<ValidatorId>>) which returns
+        // a deterministic, canonically-ordered list — consistent with address_is_active_validator().
+        // Previously this used pallet_staking::Validators::iter() whose trie-key ordering
+        // could differ between native and WASM execution, leading to different random
+        // validator selections and divergent state roots.
+        // Note: Config constraint guarantees ValidatorId == AccountId.
+        pallet_session::Validators::<T>::get()
     }
 
     // TODO: It should be better to load directly validators from session::Validators::<T> but we need to find a way to convert them to T::AccountId

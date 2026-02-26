@@ -999,22 +999,15 @@ impl<T: Config> Pallet<T> {
 
             // remove from Inputs
             Inputs::<T>::remove(request_id);
-            // remove all assignments from OpocAssignment
-            for (account_id, _) in OpocAssignment::<T>::iter_prefix(request_id) {
-                OpocAssignment::<T>::remove(request_id, account_id);
-            }
+            // remove all assignments from OpocAssignment (atomic prefix removal to avoid
+            // iter-during-mutation non-determinism between native and WASM execution)
+            let _ = OpocAssignment::<T>::clear_prefix(request_id, u32::MAX, None);
             // remove all timeouts from OpocTimeouts
-            for (account_id, _) in OpocTimeouts::<T>::iter_prefix(request_id) {
-                OpocTimeouts::<T>::remove(request_id, account_id);
-            }
+            let _ = OpocTimeouts::<T>::clear_prefix(request_id, u32::MAX, None);
             // remove all outputs from NodesOutputs
-            for (account_id, _) in NodesOutputs::<T>::iter_prefix(request_id) {
-                NodesOutputs::<T>::remove(request_id, account_id);
-            }
+            let _ = NodesOutputs::<T>::clear_prefix(request_id, u32::MAX, None);
             // remove all inferences from NodesOpocL0Inferences
-            for (account_id, _) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) {
-                NodesOpocL0Inferences::<T>::remove(request_id, account_id);
-            }
+            let _ = NodesOpocL0Inferences::<T>::clear_prefix(request_id, u32::MAX, None);
         }
 
         Ok(())

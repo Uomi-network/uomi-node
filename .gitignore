@@ -149,3 +149,5 @@ Temporary Items
 client/ipfs-manager/src/ipfs_macOS
 client/ipfs-manager/src/ipfs_linux_arm64
 client/ipfs-manager/src/ipfs_linux_amd64
+
+error.md
