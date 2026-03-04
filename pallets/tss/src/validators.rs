@@ -153,9 +153,15 @@ impl<T: Config> Pallet<T> {
     ) -> DispatchResult {
         // For validator set changes, we need to reshare ALL existing agent keys
         // Find all active DKG sessions that have completed and need resharing
+        //
+        // IMPORTANT: Collect into a BTreeMap to ensure deterministic iteration order.
+        // DkgSessions::iter() uses trie key ordering which can differ between native
+        // and WASM execution. Since get_next_session_id() assigns sequential IDs,
+        // different iteration order = different session IDs for different NFTs = state divergence.
+        let all_sessions: sp_std::collections::btree_map::BTreeMap<_, _> = DkgSessions::<T>::iter().collect();
         let mut reshare_created = false;
         
-        for (_session_id, session) in DkgSessions::<T>::iter() {
+        for (_session_id, session) in all_sessions.iter() {
             if session.state == SessionState::DKGComplete {
                 // Create a reshare session for this specific agent/NFT
                 let threshold = session.threshold;
@@ -188,10 +194,12 @@ impl<T: Config> Pallet<T> {
         ensure!(threshold > 0, crate::pallet::Error::<T>::InvalidThreshold);
         ensure!(threshold <= 100 && threshold >= 50, crate::pallet::Error::<T>::InvalidThreshold);
 
+        // IMPORTANT: Use pallet_session::Validators which returns a canonical,
+        // deterministically-ordered list. pallet_staking::Validators::iter() iterates
+        // over trie keys whose order can differ between native and WASM execution,
+        // causing state divergence and forks.
         let participants = BoundedVec::try_from(
-            pallet_staking::Validators::<T>::iter()
-                .map(|(account_id, _)| account_id)
-                .collect::<Vec<T::AccountId>>()
+            pallet_session::Pallet::<T>::validators()
         ).map_err(|_| crate::pallet::Error::<T>::InvalidParticipantsCount)?;
 
         // Determine previous completed DKG session id for this nft (if any) for key material retrieval off-chain

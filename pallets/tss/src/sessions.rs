@@ -21,14 +21,14 @@ impl<T: Config> Pallet<T> {
 
     pub fn check_expired_sessions(n: BlockNumberFor<T>) -> DispatchResult {
         // Collect sessions whose deadline expired (state still not finalized)
-        let mut sessions_to_remove: Vec<(SessionId, NftId)> = Vec::new();
-        for (session_id, session) in DkgSessions::<T>::iter() {
-            if session.state <= SessionState::DKGInProgress {
-                if n >= session.deadline {
-                    sessions_to_remove.push((session_id, session.nft_id.clone()));
-                }
-            }
-        }
+        // IMPORTANT: Use BTreeMap for deterministic iteration order.
+        // DkgSessions::iter() order depends on trie key hashing which can differ
+        // between native and WASM, causing events in different order → state divergence.
+        let sessions_to_remove: sp_std::collections::btree_map::BTreeMap<SessionId, NftId> =
+            DkgSessions::<T>::iter()
+                .filter(|(_, session)| session.state <= SessionState::DKGInProgress && n >= session.deadline)
+                .map(|(session_id, session)| (session_id, session.nft_id.clone()))
+                .collect();
         // Remove them & GC any residual ProposedPublicKeys for their NFT
         for (session_id, nft_id) in sessions_to_remove {
             Pallet::<T>::update_report_count(session_id).ok();
@@ -222,16 +222,16 @@ impl<T: Config> Pallet<T> {
         AggregatedPublicKeys::<T>::insert(session_id, aggregated_key.clone());
 
     // Supersede any older completed DKG sessions for same NFT
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
         if let Some(current_session) = DkgSessions::<T>::get(session_id) {
-            for (other_id, mut other_session) in DkgSessions::<T>::iter() {
-                if other_id != session_id
-                    && other_session.nft_id == current_session.nft_id
-                    && other_session.state == SessionState::DKGComplete
-                {
-                    other_session.state = SessionState::DKGSuperseded;
-                    DkgSessions::<T>::insert(other_id, other_session);
-                    Pallet::<T>::deposit_event(Event::DKGSuperseded(other_id));
-                }
+            let to_supersede: sp_std::collections::btree_map::BTreeMap<_, _> =
+                DkgSessions::<T>::iter()
+                    .filter(|(id, s)| *id != session_id && s.nft_id == current_session.nft_id && s.state == SessionState::DKGComplete)
+                    .collect();
+            for (other_id, mut other_session) in to_supersede {
+                other_session.state = SessionState::DKGSuperseded;
+                DkgSessions::<T>::insert(other_id, other_session);
+                Pallet::<T>::deposit_event(Event::DKGSuperseded(other_id));
             }
             // GC ProposedPublicKeys votes now that final key chosen
             let _ = ProposedPublicKeys::<T>::clear_prefix(current_session.nft_id, u32::MAX, None);

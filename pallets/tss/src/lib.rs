@@ -656,7 +656,10 @@ pub mod pallet {
             Self::assign_validator_id(validator)?;
         }
 
-        ActiveValidators::<T>::put(BoundedVec::try_from(new_validators.clone()).unwrap());
+        ActiveValidators::<T>::put(
+            BoundedVec::try_from(new_validators.clone())
+                .map_err(|_| Error::<T>::InvalidParticipantsCount)?
+        );
 
         Ok(())
     }
@@ -861,15 +864,15 @@ pub mod pallet {
             // We reuse the existing DKGFailed state to avoid introducing a new enum variant / storage field.
             // This overloading should be documented: DKGFailed now also means "Inactive (superseded)".
             if let Some(current_session) = DkgSessions::<T>::get(session_id) {
-                for (other_id, mut other_session) in DkgSessions::<T>::iter() {
-                    if other_id != session_id
-                        && other_session.nft_id == current_session.nft_id
-                        && other_session.state == SessionState::DKGComplete
-                    {
-                        other_session.state = SessionState::DKGSuperseded; // mark as inactive
-                        DkgSessions::<T>::insert(other_id, other_session);
-                        Self::deposit_event(Event::DKGSuperseded(other_id));
-                    }
+                // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+                let to_supersede: sp_std::collections::btree_map::BTreeMap<_, _> =
+                    DkgSessions::<T>::iter()
+                        .filter(|(id, s)| *id != session_id && s.nft_id == current_session.nft_id && s.state == SessionState::DKGComplete)
+                        .collect();
+                for (other_id, mut other_session) in to_supersede {
+                    other_session.state = SessionState::DKGSuperseded; // mark as inactive
+                    DkgSessions::<T>::insert(other_id, other_session);
+                    Self::deposit_event(Event::DKGSuperseded(other_id));
                 }
             }
 
@@ -954,15 +957,15 @@ pub mod pallet {
 
         // Mark older completed sessions for same NFT as failed (superseded) without extra storage.
         if let Some(current_session) = DkgSessions::<T>::get(session_id) {
-            for (other_id, mut other_session) in DkgSessions::<T>::iter() {
-                if other_id != session_id
-                    && other_session.nft_id == current_session.nft_id
-                    && other_session.state == SessionState::DKGComplete
-                {
-                    other_session.state = SessionState::DKGSuperseded;
-                    DkgSessions::<T>::insert(other_id, other_session);
-                    Self::deposit_event(Event::DKGSuperseded(other_id));
-                }
+            // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+            let to_supersede: sp_std::collections::btree_map::BTreeMap<_, _> =
+                DkgSessions::<T>::iter()
+                    .filter(|(id, s)| *id != session_id && s.nft_id == current_session.nft_id && s.state == SessionState::DKGComplete)
+                    .collect();
+            for (other_id, mut other_session) in to_supersede {
+                other_session.state = SessionState::DKGSuperseded;
+                DkgSessions::<T>::insert(other_id, other_session);
+                Self::deposit_event(Event::DKGSuperseded(other_id));
             }
             // GC: clear any lingering proposed public keys for this NFT
             let _ = ProposedPublicKeys::<T>::clear_prefix(current_session.nft_id, u32::MAX, None);
@@ -1678,16 +1681,21 @@ pub mod pallet {
         Pallet::<T>::process_pending_tss_offences().ok();
 
     // Expire stale signing sessions
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // StorageMap::iter() order depends on trie key hashing which differs
+        // between native and WASM execution, causing state divergence and forks
+        // when combined with the per-block MAX_EXPIRE_PER_BLOCK limit.
         const MAX_EXPIRE_PER_BLOCK: u32 = 50; // limit weight
         let mut expired = 0u32;
-        for (sid, expiry_block) in SigningSessionExpiry::<T>::iter() {
+        let expiry_entries: sp_std::collections::btree_map::BTreeMap<_, _> = SigningSessionExpiry::<T>::iter().collect();
+        for (sid, expiry_block) in expiry_entries.iter() {
             if expired >= MAX_EXPIRE_PER_BLOCK { break; }
-            if expiry_block <= n {
+            if *expiry_block <= n {
                 if let Some(mut sess) = SigningSessions::<T>::get(sid) {
                     if matches!(sess.state, SessionState::SigningInProgress) && sess.aggregated_sig.is_none() {
                         sess.state = SessionState::SigningExpired; // mark as expired
                         SigningSessions::<T>::insert(sid, sess);
-                        Self::deposit_event(Event::SigningExpired(sid));
+                        Self::deposit_event(Event::SigningExpired(*sid));
                         // Keep the expiry entry for audit or remove it; remove to shrink storage.
                         SigningSessionExpiry::<T>::remove(sid);
                         // GC: clear partial ProposedSignatures votes for expired session
@@ -1769,16 +1777,16 @@ impl<T: Config> Pallet<T> {
         }
 
         // Mark other completed sessions for same NFT as superseded
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
         if let Some(current_session) = DkgSessions::<T>::get(new_id) {
-            for (other_id, mut other_session) in DkgSessions::<T>::iter() {
-                if other_id != new_id
-                    && other_session.nft_id == current_session.nft_id
-                    && other_session.state == SessionState::DKGComplete
-                {
-                    other_session.state = SessionState::DKGSuperseded;
-                    DkgSessions::<T>::insert(other_id, other_session);
-                    Self::deposit_event(Event::DKGSuperseded(other_id));
-                }
+            let to_supersede: sp_std::collections::btree_map::BTreeMap<_, _> =
+                DkgSessions::<T>::iter()
+                    .filter(|(id, s)| *id != new_id && s.nft_id == current_session.nft_id && s.state == SessionState::DKGComplete)
+                    .collect();
+            for (other_id, mut other_session) in to_supersede {
+                other_session.state = SessionState::DKGSuperseded;
+                DkgSessions::<T>::insert(other_id, other_session);
+                Self::deposit_event(Event::DKGSuperseded(other_id));
             }
         }
 
@@ -2048,7 +2056,9 @@ impl<T: Config> Pallet<T> {
 
     /// Process any pending TSS offences stored in the PendingTssOffences storage
     pub fn process_pending_tss_offences() -> DispatchResult {
-        let pending: Vec<(SessionId, (TssOffenceType, T::AccountId, BoundedVec<T::AccountId, T::MaxNumberOfShares>))> =
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // PendingTssOffences::iter() order is non-deterministic between native/WASM.
+        let pending: sp_std::collections::btree_map::BTreeMap<SessionId, (TssOffenceType, T::AccountId, BoundedVec<T::AccountId, T::MaxNumberOfShares>)> =
             PendingTssOffences::<T>::iter().collect();
         if pending.is_empty() { return Ok(()); }
         log::debug!("[TSS] Processing {} pending offences", pending.len());

@@ -636,41 +636,59 @@ pub mod pallet {
         // We scan distinct request_ids up to MaxEngineRequestConsensusScans per block.
         fn detect_invalid_output_offences() {
             use sp_std::collections::btree_set::BTreeSet;
-            let mut processed: BTreeSet<RequestId> = BTreeSet::new();
-            for (rid, _acc, flag) in OpocErrors::<T>::iter() {
-                if !flag { continue; }
-                if processed.len() as u32 >= MaxEngineRequestConsensusScans::get() { break; }
-                if processed.contains(&rid) { continue; }
-                processed.insert(rid);
-                let offenders: Vec<T::AccountId> = OpocErrors::<T>::iter_prefix(rid)
+            use sp_std::collections::btree_map::BTreeMap;
+
+            // IMPORTANT: Collect all OpocErrors into a deterministically-ordered BTreeMap
+            // before processing. StorageDoubleMap::iter() order depends on trie key
+            // hashing which can differ between native and WASM, causing state divergence
+            // and forks when combined with the per-block scan limit.
+            let mut errors_by_rid: BTreeMap<RequestId, Vec<(T::AccountId, bool)>> = BTreeMap::new();
+            for (rid, acc, flag) in OpocErrors::<T>::iter() {
+                errors_by_rid.entry(rid).or_default().push((acc, flag));
+            }
+
+            let mut processed_count: u32 = 0;
+            for (rid, entries) in errors_by_rid.iter() {
+                if processed_count >= MaxEngineRequestConsensusScans::get() { break; }
+                let has_error = entries.iter().any(|(_, flag)| *flag);
+                if !has_error { continue; }
+                processed_count += 1;
+
+                let mut offenders: Vec<T::AccountId> = entries.iter()
                     .filter(|(_, has_err)| *has_err)
-                    .map(|(acc, _)| acc)
+                    .map(|(acc, _)| acc.clone())
                     .collect();
+                offenders.sort();
                 if offenders.is_empty() { continue; }
 
                 // Check if the request was completed, aka it's in Outputs
-                if !Outputs::<T>::contains_key(&rid) {
+                if !Outputs::<T>::contains_key(rid) {
                     // request was not completed yet, this might be not an error yet
                     continue;
                 }
 
-                // Reporter: current block author if available and not among offenders, otherwise first non-offender with output, else first offender.
+                // Reporter: current block author if available and not among offenders,
+                // otherwise first non-offender with output (sorted deterministically), else first offender.
                 let block_author_opt = <authorship::Pallet<T>>::author();
                 let reporter = block_author_opt
                     .filter(|a| !offenders.contains(a))
-                    .or_else(||
-                        NodesOutputs::<T>::iter_prefix(rid)
-                            .find(|(acc, _)| !offenders.contains(acc))
-                            .map(|(acc, _)| acc)
-                    )
+                    .or_else(|| {
+                        // Collect into BTreeMap for deterministic ordering
+                        let outputs: BTreeMap<T::AccountId, _> = NodesOutputs::<T>::iter_prefix(*rid).collect();
+                        outputs.into_keys()
+                            .find(|acc| !offenders.contains(acc))
+                    })
                     .or_else(|| offenders.first().cloned());
-                if let Some(rep) = reporter { let _ = Self::insert_pending_offence(rid, rep, EngineOffenceType::InvalidOutput, offenders); }
+                if let Some(rep) = reporter { let _ = Self::insert_pending_offence(*rid, rep, EngineOffenceType::InvalidOutput, offenders); }
             }
         }
 
         pub fn process_pending_engine_offences() -> DispatchResult {
+            // IMPORTANT: Use BTreeMap to ensure deterministic ordering of pending offences.
+            // StorageMap::iter() order is non-deterministic between native/WASM.
+            let all_pending: sp_std::collections::btree_map::BTreeMap<RequestId, _> = PendingEngineOffences::<T>::iter().collect();
             let mut to_process: Vec<RequestId> = Vec::new();
-            for (rid, _) in PendingEngineOffences::<T>::iter().take(MaxEngineOffencesPerBlock::get() as usize) { to_process.push(rid); }
+            for (rid, _) in all_pending.iter().take(MaxEngineOffencesPerBlock::get() as usize) { to_process.push(*rid); }
             for rid in to_process.into_iter() {
                 if let Some((off_type, reporter, offenders)) = PendingEngineOffences::<T>::take(rid) {
                     let session_index = session::Pallet::<T>::current_index();

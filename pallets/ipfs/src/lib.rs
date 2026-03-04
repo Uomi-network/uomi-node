@@ -268,6 +268,7 @@ pub mod pallet {
     pub enum Error<T> {
         SomethingWentWrong,
         FundsUnavailable,
+        InherentDataAlreadyUpdated,
     }
 
     #[pallet::hooks]
@@ -490,9 +491,9 @@ pub mod pallet {
             log::info!("IPFS: Inherent data called");
 
             ensure_none(origin)?;
-            assert!(
+            ensure!(
                 !InherentDidUpdate::<T>::exists(),
-                "Inherent data must be updated only once in the block"
+                Error::<T>::InherentDataAlreadyUpdated
             );
             // get operations to do
             let (usable, to_remove) = operations;
@@ -549,8 +550,12 @@ pub mod pallet {
         }
 
         fn check_inherent(call: &Self::Call, _data: &InherentData) -> Result<(), Self::Error> {
+            // IMPORTANT: Use the same block number as create_inherent.
+            // Previously used current_block_number + 1, which caused divergence at CID expiry
+            // boundaries: create_inherent would NOT include a CID in to_remove but check_inherent
+            // would, causing the inherent to be rejected → on_finalize assert panic → chain halt.
             let current_block_number = frame_system::Pallet::<T>::block_number().into();
-            let expected_block_number = current_block_number + 1;
+            let expected_block_number = current_block_number;
             log::info!("IPFS: Checking inherent data for block number: {:?}", expected_block_number);
 
             match call {
@@ -851,6 +856,8 @@ pub mod pallet {
 
         pub fn is_majority_pinned(cid: &Cid) -> bool {
             // Get all validators
+            // NOTE: pallet_staking::Validators::iter() order is non-deterministic between
+            // native/WASM, but here we only use it for counting (not ordering), so it's safe.
             let validators = Validators::<T>
                 ::iter()
                 .map(|(v, _)| v)

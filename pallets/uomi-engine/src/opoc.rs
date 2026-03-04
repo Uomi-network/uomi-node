@@ -52,7 +52,14 @@ impl<T: Config> Pallet<T> {
 
         let ipfs_min_expire_duration = U256::from(MinExpireDuration::get());
 
-        let inputs = Inputs::<T>::iter().collect::<Vec<_>>();
+        // IMPORTANT: Collect inputs into a BTreeMap to ensure deterministic ordering
+        // across native and WASM execution. StorageMap::iter() order depends on trie
+        // key hashing which can differ between runtimes, causing state divergence.
+        // Then convert back to a Vec with canonical key order.
+        let inputs_sorted: Vec<_> = {
+            let map: BTreeMap<_, _> = Inputs::<T>::iter().collect();
+            map.into_iter().collect()
+        };
         for (
             request_id,
             (
@@ -65,7 +72,7 @@ impl<T: Config> Pallet<T> {
                 _input_data,
                 input_file_cid,
             ),
-        ) in inputs.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
+        ) in inputs_sorted.iter().take(MAX_INPUTS_MANAGED_PER_BLOCK) {
             let opoc_assignments_of_level_0 = 1 as usize;
             let opoc_assignments_of_level_1 = nft_required_consensus.as_u32() as usize;
 
@@ -638,6 +645,27 @@ impl<T: Config> Pallet<T> {
                         }
                     }
 
+                    // If no outputs remain after timeouts, complete per timeout (mirrors L1 logic)
+                    if output.is_empty() {
+                        match Self::opoc_complete_per_timeout(
+                            &mut opoc_blacklist_operations,
+                            &mut opoc_timeouts_operations,
+                            &mut nodes_works_operations,
+                            &mut outputs_operations,
+                            &request_id,
+                            &nft_id
+                        ) {
+                            Err(error) => {
+                                log::error!(
+                                    "Failed to complete request at OPoC level 2 per all validators timeout. error: {:?}",
+                                    error
+                                );
+                            }
+                            _ => (),
+                        }
+                        continue;
+                    }
+
                     // Count occurrences of each value
                     let mut value_counts: BTreeMap<&Data, usize> = BTreeMap::new();
                     for value in output.values() {
@@ -645,10 +673,11 @@ impl<T: Config> Pallet<T> {
                     }
 
                     // Store the max value before converting to Option
+                    // SAFETY: output.is_empty() was checked above, so value_counts is non-empty
                     let (max_value, _) = value_counts
                         .iter()
                         .max_by_key(|&(_, count)| count)
-                        .expect("Should have at least one value");
+                        .expect("Should have at least one value — guarded by output.is_empty() check above");
                     let output_completed = Some((*max_value).clone());
 
                     // loop the output
