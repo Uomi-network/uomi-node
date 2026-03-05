@@ -748,17 +748,23 @@ pub mod pallet {
                 (Cid, (ExpirationBlockNumber, UsableFromBlockNumber))
             > = Vec::new();
 
+            // IMPORTANT: Collect CidsStatus into a BTreeMap for deterministic iteration order.
+            // StorageMap::iter() order depends on trie key hashing which can differ between
+            // native and WASM execution, causing state divergence in inherent data.
+            let all_cids: sp_std::collections::btree_map::BTreeMap<Cid, (ExpirationBlockNumber, UsableFromBlockNumber)> =
+                CidsStatus::<T>::iter().collect();
+
             //check cids in cidstatus that has expired (avoiding the ones that are persistent with 0 expiry)
-            for (cid, (expires_at, usable_from)) in CidsStatus::<T>::iter() {
-                if expires_at != U256::zero() && current_block > expires_at {
-                    to_remove.push((cid, (expires_at, usable_from)));
+            for (cid, (expires_at, usable_from)) in all_cids.iter() {
+                if *expires_at != U256::zero() && current_block > *expires_at {
+                    to_remove.push((cid.clone(), (expires_at.clone(), usable_from.clone())));
                 }
             }
 
             //check cids in cidstatus that are usable (pinned by 50% + 1 of validators)
-            for (cid, (expires_at, usable_from)) in CidsStatus::<T>::iter() {
-                if Self::is_majority_pinned(&cid) && usable_from == U256::zero() {
-                    usable.push((cid, (expires_at, U256::from(0))));
+            for (cid, (expires_at, _usable_from)) in all_cids.iter() {
+                if Self::is_majority_pinned(cid) && *_usable_from == U256::zero() {
+                    usable.push((cid.clone(), (expires_at.clone(), U256::from(0))));
                 }
             }
 

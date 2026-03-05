@@ -66,13 +66,16 @@ impl<T: Config> Pallet<T> {
 
     // A function that returns those validators that have been reported more then 3 times:
     pub fn get_slashed_validators() -> Vec<T::AccountId> {
-        let mut slashed_validators = Vec::new();
-        for (validator, report_count) in ParticipantReportCount::<T>::iter() {
-            // Treat any positive report count as slashed (tests expect counts >0 excluded)
-            if report_count > 0 {
-                slashed_validators.push(validator);
-            }
-        }
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // ParticipantReportCount::iter() order depends on trie key hashing which can
+        // differ between native and WASM, causing non-deterministic Vec ordering.
+        let report_counts: sp_std::collections::btree_map::BTreeMap<T::AccountId, u32> =
+            ParticipantReportCount::<T>::iter().collect();
+        let mut slashed_validators: Vec<T::AccountId> = report_counts.into_iter()
+            .filter(|(_, report_count)| *report_count > 0)
+            .map(|(validator, _)| validator)
+            .collect();
+        slashed_validators.sort();
         slashed_validators
     }
 
@@ -81,9 +84,11 @@ impl<T: Config> Pallet<T> {
         log::debug!("[TSS] Resetting validator report counts at era end");
         
         // Get all validators with report counts
-        let reported_validators: Vec<(T::AccountId, u32)> = ParticipantReportCount::<T>::iter()
-            .filter(|(_, count)| *count > 0)
-            .collect();
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        let reported_validators: sp_std::collections::btree_map::BTreeMap<T::AccountId, u32> =
+            ParticipantReportCount::<T>::iter()
+                .filter(|(_, count)| *count > 0)
+                .collect();
         
         // Log detailed information about validators being reset
         if !reported_validators.is_empty() {
@@ -203,12 +208,15 @@ impl<T: Config> Pallet<T> {
         ).map_err(|_| crate::pallet::Error::<T>::InvalidParticipantsCount)?;
 
         // Determine previous completed DKG session id for this nft (if any) for key material retrieval off-chain
-        let mut prev_id: SessionId = 0;
-        for (sid, existing) in crate::pallet::DkgSessions::<T>::iter() {
-            if existing.nft_id == nft_id && matches!(existing.state, crate::pallet::SessionState::DKGComplete) {
-                if sid > prev_id { prev_id = sid; }
-            }
-        }
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // DkgSessions::iter() order depends on trie key hashing which can differ
+        // between native and WASM execution, causing state divergence.
+        let all_dkg_sessions: sp_std::collections::btree_map::BTreeMap<_, _> = crate::pallet::DkgSessions::<T>::iter().collect();
+        let prev_id: SessionId = all_dkg_sessions.iter()
+            .filter(|(_, existing)| existing.nft_id == nft_id && matches!(existing.state, crate::pallet::SessionState::DKGComplete))
+            .map(|(sid, _)| *sid)
+            .max()
+            .unwrap_or(0);
 
         let session = crate::pallet::DKGSession {
             nft_id,

@@ -56,32 +56,39 @@ impl<T: Config> Pallet<T> {
         // Get the total number of participants in the session
         let total_participants = session.participants.len();
 
-        // Iterate over all reported participants for this session
-        for (_reporter, reported_list) in ReportedParticipants::<T>::iter_prefix(session_id) {
-            // Iterate over each reported participant
+        // IMPORTANT: Collect ReportedParticipants into a BTreeMap for deterministic iteration order.
+        // StorageDoubleMap::iter_prefix() order depends on trie key hashing which can differ
+        // between native and WASM execution, causing state divergence.
+        let all_reports: sp_std::collections::btree_map::BTreeMap<T::AccountId, _> =
+            ReportedParticipants::<T>::iter_prefix(session_id).collect();
+
+        // Build a deduplicated set of all reported participants and count how many
+        // distinct reporters flagged each one. Use BTreeSet for deterministic ordering.
+        let mut participant_report_counts = sp_std::collections::btree_map::BTreeMap::<T::AccountId, usize>::new();
+        for (_reporter, reported_list) in all_reports.iter() {
             for reported_participant in reported_list.iter() {
-                // Count how many times this participant has been reported
+                // Count how many distinct reporters flagged this participant
                 let mut report_count = 0;
-                for (_, inner_reported_list) in
-                    ReportedParticipants::<T>::iter_prefix(session_id)
-                {
+                for (_, inner_reported_list) in all_reports.iter() {
                     if inner_reported_list.contains(reported_participant) {
                         report_count += 1;
                     }
                 }
+                participant_report_counts.insert(reported_participant.clone(), report_count);
+            }
+        }
 
-                // Calculate the threshold for reporting (2/3 of total participants)
-                let reporting_threshold = (total_participants * 2) / 3;
+        // Calculate the threshold for reporting (2/3 of total participants)
+        let reporting_threshold = (total_participants * 2) / 3;
 
-                // Check if the participant has been reported by more than 2/3 of the participants
-                if report_count == reporting_threshold {
-                    // Increment the report count for this participant
-                    let current_count = ParticipantReportCount::<T>::get(reported_participant);
-                    ParticipantReportCount::<T>::insert(
-                        reported_participant,
-                        current_count + 1,
-                    );
-                }
+        // Increment report count ONCE per participant that meets the threshold
+        for (reported_participant, report_count) in participant_report_counts.iter() {
+            if *report_count == reporting_threshold {
+                let current_count = ParticipantReportCount::<T>::get(reported_participant);
+                ParticipantReportCount::<T>::insert(
+                    reported_participant,
+                    current_count + 1,
+                );
             }
         }
         Ok(())

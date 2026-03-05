@@ -676,18 +676,13 @@ pub mod pallet {
         const MAX_SIGNING_RETRIES: u8 = 3; // total attempts allowed (including first)
 
         // Check existing sessions for this request
-        let mut has_in_progress = false;
-        for (_sid, existing) in SigningSessions::<T>::iter() {
-            if existing.request_id == request_id {
-                match existing.state {
-                    SessionState::SigningInProgress => {
-                        has_in_progress = true;
-                        break;
-                    }
-                    _ => { /* terminal */ }
-                }
-            }
-        }
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // SigningSessions::iter() order depends on trie key hashing which can differ
+        // between native and WASM execution, causing state divergence.
+        let all_signing_sessions: sp_std::collections::btree_map::BTreeMap<_, _> = SigningSessions::<T>::iter().collect();
+        let has_in_progress = all_signing_sessions.values().any(|existing| {
+            existing.request_id == request_id && matches!(existing.state, SessionState::SigningInProgress)
+        });
         if has_in_progress {
             log::debug!("[TSS] Skipping duplicate signing session (in progress) for request_id {:?}", request_id);
             return Ok(());
@@ -705,10 +700,12 @@ pub mod pallet {
         // Select the MOST RECENT completed DKG session for this NFT (highest session_id).
         // This avoids relying on the first iterator hit (which is not ordered) and implicitly
         // gives precedence to newer reshare keys without adding new storage fields.
-        let dkg_session_id = DkgSessions::<T>::iter()
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        let all_dkg_sessions: sp_std::collections::btree_map::BTreeMap<_, _> = DkgSessions::<T>::iter().collect();
+        let dkg_session_id = all_dkg_sessions.iter()
             .filter(|(_, s)| s.nft_id == nft_id && s.state == SessionState::DKGComplete)
             .max_by_key(|(id, _)| *id)
-            .map(|(id, _)| id)
+            .map(|(id, _)| *id)
             .ok_or(Error::<T>::DkgSessionNotFound)?;
 
         // Ensure the DKG session is in the correct state
@@ -1350,7 +1347,11 @@ pub mod pallet {
         // Create a signing session state
         let mut attempt = RequestRetryCount::<T>::get(filler_request_id);
         if attempt == 0 { attempt = 0; }
-        let dkg_session_id = DkgSessions::<T>::iter().filter_map(|(sid, sess)| if sess.nft_id == nft_id { Some((sid, sess)) } else { None }).max_by_key(|(sid, _)| *sid).map(|(sid, _)| sid).ok_or(Error::<T>::DkgSessionNotFound)?;
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // DkgSessions::iter() order depends on trie key hashing which can differ
+        // between native and WASM execution, causing state divergence.
+        let all_dkg_sessions_gap: sp_std::collections::btree_map::BTreeMap<_, _> = DkgSessions::<T>::iter().collect();
+        let dkg_session_id = all_dkg_sessions_gap.iter().filter_map(|(sid, sess)| if sess.nft_id == nft_id { Some((*sid, sess)) } else { None }).max_by_key(|(sid, _)| *sid).map(|(sid, _)| sid).ok_or(Error::<T>::DkgSessionNotFound)?;
         let dkg_session = DkgSessions::<T>::get(dkg_session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
         ensure!(matches!(dkg_session.state, SessionState::DKGComplete), Error::<T>::DkgSessionNotFound);
         // Create signing session
@@ -1764,10 +1765,14 @@ impl<T: Config> Pallet<T> {
         DkgSessions::<T>::insert(new_id, new_session.clone());
 
         // Find the most recent completed DKG session for this NFT (other than new_id)
-        let maybe_prev = DkgSessions::<T>::iter()
-            .filter(|(id, s)| *id != new_id && s.nft_id == nft_id && s.state == SessionState::DKGComplete)
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // DkgSessions::iter() order depends on trie key hashing which can differ
+        // between native and WASM execution, causing state divergence.
+        let all_dkg_for_prev: sp_std::collections::btree_map::BTreeMap<_, _> = DkgSessions::<T>::iter().collect();
+        let maybe_prev = all_dkg_for_prev.iter()
+            .filter(|(id, s)| **id != new_id && s.nft_id == nft_id && s.state == SessionState::DKGComplete)
             .max_by_key(|(id, _)| *id)
-            .map(|(id, _)| id);
+            .map(|(id, _)| *id);
 
         // If a previous aggregated key exists, copy it to the new session
         if let Some(prev_id) = maybe_prev {

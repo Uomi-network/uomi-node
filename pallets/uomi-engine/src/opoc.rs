@@ -1204,13 +1204,10 @@ impl<T: Config> Pallet<T> {
 
         let opoc_assignments = OpocAssignment::<T>::iter_prefix(*request_id);
         for (validator, (expiration_block_number, _opoc_level)) in opoc_assignments {
-            // Check if the validator has responded to the request
-            // IMPORTANT: The check is done by iterating over the outputs of the request_id and checking if the validator is in the outputs BTreeMap
-            // because the validator could have written the output as an empty value, so the output is empty but the validator has responded.
-            let is_validator_output =
-                NodesOutputs::<T>
-                    ::iter_prefix(*request_id)
-                    .find(|(account_id, _output_data)| account_id == &validator) != None;
+            // Check if the validator has responded to the request.
+            // Use contains_key for deterministic, efficient lookup instead of iter_prefix().find()
+            // which has non-deterministic traversal order between native and WASM.
+            let is_validator_output = NodesOutputs::<T>::contains_key(*request_id, &validator);
 
             // If the validator has responded manage the output
             if is_validator_output {
@@ -1593,9 +1590,12 @@ impl<T: Config> Pallet<T> {
     pub(crate) fn reset_validators_current_era_points_for_current_era() -> Result<(), &'static str> {
         // Get current era; if staking not yet started, skip
         let current_era = match <pallet_staking::CurrentEra<T>>::get() { Some(e) => e, None => return Ok(())  };
-        let processed_validators: Vec<T::AccountId> = <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::iter_prefix(current_era)
-            .map(|(validator, _)| validator).collect();
-        for validator in processed_validators {
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // iter_prefix() order depends on trie key hashing which can differ
+        // between native and WASM execution, causing state divergence.
+        let processed_validators: sp_std::collections::btree_map::BTreeMap<T::AccountId, ()> =
+            <crate::pallet::ProcessedOpocTimeoutEraResets<T>>::iter_prefix(current_era).collect();
+        for (validator, _) in processed_validators {
             Self::reset_validator_current_era_points(&validator)?;
             log::debug!("Reset staking points for validator {:?} in era {:?}", validator, current_era);
         }
