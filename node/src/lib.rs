@@ -34,6 +34,7 @@ mod consensus_data_provider;
 mod cli;
 mod command;
 mod evm_tracing_types;
+pub(crate) mod ipfs_inherent;
 mod rpc;
 
 pub use cli::*;

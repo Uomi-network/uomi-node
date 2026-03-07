@@ -35,6 +35,7 @@ use uomi_runtime::Runtime;
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 use ipfs_manager::IpfsManager;
 use tss::{get_config, setup_gossip};
+use crate::ipfs_inherent::IpfsInherentDataProvider;
 #[cfg(not(feature = "manual-seal"))]
 use sc_consensus_babe::{BabeLink, BabeWorkerHandle, SlotProportion};
 
@@ -239,10 +240,9 @@ pub fn build_babe_grandpa_import_queue(
                     slot_duration,
                 );
 
+            let ipfs = IpfsInherentDataProvider;
 
-
-
-            Ok((slot, timestamp))
+            Ok((slot, timestamp, ipfs))
         },
         spawner: &task_manager.spawn_essential_handle(),
         registry: config.prometheus_registry(),
@@ -536,8 +536,9 @@ pub fn start_node<N>(
                 slot_duration,
             );
 
+        let ipfs = IpfsInherentDataProvider;
 
-        Ok((slot, timestamp))
+        Ok((slot, timestamp, ipfs))
     };
 
     let c = client.clone();
@@ -661,8 +662,9 @@ pub fn start_node<N>(
                             *timestamp,
                             slot_duration.clone(),
                         );
+                    let ipfs = IpfsInherentDataProvider;
 
-                    Ok((slot, timestamp))
+                    Ok((slot, timestamp, ipfs))
                 },
             },
         );
@@ -693,8 +695,9 @@ pub fn start_node<N>(
                             &parent,
                         )?;
 
+                    let ipfs = IpfsInherentDataProvider;
 
-                    Ok((slot, timestamp, storage_proof))
+                    Ok((slot, timestamp, storage_proof, ipfs))
                 }
             },
             force_authoring,

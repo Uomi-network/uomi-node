@@ -39,6 +39,7 @@ use std::{
     collections::BTreeMap,marker::PhantomData, sync::Arc, time::Duration,
 };
 use tss::{get_config, setup_gossip};
+use crate::ipfs_inherent::IpfsInherentDataProvider;
 
 
 #[cfg(not(feature = "manual-seal"))]
@@ -254,7 +255,9 @@ pub fn build_babe_grandpa_import_queue(
                     slot_duration,
                 );
 
-            Ok((slot, timestamp))
+            let ipfs = IpfsInherentDataProvider;
+
+            Ok((slot, timestamp, ipfs))
         },
         spawner: &task_manager.spawn_essential_handle(),
         registry: config.prometheus_registry(),
@@ -543,7 +546,9 @@ where
                 slot_duration,
             );
 
-        Ok((slot, timestamp))
+        let ipfs = IpfsInherentDataProvider;
+
+        Ok((slot, timestamp, ipfs))
     };
     let c = client.clone();
 
@@ -662,8 +667,9 @@ where
                             *timestamp,
                             slot_duration.clone(),
                         );
+                    let ipfs = IpfsInherentDataProvider;
 
-                    Ok((slot, timestamp))
+                    Ok((slot, timestamp, ipfs))
                 },
             },
         );
@@ -694,7 +700,9 @@ where
                             &parent,
                         )?;
 
-                    Ok((slot, timestamp, storage_proof))
+                    let ipfs = IpfsInherentDataProvider;
+
+                    Ok((slot, timestamp, storage_proof, ipfs))
                 }
             },
             force_authoring,
