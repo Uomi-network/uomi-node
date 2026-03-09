@@ -2125,9 +2125,16 @@ impl<T: Config> Pallet<T> {
     /// Process completed signatures and submit transactions
     pub fn process_completed_signatures() -> DispatchResult {
         // Get all signing sessions with completed signatures
-        let completed_sessions: Vec<(SessionId, SigningSession)> = SigningSessions::<T>::iter()
-            .filter(|(_, session)| session.aggregated_sig.is_some())
-            .collect();
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        // SigningSessions::iter() order depends on trie key hashing which can
+        // differ between native and WASM execution.
+        let completed_sessions: sp_std::vec::Vec<(SessionId, SigningSession)> = {
+            let all: sp_std::collections::btree_map::BTreeMap<SessionId, SigningSession> =
+                SigningSessions::<T>::iter().collect();
+            all.into_iter()
+                .filter(|(_, session)| session.aggregated_sig.is_some())
+                .collect()
+        };
 
         if completed_sessions.is_empty() {
             return Ok(());
@@ -2569,10 +2576,13 @@ impl<T: Config> uomi_primitives::TssInterface<T> for Pallet<T> {
             .unwrap();
 
         // Use ProposedPublicKeys to get the address. ProposedPublicKeys key is a tuple of (nft_id, validator_id), so we need to take the value that has most votes
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order, then
+        // sort by length with a deterministic tie-breaker (lexicographic comparison)
+        // to avoid non-determinism from iter_prefix() ordering.
         let mut proposed_keys = ProposedPublicKeys::<T>::iter_prefix(nft_id)
             .map(|(_validator_id, key)| key)
             .collect::<Vec<crate::types::PublicKey>>();
-        proposed_keys.sort_by(|a, b| a.len().cmp(&b.len()));
+        proposed_keys.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
         if let Some(key) = proposed_keys.last() {
             // Decode the key to H160
             if let Ok(address) = sp_core::H160::decode(&mut &key[..]) {

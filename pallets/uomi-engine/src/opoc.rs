@@ -1297,18 +1297,19 @@ impl<T: Config> Pallet<T> {
         validator: &T::AccountId
     ) -> u32 {
         let works_count_storage = NodesWorks::<T>::iter_prefix(validator).count() as u32;
-        let works_count_operations = match nodes_works_operations.get(&validator) {
+        let (added_count, removed_count) = match nodes_works_operations.get(&validator) {
             Some(works) => {
-                //count only if true
-                works
-                    .iter()
-                    .filter(|(_request_id, &is_work)| is_work)
-                    .count() as u32
+                // Count pending additions (true = new work assigned, not yet in storage)
+                let added = works.iter().filter(|(_, &is_work)| is_work).count() as u32;
+                // Count pending removals (false = work completed/deassigned, still in storage)
+                let removed = works.iter().filter(|(_, &is_work)| !is_work).count() as u32;
+                (added, removed)
             }
-            None => 0 as u32,
+            None => (0u32, 0u32),
         };
 
-        works_count_storage + works_count_operations
+        // Effective count = current storage entries - pending removals + pending additions
+        works_count_storage.saturating_sub(removed_count) + added_count
     }
 
     fn opoc_nodes_works_operations_sum_execution_max_time(
