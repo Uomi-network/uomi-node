@@ -19,7 +19,7 @@
 use uomi_primitives::{AccountId, Balance, Block};
 use parity_scale_codec::Encode;
 use polkadot_runtime_common::BlockHashCount;
-use sc_executor::NativeElseWasmExecutor;
+use sc_executor::WasmExecutor;
 use sc_service::TFullClient;
 use sp_api::ConstructRuntimeApi;
 use sp_core::{Pair, H256};
@@ -30,41 +30,41 @@ use std::sync::Arc;
 /// Generates `System::Remark` extrinsics for the benchmarks.
 ///
 /// Note: Should only be used for benchmarking.
-pub struct RemarkBuilder<RuntimeApi, Executor>
+pub struct RemarkBuilder<RuntimeApi, HF>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
-    client: Arc<TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>,
+    client: Arc<TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>,
 }
 
-impl<RuntimeApi, Executor> RemarkBuilder<RuntimeApi, Executor>
+impl<RuntimeApi, HF> RemarkBuilder<RuntimeApi, HF>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
     /// Creates a new [`Self`] from the given client.
     pub fn new(
-        client: Arc<TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>,
+        client: Arc<TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>,
     ) -> Self {
         Self { client }
     }
 }
 
-impl<RuntimeApi, Executor> frame_benchmarking_cli::ExtrinsicBuilder
-    for RemarkBuilder<RuntimeApi, Executor>
+impl<RuntimeApi, HF> frame_benchmarking_cli::ExtrinsicBuilder
+    for RemarkBuilder<RuntimeApi, HF>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
     fn pallet(&self) -> &str {
         "system"
@@ -97,30 +97,30 @@ where
 /// Generates `Balances::TransferKeepAlive` extrinsics for the benchmarks.
 ///
 /// Note: Should only be used for benchmarking.
-pub struct TransferKeepAliveBuilder<RuntimeApi, Executor>
+pub struct TransferKeepAliveBuilder<RuntimeApi, HF>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
-    client: Arc<TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>,
+    client: Arc<TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>,
     dest: AccountId,
     value: Balance,
 }
 
-impl<RuntimeApi, Executor> TransferKeepAliveBuilder<RuntimeApi, Executor>
+impl<RuntimeApi, HF> TransferKeepAliveBuilder<RuntimeApi, HF>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
     /// Creates a new [`Self`] from the given client.
     pub fn new(
-        client: Arc<TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>,
+        client: Arc<TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>,
         dest: AccountId,
         value: Balance,
     ) -> Self {
@@ -132,14 +132,14 @@ where
     }
 }
 
-impl<RuntimeApi, Executor> frame_benchmarking_cli::ExtrinsicBuilder
-    for TransferKeepAliveBuilder<RuntimeApi, Executor>
+impl<RuntimeApi, HF> frame_benchmarking_cli::ExtrinsicBuilder
+    for TransferKeepAliveBuilder<RuntimeApi, HF>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
     fn pallet(&self) -> &str {
         "balances"
@@ -189,14 +189,14 @@ trait BenchmarkCallSigner<RuntimeCall: Encode + Clone, Signer: Pair> {
     ) -> OpaqueExtrinsic;
 }
 
-impl<RuntimeApi, Executor> BenchmarkCallSigner<local_runtime::RuntimeCall, sp_core::sr25519::Pair>
-    for TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>
+impl<RuntimeApi, HF> BenchmarkCallSigner<local_runtime::RuntimeCall, sp_core::sr25519::Pair>
+    for TFullClient<Block, RuntimeApi, WasmExecutor<HF>>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
     fn sign_call(
         &self,
@@ -254,14 +254,14 @@ pub trait ExistentialDepositProvider {
     fn existential_deposit(&self) -> Balance;
 }
 
-impl<RuntimeApi, Executor> ExistentialDepositProvider
-    for TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>
+impl<RuntimeApi, HF> ExistentialDepositProvider
+    for TFullClient<Block, RuntimeApi, WasmExecutor<HF>>
 where
-    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>>
+    RuntimeApi: ConstructRuntimeApi<Block, TFullClient<Block, RuntimeApi, WasmExecutor<HF>>>
         + Send
         + Sync
         + 'static,
-    Executor: sc_executor::NativeExecutionDispatch + 'static,
+    HF: sc_executor::HostFunctions,
 {
     fn existential_deposit(&self) -> Balance {
         with_runtime! {
