@@ -12,12 +12,14 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 parity-scale-codec = { workspace = true }
+log = { workspace = true }
 
 scale-info = { workspace = true }
 # Substrate
 frame-support = { workspace = true }
 frame-system = { workspace = true }
 sp-core = { workspace = true }
+sp-io = { workspace = true }
 sp-runtime = { workspace = true }
 # Frontier
 fp-evm = { workspace = true }
@@ -30,11 +32,13 @@ sp-io = { workspace = true, features = ["default"] }
 default = ["std"]
 std = [
 	"parity-scale-codec/std",
+	"log/std",
 	"scale-info/std",
 	# Substrate
 	"frame-support/std",
 	"frame-system/std",
 	"sp-core/std",
+	"sp-io/std",
 	"sp-runtime/std",
 	# Frontier
 	"fp-evm/std",

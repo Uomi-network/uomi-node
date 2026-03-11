@@ -1666,6 +1666,12 @@ pub mod pallet {
 
     // Add on_initialize hook to handle validator initialization
     fn on_initialize(n: BlockNumberFor<T>) -> frame_support::weights::Weight {
+        // ── DIAGNOSTIC: state root at START of TSS on_initialize ──
+        {
+            let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+            log::info!("DIAG [TSS] on_initialize START  block={:?} state_root={}", n, sp_core::hexdisplay::HexDisplay::from(&root));
+        }
+
         // Check if validator IDs have been initialized
         if NextValidatorId::<T>::get() == 0 {
             // Initialize with ID 1
@@ -1732,6 +1738,12 @@ pub mod pallet {
         // Return weight for this operation
         // Use counters already tracked during processing above (no extra storage iterations)
         let base_weight = T::DbWeight::get().reads(5) + T::DbWeight::get().writes(3);
+
+        // ── DIAGNOSTIC: state root at END of TSS on_initialize ──
+        {
+            let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+            log::info!("DIAG [TSS] on_initialize END    block={:?} state_root={}", n, sp_core::hexdisplay::HexDisplay::from(&root));
+        }
 
         // ops_count: offences processed + signing sessions expired
         let total_operations = offences_count + expired as u64;

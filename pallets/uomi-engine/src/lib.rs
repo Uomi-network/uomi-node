@@ -494,6 +494,12 @@ pub mod pallet {
 		fn on_finalize(_: BlockNumberFor<T>) {
             let current_block_number = U256::from(0) + <frame_system::Pallet<T>>::block_number();
 
+            // ── DIAGNOSTIC: state root BEFORE UomiEngine on_finalize ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] on_finalize START  block={} state_root={}", current_block_number, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
+
             match Self::opoc_run(current_block_number) {
                 Ok(operations) => {
                     Self::opoc_store_operations(operations);
@@ -503,6 +509,12 @@ pub mod pallet {
                 },
             };
 
+            // ── DIAGNOSTIC: state root AFTER opoc_run ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] AFTER opoc_run      block={} state_root={}", current_block_number, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
+
             match Self::aimodelscalc_run(current_block_number) {
                 Ok(operations) => {
                     Self::aimodelscalc_store_operations(operations);
@@ -511,6 +523,12 @@ pub mod pallet {
                     log::error!("Error running aimodelscalc_run: {:?}", error);
                 },
             };
+
+            // ── DIAGNOSTIC: state root AFTER aimodelscalc_run ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] AFTER aimodelscalc  block={} state_root={}", current_block_number, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
 
             // Every 100 blocks we clean all NodesOutputs and NodesOpocL0Inferences storage from records related to not-existing requests
             let divisor = U256::from(100);
@@ -542,15 +560,37 @@ pub mod pallet {
                 OpocBlacklist::<T>::remove_all(None);
             }
 
+            // ── DIAGNOSTIC: state root AFTER cleanup ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] AFTER cleanup       block={} state_root={}", current_block_number, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
+
             // Reset validators' current era points at the end of each era to avoid overflow.
             Self::reset_validators_current_era_points_for_current_era().unwrap_or_else(|e| {
                 log::error!("Error resetting validators' current era points: {:?}", e);
             });
+
+            // ── DIAGNOSTIC: state root at END of UomiEngine on_finalize ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] on_finalize END    block={} state_root={}", current_block_number, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
 		}
 
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+            // ── DIAGNOSTIC: state root at START of UomiEngine on_initialize ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] on_initialize START  block={:?} state_root={}", _n, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
             Self::detect_invalid_output_offences();
             if let Err(e) = Self::process_pending_engine_offences() { log::error!("[ENGINE] Offence processing failed: {:?}", e); }
+            // ── DIAGNOSTIC: state root at END of UomiEngine on_initialize ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [UomiEngine] on_initialize END    block={:?} state_root={}", _n, sp_core::hexdisplay::HexDisplay::from(&root));
+            }
             Weight::from_parts(20_000,0)
         }
     }

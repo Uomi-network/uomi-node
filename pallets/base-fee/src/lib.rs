@@ -18,7 +18,6 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::comparison_chain)]
-#![warn(unused_crate_dependencies)]
 
 #[cfg(test)]
 mod tests;
@@ -130,8 +129,16 @@ pub mod pallet {
 		}
 
 		fn on_finalize(_n: BlockNumberFor<T>) {
+			// ── DIAGNOSTIC: state root at START of BaseFee on_finalize ──
+			{
+				let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+				log::info!("DIAG [BaseFee] on_finalize START  state_root={}", sp_core::hexdisplay::HexDisplay::from(&root));
+			}
 			if <Elasticity<T>>::get().is_zero() {
 				// Zero elasticity means constant BaseFeePerGas.
+				// ── DIAGNOSTIC: state root when BaseFee skips (zero elasticity) ──
+				let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+				log::info!("DIAG [BaseFee] on_finalize END (zero-elast)  state_root={}", sp_core::hexdisplay::HexDisplay::from(&root));
 				return;
 			}
 
@@ -202,6 +209,11 @@ pub mod pallet {
 						Self::deposit_event(Event::BaseFeeOverflow);
 					}
 				});
+			}
+			// ── DIAGNOSTIC: state root at END of BaseFee on_finalize ──
+			{
+				let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+				log::info!("DIAG [BaseFee] on_finalize END   state_root={}", sp_core::hexdisplay::HexDisplay::from(&root));
 			}
 		}
 	}

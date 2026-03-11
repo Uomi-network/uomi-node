@@ -278,9 +278,19 @@ pub mod pallet {
         }
 
         fn on_finalize(_: BlockNumber<T>) {
+            // ── DIAGNOSTIC: state root at START of IPFS on_finalize ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [IPFS] on_finalize START  state_root={}", sp_core::hexdisplay::HexDisplay::from(&root));
+            }
             // Be sure that the InherentDidUpdate is set to true and reset it to false.
             // This is required to be sure that the inherent function is executed once in the block.
             assert!(InherentDidUpdate::<T>::take(), "IPFS: inherent must be updated once in the block");
+            // ── DIAGNOSTIC: state root at END of IPFS on_finalize ──
+            {
+                let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+                log::info!("DIAG [IPFS] on_finalize END    state_root={}", sp_core::hexdisplay::HexDisplay::from(&root));
+            }
         }
 
          #[cfg(feature = "try-runtime")]

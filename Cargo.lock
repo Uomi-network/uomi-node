@@ -10226,6 +10226,7 @@ dependencies = [
  "fp-evm",
  "frame-support 41.0.0",
  "frame-system 41.0.0",
+ "log",
  "parity-scale-codec",
  "scale-info",
  "sp-core 37.0.0",
