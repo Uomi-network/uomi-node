@@ -117,7 +117,7 @@ sc_service::PartialComponents<
             config,
             telemetry.as_ref().map(|(_, telemetry)| telemetry.handle()),
             executor,
-            true,
+            false,
         )?;  
     let client = Arc::new(client);
     let telemetry = telemetry.map(|(worker, telemetry)| {
