@@ -33,7 +33,7 @@ use frame_support::BoundedVec;
 use frame_system::offchain::SendUnsignedTransaction;
 use frame_system::offchain::{SignedPayload, Signer};
 use frame_system::pallet_prelude::{BlockNumberFor, OriginFor};
-use frame_system::{ensure_none, ensure_signed};
+use frame_system::{ensure_none, ensure_signed, ensure_root};
 use scale_info::TypeInfo;
 use sp_staking::{
     offence::{Offence, ReportOffence},
@@ -577,10 +577,11 @@ pub mod pallet {
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_dkg_session())]
     #[pallet::call_index(0)]
     pub fn create_dkg_session(
-        _origin: OriginFor<T>,
+        origin: OriginFor<T>,
         nft_id: NftId,
         threshold: u32,
     ) -> DispatchResult {
+        ensure_root(origin)?;
         ensure!(threshold > 0, Error::<T>::InvalidThreshold);
 
         // threshold needs to be an integer value between 50 and 100%
@@ -798,9 +799,14 @@ pub mod pallet {
     pub fn submit_dkg_result(
         origin: OriginFor<T>,
         payload: SubmitDKGResultPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        // Verify signature before processing
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
 
         log::debug!("[TSS] Call::submit_dkg_result");
 
@@ -837,7 +843,7 @@ pub mod pallet {
 
         // Check if the number of votes meets the threshold
         let mut votes = 0;
-        
+
     for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(nft_id.clone()) {
             if key == aggregated_key {
                 votes += 1;
@@ -845,7 +851,7 @@ pub mod pallet {
         }
 
         let total_validators = session.participants.len() as u32;
-        let required_votes = (total_validators * threshold) / 100;
+        let required_votes = ((total_validators * threshold) + 99) / 100; // ceiling division for strict majority
 
         log::debug!("[TSS] Votes: {}, Required: {}", votes, required_votes);
 

@@ -648,7 +648,7 @@ impl TransactionBuilder {
         s: U256,
         recid: u8,
     ) -> Vec<u8> {
-        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 => recid, _ => panic!("invalid recid"), } as u64;
+        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 | 2 | 3 => recid & 0x01, _ => panic!("invalid recid"), } as u64;
         let v = U256::from(35 + 2 * chain_id + y_parity);
         let mut srlp = RlpStream::new();
         srlp.begin_list(9);
@@ -706,7 +706,7 @@ impl TransactionBuilder {
         s: U256,
         recid: u8,
     ) -> Vec<u8> {
-        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 => recid, _ => panic!("invalid recid"), } as u64;
+        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 | 2 | 3 => recid & 0x01, _ => panic!("invalid recid"), } as u64;
         let mut srlp = RlpStream::new();
         srlp.begin_list(12);
         srlp.append(&U256::from(chain_id));
