@@ -1,82 +1,53 @@
-use scale_info::prelude::string::String;
-
+use core::marker::PhantomData;
 use frame_election_provider_support::{
     bounds::{ElectionBounds, ElectionBoundsBuilder},
-    onchain, SequentialPhragmen,
+    onchain,
+    SequentialPhragmen,
 };
-// INCLUDES
 use frame_support::{
-    construct_runtime, derive_impl, dispatch::DispatchResult, parameter_types,
-    traits::EstimateNextSessionRotation, weights::Weight,
+    derive_impl,
+    dispatch::DispatchResult,
+    parameter_types,
+    traits::{ConstU16, ConstU32, ConstU64, EstimateNextSessionRotation, Nothing},
+    weights::Weight,
 };
-use frame_system::offchain::{CreateSignedTransaction, SigningTypes};
-use sp_runtime::generic::UncheckedExtrinsic;
-use pallet_babe;
+use frame_system::offchain::{CreateBare, CreateTransactionBase, CreateSignedTransaction, SigningTypes};
 use pallet_ipfs::{
     self,
     types::{Cid, ExpirationBlockNumber, UsableFromBlockNumber},
 };
 use pallet_session::{SessionHandler, ShouldEndSession};
-use pallet_offences;
-// Simple converter for historical session full identification
-use sp_runtime::traits::{Convert, ConvertInto};
 use pallet_staking::TestBenchmarkingConfig;
-use sp_core::{sr25519::{Public, Signature}, ConstU128, ConstU16, ConstU32, ConstU64, Get, H256, U256
+use sp_core::{
+    sr25519::{Public, Signature},
+    ConstU128,
+    ConstBool,
+    Get,
+    H256,
+    U256,
 };
-
-
-use pallet_uomi_engine::Call as UomiCall;
 use sp_runtime::{
     curve::PiecewiseLinear,
-    testing::{TestXt, UintAuthorityId},
-    traits::{BlakeTwo256, IdentityLookup},
-    BuildStorage, DispatchError, KeyTypeId, Perbill, Permill, RuntimeAppPublic,
+    traits::{ConvertInto, BlakeTwo256, IdentityLookup},
+    generic::UncheckedExtrinsic,
+    testing::UintAuthorityId,
+    BuildStorage,
+    DispatchError,
+    KeyTypeId,
+    Perbill,
+    Permill,
+    RuntimeAppPublic,
 };
 use sp_staking::currency_to_vote::SaturatingCurrencyToVote;
+use sp_runtime::testing::TestXt;
 
 use crate::{types::{MaxNumberOfShares, MinimumValidatorThreshold, PublicKey}, SignatureVerification};
+use pallet_uomi_engine::Call as UomiCall;
 
-// TYPES
-pub type Balance = u128; // needed in System
+pub type Balance = u128;
 pub type AccountId = Public;
-pub type VoterList = pallet_staking::UseNominatorsAndValidatorsMap<Test>;
-pub struct TestShouldEndSession;
-impl ShouldEndSession<u64> for TestShouldEndSession {
-    fn should_end_session(_now: u64) -> bool {
-        false
-    }
-}
-pub struct TestNextSessionRotation;
 
-impl EstimateNextSessionRotation<u64> for TestNextSessionRotation {
-    fn average_session_length() -> u64 {
-        10
-    }
-
-    fn estimate_current_session_progress(_now: u64) -> (Option<Permill>, Weight) {
-        (None, Weight::zero())
-    }
-
-    fn estimate_next_session_rotation(_now: u64) -> (Option<u64>, Weight) {
-        (None, Weight::zero())
-    }
-}
-
-pub struct TestSessionHandler;
-impl<AId> SessionHandler<AId> for TestSessionHandler {
-    const KEY_TYPE_IDS: &'static [KeyTypeId] = &[UintAuthorityId::ID];
-    fn on_genesis_session<T>(_validators: &[(AId, T)]) {}
-    fn on_new_session<T>(
-        _changed: bool,
-        _validators: &[(AId, T)],
-        _queued_validators: &[(AId, T)],
-    ) {
-    }
-    fn on_disabled(_validator_index: u32) {}
-}
-
-// RUNTIME
-construct_runtime!(
+frame_support::construct_runtime!(
     pub enum Test {
         System: frame_system,
         TestingPallet: crate,
@@ -87,138 +58,26 @@ construct_runtime!(
         Babe: pallet_babe,
         Ipfs: pallet_ipfs,
         Uomi: pallet_uomi_engine,
-    Offences: pallet_offences,
-    Historical: pallet_session::historical,
+        Offences: pallet_offences,
+        Historical: pallet_session::historical,
+        Authorship: pallet_authorship,
     }
 );
 
-impl pallet_session::Config for Test {
-    type RuntimeEvent = RuntimeEvent;
-    type ValidatorId = AccountId;
-    type ValidatorIdOf = ConvertInto;
-    type ShouldEndSession = TestShouldEndSession;
-    type NextSessionRotation = TestNextSessionRotation;
-    type SessionManager = ();
-    type SessionHandler = TestSessionHandler;
-    type Keys = UintAuthorityId;
-    type WeightInfo = ();
-    type DisablingStrategy = ();
-}
-
-// Provide an identity converter (AccountId -> Option<AccountId>) for historical session pallet
-pub struct IdentityOf;
-impl Convert<AccountId, Option<AccountId>> for IdentityOf {
-    fn convert(a: AccountId) -> Option<AccountId> { Some(a) }
-}
-
-impl pallet_session::historical::Config for Test {
-    type FullIdentification = AccountId; // minimal
-    type FullIdentificationOf = IdentityOf; // simple identity mapping
-}
-
-impl pallet_offences::Config for Test {
-    type RuntimeEvent = RuntimeEvent;
-    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
-    type OnOffenceHandler = (); // no-op in tests
-}
-
-#[derive_impl(frame_system::config_preludes::TestDefaultConfig as frame_system::DefaultConfig)]
-impl frame_system::Config for Test {
-    type BaseCallFilter = frame_support::traits::Everything;
-    type BlockWeights = ();
-    type BlockLength = ();
-    type DbWeight = ();
-    type RuntimeOrigin = RuntimeOrigin;
-    type RuntimeCall = RuntimeCall;
-    type Nonce = u64;
-    type Hash = H256;
-    type Hashing = BlakeTwo256;
-    type AccountId = Public;
-    type Lookup = IdentityLookup<Self::AccountId>;
-    type Block = frame_system::mocking::MockBlock<Test>;
-    type RuntimeEvent = RuntimeEvent;
-    type Version = ();
-    type PalletInfo = PalletInfo;
-    type AccountData = pallet_balances::AccountData<Balance>;
-    type OnNewAccount = ();
-    type OnKilledAccount = ();
-    type SystemWeightInfo = ();
-    type SS58Prefix = ConstU16<42>;
-    type OnSetCode = ();
-    type MaxConsumers = ConstU32<16>;
-}
-
-
-impl CreateSignedTransaction<UomiCall<Test>> for Test {
-    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: RuntimeCall,
-        _public: Self::Public,
-        _account: <Test as frame_system::Config>::AccountId,
-        nonce: <Test as frame_system::Config>::Nonce,
-    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
-        Some(UncheckedExtrinsic::new_signed(
-            call,
-            nonce,
-            (),
-            ()
-        ))
-    }
-}
-
-pub struct MockVerifier {}
-impl SignatureVerification<PublicKey> for MockVerifier {
-    fn verify(_key: &PublicKey, _message: &[u8], sig: &crate::types::Signature) -> bool {
-        sig[0] != 0
-    }
-
-}
-
-impl pallet_authorship::Config for Test {
-    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
-    type EventHandler = ();
-}
-
-
-impl crate::pallet::Config for Test {
-    type RuntimeEvent = RuntimeEvent;
-    type MaxNumberOfShares = MaxNumberOfShares;
-    type SignatureVerifier = MockVerifier;
-
-    type AuthorityId = crate::crypto::AuthId;
-    type MinimumValidatorThreshold = MinimumValidatorThreshold;
-    type OffenceReporter = TestOffenceReporter;
-    type TssWeightInfo = (); // use default placeholder weights in tests
-}
-
-pub struct TestOffenceReporter;
-impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking::offence::ReportOffence<Reporter, Offender, Off> for TestOffenceReporter {
-    fn report_offence(_reporters: Vec<Reporter>, _offence: Off) -> Result<(), sp_staking::offence::OffenceError> { Ok(()) }
-    fn is_known_offence(_offenders: &[Offender], _time_slot: &Off::TimeSlot) -> bool { false }
-}
-
-impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
-    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: RuntimeCall,
-        _public: Self::Public,
-        _account: Self::AccountId,
-        nonce: Self::Nonce,
-    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
-        Some(UncheckedExtrinsic::new_signed(
-            call,
-            nonce,
-            (),
-            ()
-        ))
-    }
-}
-
-impl pallet_uomi_engine::Config for Test {
-    type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
-    type RuntimeEvent = RuntimeEvent;
-    type Randomness = pallet_babe::ParentBlockRandomness<Test>;
-    type IpfsPallet = IpfsWrapper;
-    type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
-    type OffenceReporter = TestOffenceReporter;
+parameter_types! {
+    pub const EpochDuration: u64 = 10;
+    pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
+    pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
+    pub const ExpectedBlockTime: u64 = 6_000;
+    pub const BondingDuration: u32 = 28;
+    pub const MaxNominatorRewardedPerValidator: u32 = 64;
+    pub const MaxNominators: u32 = 1000;
+    pub const VoterListMaxSize: u32 = 1000;
+    pub const MaxControllersInDeprecationBatch: u32 = 256;
+    pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
+    pub static ElectionsBounds: ElectionBounds = ElectionBoundsBuilder::default().build();
+    pub const MaxValidationDataLength: u32 = 1024;
+    pub MaxActiveValidators: u32 = 1000;
 }
 
 pub struct IpfsWrapper;
@@ -228,9 +87,7 @@ impl pallet_uomi_engine::ipfs::IpfsInterface<Test> for IpfsWrapper {
         pallet_ipfs::Pallet::<Test>::get_agent_cid(nft_id)
     }
 
-    fn get_cid_status(
-        cid: &Cid,
-    ) -> Result<(ExpirationBlockNumber, UsableFromBlockNumber), DispatchError> {
+    fn get_cid_status(cid: &Cid) -> Result<(ExpirationBlockNumber, UsableFromBlockNumber), DispatchError> {
         pallet_ipfs::Pallet::<Test>::get_cid_status(cid)
     }
 
@@ -247,28 +104,6 @@ impl pallet_uomi_engine::ipfs::IpfsInterface<Test> for IpfsWrapper {
     }
 }
 
-// First, create a custom type for the test IPFS URL
-pub struct TestIpfsUrl;
-
-// Implement the trait that your config expects for IpfsApiUrl
-impl Get<&'static str> for TestIpfsUrl {
-    fn get() -> &'static str {
-        // You can return a fixed URL for testing
-        &"http://127.0.0.1:5001/api/v0"
-    }
-}
-
-impl pallet_ipfs::Config for Test {
-    type RuntimeEvent = RuntimeEvent;
-    type IpfsApiUrl = TestIpfsUrl;
-    type AuthorityId = pallet_ipfs::crypto::AuthId;
-    type Currency = pallet_balances::Pallet<Test>;
-    type BlockNumber = u64;
-    type TemporaryPinningCost = IpfsTemporaryPinningCost;
-    type TssInterface = crate::Pallet<Test>;
-    type UomiEngineInterface = Uomi;
-}
-
 impl pallet_babe::Config for Test {
     type EpochDuration = EpochDuration;
     type ExpectedBlockTime = ExpectedBlockTime;
@@ -276,59 +111,9 @@ impl pallet_babe::Config for Test {
     type DisabledValidators = ();
     type WeightInfo = ();
     type MaxAuthorities = ConstU32<10>;
-    // Rimuovi KeyOwnerProof, KeyOwnerProofSystem, KeyOwnerIdentification
-    type EquivocationReportSystem = (); // Aggiungi questa riga
-    type KeyOwnerProof = sp_core::Void; // Aggiungi questa riga
-    type MaxNominators = ConstU32<10>; // Aggiungi questa riga
-}
-
-impl SigningTypes for Test {
-    type Public = Public;
-    type Signature = Signature;
-}
-
-impl pallet_timestamp::Config for Test {
-    type Moment = u64;
-    type OnTimestampSet = ();
-    type MinimumPeriod = ConstU64<5>;
-    type WeightInfo = ();
-}
-
-pallet_staking_reward_curve::build! {
-   const REWARD_CURVE: PiecewiseLinear<'static> = curve!(
-       min_inflation: 0_025_000,
-       max_inflation: 0_100_000,
-       ideal_stake: 0_500_000,
-       falloff: 0_050_000,
-       max_piece_count: 40,
-       test_precision: 0_005_000,
-   );
-}
-parameter_types! {
-    pub const EpochDuration: u64 = 10;
-    pub const IpfsApiUrl: &'static str = "http://localhost:5001/api/v0";
-    pub const IpfsTemporaryPinningCost: Balance = 10 * 10000;
-    pub const ExpectedBlockTime: u64 = 6_000;
-    pub const OffendingValidatorsThreshold: Perbill = Perbill::from_percent(17);
-    pub static ElectionsBounds: ElectionBounds = ElectionBoundsBuilder::default().build();
-    pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
-}
-
-
-impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
-    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: RuntimeCall,
-        _public: Self::Public,
-        _account: <Test as frame_system::Config>::AccountId,
-        nonce: <Test as frame_system::Config>::Nonce,
-    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
-        Some(UncheckedExtrinsic::new_signed(
-            call,
-            nonce,
-            (),
-            ()
-        ))
-    }
+    type EquivocationReportSystem = ();
+    type KeyOwnerProof = sp_core::Void;
+    type MaxNominators = ConstU32<10>;
 }
 
 pub struct OnChainSeqPhragmen;
@@ -338,7 +123,12 @@ impl onchain::Config for OnChainSeqPhragmen {
     type DataProvider = Staking;
     type WeightInfo = ();
     type Bounds = ElectionsBounds;
+    type Sort = ConstBool<true>;
+    type MaxBackersPerWinner = ConstU32<{ u32::MAX }>;
+    type MaxWinnersPerPage = MaxActiveValidators;
 }
+
+pub type VoterList = pallet_staking::UseNominatorsAndValidatorsMap<Test>;
 
 impl pallet_staking::Config for Test {
     type NominationsQuota = pallet_staking::FixedNominationsQuota<16>;
@@ -370,8 +160,267 @@ impl pallet_staking::Config for Test {
     type WeightInfo = ();
     type OldCurrency = Balances;
     type RuntimeHoldReason = RuntimeHoldReason;
-    type MaxValidatorSet = ConstU32<1000>;
-    type Filter = frame_support::traits::Everything;
+    type MaxValidatorSet = MaxActiveValidators;
+    type Filter = Nothing;
+}
+
+pallet_staking_reward_curve::build! {
+    const REWARD_CURVE: PiecewiseLinear<'static> = curve!(
+        min_inflation: 0_025_000,
+        max_inflation: 0_100_000,
+        ideal_stake: 0_500_000,
+        falloff: 0_050_000,
+        max_piece_count: 40,
+        test_precision: 0_005_000,
+    );
+}
+
+pub struct TestShouldEndSession;
+impl ShouldEndSession<u64> for TestShouldEndSession {
+    fn should_end_session(_now: u64) -> bool {
+        false
+    }
+}
+
+pub struct TestNextSessionRotation;
+
+impl EstimateNextSessionRotation<u64> for TestNextSessionRotation {
+    fn average_session_length() -> u64 {
+        10
+    }
+
+    fn estimate_current_session_progress(_now: u64) -> (Option<Permill>, Weight) {
+        (None, Weight::zero())
+    }
+
+    fn estimate_next_session_rotation(_now: u64) -> (Option<u64>, Weight) {
+        (None, Weight::zero())
+    }
+}
+
+pub struct TestSessionHandler;
+impl<AId> SessionHandler<AId> for TestSessionHandler {
+    const KEY_TYPE_IDS: &'static [KeyTypeId] = &[UintAuthorityId::ID];
+    fn on_genesis_session<T>(_validators: &[(AId, T)]) {}
+    fn on_new_session<T>(
+        _changed: bool,
+        _validators: &[(AId, T)],
+        _queued_validators: &[(AId, T)],
+    ) {
+    }
+    fn on_disabled(_validator_index: u32) {}
+}
+
+impl pallet_session::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type ValidatorId = AccountId;
+    type ValidatorIdOf = ConvertInto;
+    type ShouldEndSession = TestShouldEndSession;
+    type NextSessionRotation = TestNextSessionRotation;
+    type SessionManager = ();
+    type SessionHandler = TestSessionHandler;
+    type Keys = UintAuthorityId;
+    type WeightInfo = ();
+    type DisablingStrategy = ();
+}
+
+impl SigningTypes for Test {
+    type Public = Public;
+    type Signature = Signature;
+}
+
+#[derive_impl(frame_system::config_preludes::TestDefaultConfig as frame_system::DefaultConfig)]
+impl frame_system::Config for Test {
+    type BaseCallFilter = frame_support::traits::Everything;
+    type BlockWeights = ();
+    type BlockLength = ();
+    type DbWeight = ();
+    type RuntimeOrigin = RuntimeOrigin;
+    type RuntimeCall = RuntimeCall;
+    type Nonce = u64;
+    type Hash = H256;
+    type Hashing = BlakeTwo256;
+    type AccountId = Public;
+    type Lookup = IdentityLookup<Self::AccountId>;
+    type Block = frame_system::mocking::MockBlock<Test>;
+    type RuntimeEvent = RuntimeEvent;
+    type Version = ();
+    type PalletInfo = PalletInfo;
+    type AccountData = pallet_balances::AccountData<Balance>;
+    type OnNewAccount = ();
+    type OnKilledAccount = ();
+    type SystemWeightInfo = ();
+    type SS58Prefix = ConstU16<42>;
+    type OnSetCode = ();
+    type MaxConsumers = ConstU32<16>;
+}
+
+pub type Extrinsic = TestXt<RuntimeCall, ()>;
+
+impl CreateBare<UomiCall<Test>> for Test {
+    fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic<u64, RuntimeCall, (), ()> {
+        UncheckedExtrinsic::new_bare(call)
+    }
+}
+
+impl CreateTransactionBase<UomiCall<Test>> for Test {
+    type Extrinsic = Extrinsic;
+    type RuntimeCall = RuntimeCall;
+}
+
+impl CreateSignedTransaction<UomiCall<Test>> for Test {
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
+        _public: Self::Public,
+        _account: <Test as frame_system::Config>::AccountId,
+        nonce: <Test as frame_system::Config>::Nonce,
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
+    }
+}
+
+impl CreateBare<pallet_ipfs::Call<Test>> for Test {
+    fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic<u64, RuntimeCall, (), ()> {
+        UncheckedExtrinsic::new_bare(call)
+    }
+}
+
+impl CreateTransactionBase<pallet_ipfs::Call<Test>> for Test {
+    type Extrinsic = Extrinsic;
+    type RuntimeCall = RuntimeCall;
+}
+
+impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
+        _public: Self::Public,
+        _account: <Test as frame_system::Config>::AccountId,
+        nonce: <Test as frame_system::Config>::Nonce,
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
+    }
+}
+
+impl CreateBare<crate::pallet::Call<Test>> for Test {
+    fn create_bare(call: RuntimeCall) -> UncheckedExtrinsic<u64, RuntimeCall, (), ()> {
+        UncheckedExtrinsic::new_bare(call)
+    }
+}
+
+impl CreateTransactionBase<crate::pallet::Call<Test>> for Test {
+    type Extrinsic = Extrinsic;
+    type RuntimeCall = RuntimeCall;
+}
+
+impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
+        _public: Self::Public,
+        _account: <Test as frame_system::Config>::AccountId,
+        nonce: <Test as frame_system::Config>::Nonce,
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
+    }
+}
+
+pub struct TestIpfsUrl;
+
+impl Get<&'static str> for TestIpfsUrl {
+    fn get() -> &'static str {
+        "http://127.0.0.1:5001/api/v0"
+    }
+}
+
+pub struct MockTssInterface;
+
+impl uomi_primitives::TssInterface<Test> for MockTssInterface {
+    fn create_agent_wallet(_nft_id: sp_core::U256, _threshold: u8) -> frame_support::pallet_prelude::DispatchResult {
+        Ok(())
+    }
+
+    fn agent_wallet_exists(_nft_id: sp_core::U256) -> bool {
+        true
+    }
+
+    fn get_agent_wallet_address(_nft_id: sp_core::U256) -> Option<sp_core::H160> {
+        None
+    }
+}
+
+impl pallet_ipfs::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type IpfsApiUrl = TestIpfsUrl;
+    type AuthorityId = pallet_ipfs::crypto::AuthId;
+    type Currency = pallet_balances::Pallet<Test>;
+    type BlockNumber = u64;
+    type TemporaryPinningCost = IpfsTemporaryPinningCost;
+    type TssInterface = crate::Pallet<Test>;
+    type UomiEngineInterface = Uomi;
+}
+
+impl pallet_uomi_engine::Config for Test {
+    type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
+    type RuntimeEvent = RuntimeEvent;
+    type Randomness = pallet_babe::ParentBlockRandomness<Test>;
+    type IpfsPallet = IpfsWrapper;
+    type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>;
+    type OffenceReporter = TestOffenceReporter;
+}
+
+pub struct IdentityOf;
+impl sp_runtime::traits::Convert<AccountId, Option<AccountId>> for IdentityOf {
+    fn convert(a: AccountId) -> Option<AccountId> {
+        Some(a)
+    }
+}
+
+impl pallet_session::historical::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type FullIdentification = AccountId;
+    type FullIdentificationOf = IdentityOf;
+}
+
+impl pallet_offences::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
+    type OnOffenceHandler = ();
+}
+
+impl pallet_authorship::Config for Test {
+    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
+    type EventHandler = ();
+}
+
+pub struct TestOffenceReporter;
+impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking::offence::ReportOffence<Reporter, Offender, Off> for TestOffenceReporter {
+    fn report_offence(_reporters: Vec<Reporter>, _offence: Off) -> Result<(), sp_staking::offence::OffenceError> {
+        Ok(())
+    }
+    fn is_known_offence(_offenders: &[Offender], _time_slot: &Off::TimeSlot) -> bool {
+        false
+    }
+}
+
+impl pallet_timestamp::Config for Test {
+    type Moment = u64;
+    type OnTimestampSet = ();
+    type MinimumPeriod = ConstU64<5>;
+    type WeightInfo = ();
 }
 
 impl pallet_balances::Config for Test {
@@ -386,8 +435,26 @@ impl pallet_balances::Config for Test {
     type WeightInfo = ();
     type FreezeIdentifier = ();
     type MaxFreezes = ();
-    type RuntimeHoldReason = ();
+    type RuntimeHoldReason = RuntimeHoldReason;
     type RuntimeFreezeReason = ();
+    type DoneSlashHandler = ();
+}
+
+pub struct MockVerifier {}
+impl SignatureVerification<PublicKey> for MockVerifier {
+    fn verify(_key: &PublicKey, _message: &[u8], sig: &crate::types::Signature) -> bool {
+        sig[0] != 0
+    }
+}
+
+impl crate::pallet::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxNumberOfShares = MaxNumberOfShares;
+    type SignatureVerifier = MockVerifier;
+    type AuthorityId = crate::crypto::AuthId;
+    type MinimumValidatorThreshold = MinimumValidatorThreshold;
+    type OffenceReporter = TestOffenceReporter;
+    type TssWeightInfo = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
@@ -395,9 +462,12 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
         .build_storage()
         .unwrap();
 
-    pallet_balances::GenesisConfig::<Test> { balances: vec![] }
-        .assimilate_storage(&mut t)
-        .unwrap();
+    pallet_balances::GenesisConfig::<Test> {
+        balances: vec![],
+        ..Default::default()
+    }
+    .assimilate_storage(&mut t)
+    .unwrap();
 
     pallet_staking::GenesisConfig::<Test> {
         validator_count: 2,
@@ -409,7 +479,8 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     .assimilate_storage(&mut t)
     .unwrap();
 
-
+    // pallet_babe genesis - we don't need to configure it for these tests
+    // pallet_babe::GenesisConfig::<Test> is not needed for the TSS pallet tests
 
     t.into()
 }
