@@ -317,11 +317,19 @@ fn test_submit_aggregated_signature() {
         // Submit the DKG result
         // let aggregated_key = [1u8; 33];
         let submitter = account(11);
-        
+
         assert_ok!(TestingPallet::submit_dkg_result(
             RuntimeOrigin::none(),
             SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggregated_key.to_vec()), public: submitter.clone() },
-            Signature::from_raw([0u8; 64])            
+            Signature::from_raw([0u8; 64])
+        ));
+
+        // Submit the DKG result - third vote needed for ceiling(3*67/100)=3 threshold
+        let submitter = account(12);
+        assert_ok!(TestingPallet::submit_dkg_result(
+            RuntimeOrigin::none(),
+            SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggregated_key.to_vec()), public: submitter.clone() },
+            Signature::from_raw([0u8; 64])
         ));
 
         // Create a signing session
@@ -455,7 +463,15 @@ fn test_signing_session_lifecycle() {
 
         // Submit the DKG result
         let submitter = account(12);
-        
+
+        assert_ok!(TestingPallet::submit_dkg_result(
+            RuntimeOrigin::none(),
+            SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggregated_key.to_vec()), public: submitter.clone() },
+            Signature::from_raw([0u8; 64])
+        ));
+
+        // Submit the DKG result - third vote needed for ceiling(3*67/100)=3 threshold
+        let submitter = account(11);
         assert_ok!(TestingPallet::submit_dkg_result(
             RuntimeOrigin::none(),
             SubmitDKGResultPayload { session_id: dkg_session_id, public_key: BoundedVec::truncate_from(aggregated_key.to_vec()), public: submitter.clone() },
@@ -2234,6 +2250,8 @@ mod tests {
             // Also register validators in staking pallet so reshare session picks them up
             let prefs = pallet_staking::ValidatorPrefs { commission: Perbill::from_percent(0), blocked: false };
             for v in &validators { pallet_staking::Validators::<Test>::insert(v.clone(), prefs.clone()); }
+            // Register validators in pallet_session so create_reshare_dkg_session picks them up
+            pallet_session::Validators::<Test>::put(validators.clone());
             // First DKG (record next_session_id BEFORE call; the created session will use this value)
             let first_session_id = TestingPallet::next_session_id();
             let nft_id_u256 = U256::from(900u64);
@@ -2550,6 +2568,8 @@ mod tests {
             // Register validators in staking as in other reshare tests
             let prefs = pallet_staking::ValidatorPrefs { commission: Perbill::from_percent(0), blocked: false };
             for v in &validators { pallet_staking::Validators::<Test>::insert(v.clone(), prefs.clone()); }
+            // Register validators in pallet_session so create_reshare_dkg_session picks them up
+            pallet_session::Validators::<Test>::put(validators.clone());
 
             // --- Initial DKG ---
             let initial_dkg_session_id = TestingPallet::next_session_id();

@@ -81,13 +81,13 @@ impl<T: Config> Pallet<T> {
         // Calculate the threshold for reporting (2/3 of total participants)
         let reporting_threshold = (total_participants * 2) / 3;
 
-        // Increment report count ONCE per participant that meets the threshold
+        // Increment report count by actual number of reports for participants that meet the threshold
         for (reported_participant, report_count) in participant_report_counts.iter() {
-            if *report_count == reporting_threshold {
+            if *report_count >= reporting_threshold {
                 let current_count = ParticipantReportCount::<T>::get(reported_participant);
                 ParticipantReportCount::<T>::insert(
                     reported_participant,
-                    current_count + 1,
+                    current_count + (*report_count as u32),
                 );
             }
         }
