@@ -10,6 +10,7 @@ use frame_support::{
     traits::EstimateNextSessionRotation, weights::Weight,
 };
 use frame_system::offchain::{CreateSignedTransaction, SigningTypes};
+use sp_runtime::generic::UncheckedExtrinsic;
 use pallet_babe;
 use pallet_ipfs::{
     self,
@@ -18,7 +19,7 @@ use pallet_ipfs::{
 use pallet_session::{SessionHandler, ShouldEndSession};
 use pallet_offences;
 // Simple converter for historical session full identification
-use sp_runtime::traits::Convert;
+use sp_runtime::traits::{Convert, ConvertInto};
 use pallet_staking::TestBenchmarkingConfig;
 use sp_core::{sr25519::{Public, Signature}, ConstU128, ConstU16, ConstU32, ConstU64, Get, H256, U256
 };
@@ -94,13 +95,14 @@ construct_runtime!(
 impl pallet_session::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type ValidatorId = AccountId;
-    type ValidatorIdOf = pallet_staking::StashOf<Self>;
+    type ValidatorIdOf = ConvertInto;
     type ShouldEndSession = TestShouldEndSession;
     type NextSessionRotation = TestNextSessionRotation;
     type SessionManager = ();
     type SessionHandler = TestSessionHandler;
     type Keys = UintAuthorityId;
     type WeightInfo = ();
+    type DisablingStrategy = ();
 }
 
 // Provide an identity converter (AccountId -> Option<AccountId>) for historical session pallet
@@ -148,13 +150,18 @@ impl frame_system::Config for Test {
 
 
 impl CreateSignedTransaction<UomiCall<Test>> for Test {
-    fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: UomiCall<Test>,
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
         _public: Self::Public,
         _account: <Test as frame_system::Config>::AccountId,
         nonce: <Test as frame_system::Config>::Nonce,
-    ) -> Option<(UomiCall<Test>, (u64, (u64, ())))> {
-        Some((call, (nonce, (nonce, ()))))
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
     }
 }
 
@@ -190,16 +197,18 @@ impl<Reporter, Offender, Off: sp_staking::offence::Offence<Offender>> sp_staking
 }
 
 impl CreateSignedTransaction<crate::pallet::Call<Test>> for Test {
-    fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: Self::OverarchingCall,
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
         _public: Self::Public,
         _account: Self::AccountId,
         nonce: Self::Nonce,
-    ) -> Option<(
-        Self::OverarchingCall,
-        <Self::Extrinsic as sp_runtime::traits::Extrinsic>::SignaturePayload,
-    )> {
-        Some((call, (nonce, (nonce, ()))))
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
     }
 }
 
@@ -208,7 +217,6 @@ impl pallet_uomi_engine::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
-    type InherentDataType = ();
     type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
     type OffenceReporter = TestOffenceReporter;
 }
@@ -308,13 +316,18 @@ parameter_types! {
 
 
 impl CreateSignedTransaction<pallet_ipfs::Call<Test>> for Test {
-    fn create_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
-        call: pallet_ipfs::Call<Test>,
+    fn create_signed_transaction<C: frame_system::offchain::AppCrypto<Self::Public, Self::Signature>>(
+        call: RuntimeCall,
         _public: Self::Public,
         _account: <Test as frame_system::Config>::AccountId,
         nonce: <Test as frame_system::Config>::Nonce,
-    ) -> Option<(pallet_ipfs::Call<Test>, (u64, (u64, ())))> {
-        Some((call, (nonce, (nonce, ()))))
+    ) -> Option<UncheckedExtrinsic<u64, RuntimeCall, (), ()>> {
+        Some(UncheckedExtrinsic::new_signed(
+            call,
+            nonce,
+            (),
+            ()
+        ))
     }
 }
 
@@ -324,7 +337,6 @@ impl onchain::Config for OnChainSeqPhragmen {
     type Solver = SequentialPhragmen<AccountId, Perbill>;
     type DataProvider = Staking;
     type WeightInfo = ();
-    type MaxWinners = ConstU32<100>;
     type Bounds = ElectionsBounds;
 }
 
@@ -333,7 +345,6 @@ impl pallet_staking::Config for Test {
     type Currency = Balances;
     type CurrencyBalance = Balance;
     type UnixTime = Timestamp;
-    type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
     type CurrencyToVote = SaturatingCurrencyToVote;
     type ElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
     type GenesisElectionProvider = Self::ElectionProvider;
@@ -357,6 +368,10 @@ impl pallet_staking::Config for Test {
     type EventListeners = ();
     type BenchmarkingConfig = TestBenchmarkingConfig;
     type WeightInfo = ();
+    type OldCurrency = Balances;
+    type RuntimeHoldReason = RuntimeHoldReason;
+    type MaxValidatorSet = ConstU32<1000>;
+    type Filter = frame_support::traits::Everything;
 }
 
 impl pallet_balances::Config for Test {
