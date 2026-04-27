@@ -220,7 +220,7 @@ fn complete_reshare_session(
             public: sp_runtime::MultiSigner::from(first.clone()),
         };
         let signature_signed = self.sign_payload(&first, &payload)?;
-        let call = RuntimeCall::Tss(uomi_runtime::pallet_tss::Call::submit_signature_result { payload, signature: signature_signed });
+        let call = RuntimeCall::Tss(uomi_runtime::pallet_tss::Call::submit_signature_result { payload, ext_signature: signature_signed });
         self.submit_unsigned(call)
     }
 }

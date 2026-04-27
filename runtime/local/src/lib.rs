@@ -140,7 +140,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("local"),
     impl_name: create_runtime_str!("local"),
     authoring_version: 1,
-    spec_version: 1, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
+    spec_version: 2, // Bumped for runtime upgrade: fix pallet-tss update_validators signature check
     impl_version: 2,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1, // Extrinsic payload shape change
@@ -1827,9 +1827,9 @@ pub type Executive = frame_executive::Executive<
     Migrations,
 >;
 
-pub type Migrations = ();
-//     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
-// );
+pub type Migrations = (
+    pallet_tss::migrations::MigrateAddAllocatedAt<Runtime>,
+);
 
 type EventRecord = frame_system::EventRecord<
     <Runtime as frame_system::Config>::RuntimeEvent,
@@ -2842,7 +2842,11 @@ impl_runtime_apis! {
             offence_type: u8,
             offenders: Vec<[u8; 32]>,
         ) {
-            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
+            use core::convert::TryFrom;
+            if let Ok(ty) = pallet_tss::TssOffenceType::try_from(offence_type) {
+                let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, ty, offenders);
+            }
+            // Unknown offence_type bytes are silently dropped (M-3 hardening).
         }
     }
 }

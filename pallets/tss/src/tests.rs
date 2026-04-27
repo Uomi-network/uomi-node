@@ -343,20 +343,15 @@ fn test_submit_aggregated_signature() {
         // Get the signing session ID
         let signing_session_id = TestingPallet::next_session_id() - 1;
 
-        // Submit the aggregated signature (valid signature)
-        // let signature = [1u8; 65];
-        assert_ok!(TestingPallet::submit_aggregated_signature(
-            RuntimeOrigin::signed(create_test_account(None)),
-            signing_session_id,
-            BoundedVec::truncate_from(signature.0.to_vec())
-        ));
-
-        // Check that the signing session state was updated
-        let updated_session = TestingPallet::get_signing_session(signing_session_id).unwrap();
-        assert_eq!(updated_session.state, pallet::SessionState::SigningComplete);
+        // M-N1: `submit_aggregated_signature` is now a deprecated stub that rejects
+        // unconditionally. The signing vote path lives in `submit_signature_result`.
         assert_eq!(
-            updated_session.aggregated_sig.unwrap(),
-            BoundedVec::<u8, MaxNumberOfShares>::truncate_from(signature.0.to_vec())
+            TestingPallet::submit_aggregated_signature(
+                RuntimeOrigin::signed(create_test_account(None)),
+                signing_session_id,
+                BoundedVec::truncate_from(signature.0.to_vec())
+            ),
+            Err(pallet::Error::<Test>::InvalidSessionState.into())
         );
     });
 }
@@ -406,6 +401,8 @@ fn test_submit_aggregated_signature_errors() {
         let signing_session_id = TestingPallet::next_session_id() - 1;
 
         // Submit an invalid signature (all zeros)
+        // M-N1: `submit_aggregated_signature` always rejects now (deprecated stub),
+        // so both invalid-signature and unknown-session cases collapse to the same error.
         let invalid_signature = [0u8; 65];
         assert_eq!(
             TestingPallet::submit_aggregated_signature(
@@ -413,17 +410,15 @@ fn test_submit_aggregated_signature_errors() {
                 signing_session_id,
                 BoundedVec::truncate_from(invalid_signature.to_vec())
             ),
-            Err(pallet::Error::<Test>::InvalidSignature.into())
+            Err(pallet::Error::<Test>::InvalidSessionState.into())
         );
-
-        // Submit to a non-existent signing session
         assert_eq!(
             TestingPallet::submit_aggregated_signature(
                 RuntimeOrigin::signed(create_test_account(None)),
                 signing_session_id + 1,
                 BoundedVec::truncate_from(invalid_signature.to_vec())
             ),
-            Err(pallet::Error::<Test>::SigningSessionNotFound.into())
+            Err(pallet::Error::<Test>::InvalidSessionState.into())
         );
     });
 }
@@ -489,20 +484,18 @@ fn test_signing_session_lifecycle() {
         // Get the signing session ID
         let signing_session_id = TestingPallet::next_session_id() - 1;
 
-        // Submit the aggregated signature (valid signature)
-        assert_ok!(TestingPallet::submit_aggregated_signature(
-            RuntimeOrigin::signed(create_test_account(None)),
-            signing_session_id,
-            BoundedVec::truncate_from(signature.0.to_vec())
-        ));
-
-        // Check that the signing session state was updated
-        let updated_session = TestingPallet::get_signing_session(signing_session_id).unwrap();
-        assert_eq!(updated_session.state, pallet::SessionState::SigningComplete);
+        // M-N1: `submit_aggregated_signature` is deprecated and rejects unconditionally.
         assert_eq!(
-            updated_session.aggregated_sig.unwrap(),
-            BoundedVec::<u8, MaxNumberOfShares>::truncate_from(signature.0.to_vec())
+            TestingPallet::submit_aggregated_signature(
+                RuntimeOrigin::signed(create_test_account(None)),
+                signing_session_id,
+                BoundedVec::truncate_from(signature.0.to_vec())
+            ),
+            Err(pallet::Error::<Test>::InvalidSessionState.into())
         );
+        // Session should remain in SigningInProgress.
+        let updated_session = TestingPallet::get_signing_session(signing_session_id).unwrap();
+        assert_eq!(updated_session.state, pallet::SessionState::SigningInProgress);
     });
 }
 
@@ -1381,7 +1374,8 @@ mod tests {
             // Assert
             let updated_session = DkgSessions::<Test>::get(session_id).unwrap();
             assert_eq!(updated_session.state, SessionState::DKGFailed);
-            assert_eq!(ParticipantReportCount::<Test>::get(account(3)), 7); // Count incremented
+            // M-N5: one strike per failed session regardless of reporter count.
+            assert_eq!(ParticipantReportCount::<Test>::get(account(3)), 6);
         });
     }
 
@@ -2018,11 +2012,9 @@ mod tests {
             let data_bv: BoundedVec<u8, pallet_uomi_engine::MaxDataSize> = BoundedVec::try_from(json.clone().into_bytes()).unwrap();
             EngineOutputs::<Test>::insert(request_id, (data_bv, 1u32, 1u32, nft_id));
             let res = TestingPallet::process_single_request(U256::from(50u8)).expect("processing ok");
-            let (_nft, maybe) = res.unwrap();
-            assert_eq!(maybe.0, chain_id);
-            // Malformed hex should decode to empty vec (log warning) then used as raw data or for tx build failure fallback.
-            // Address is valid so builder tries; since data empty allowed, preimage should not be empty length 0 but a valid preimage (legacy default)
-            assert!(!maybe.1.is_empty(), "Should have produced a preimage despite malformed data hex (decoded to empty)");
+            // Malformed hex in action.data should cause the action to be skipped entirely (L-4 fix).
+            // No preimage must be produced for a malformed action to avoid signing corrupted data.
+            assert!(res.is_none(), "Action with malformed hex data should be skipped, not produce a preimage");
         });
     }
     #[test]
@@ -2543,9 +2535,9 @@ mod tests {
             let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![2]).unwrap();
             assert_ok!(TestingPallet::create_signing_session(RuntimeOrigin::none(), request_id, nft_id.clone(), msg.clone()));
             let (sid, _) = crate::SigningSessions::<Test>::iter().next().unwrap();
-            // Need >= 67% of 3 validators => 2 votes
+            // H-N2: ceiling division means ((3*67)+99)/100 = 3 votes needed for 3 validators
             let fake_sig = BoundedVec::truncate_from(vec![3u8;65]);
-            for voter in validators.iter().take(2) { // submit two matching votes
+            for voter in validators.iter() { // submit all three matching votes
                 assert_ok!(TestingPallet::submit_signature_result(
                     RuntimeOrigin::none(),
                     crate::payloads::SubmitSignatureResultPayload { session_id: sid, signature: fake_sig.clone(), public: voter.clone() },
@@ -2610,9 +2602,9 @@ mod tests {
             let (second_signing_sid, second_signing) = crate::SigningSessions::<Test>::iter().filter(|(_, s)| s.request_id == request_id).max_by_key(|(id, _)| *id).unwrap();
             assert_eq!(second_signing.dkg_session_id, reshare_session_id, "Second signing should bind to reshare DKG");
 
-            // Finalize signing with quorum signatures (2/3)
+            // Finalize signing with quorum signatures (H-N2: ceiling requires 3/3 at 67%)
             let fake_sig = BoundedVec::truncate_from(vec![0xAB;65]);
-            for signer in validators.iter().take(2) {
+            for signer in validators.iter() {
                 assert_ok!(TestingPallet::submit_signature_result(RuntimeOrigin::none(), crate::payloads::SubmitSignatureResultPayload { session_id: second_signing_sid, signature: fake_sig.clone(), public: signer.clone() }, sr25519::Signature::from_raw([0u8;64])));
             }
             assert_eq!(crate::SigningSessions::<Test>::get(second_signing_sid).unwrap().state, SessionState::SigningComplete, "Second signing completes");
@@ -2713,13 +2705,14 @@ mod tests {
             ));
             let (sign_id, _s) = crate::SigningSessions::<Test>::iter().next().unwrap();
             let sig = BoundedVec::truncate_from(vec![2u8;65]);
-            // Insert single vote and then finalize via submit_signature_result which will also insert same vote again but that's fine
-            ProposedSignatures::<Test>::insert(sign_id, 1u32, sig.clone());
-            assert_ok!(TestingPallet::submit_signature_result(
-                RuntimeOrigin::none(),
-                crate::payloads::SubmitSignatureResultPayload { session_id: sign_id, signature: sig.clone(), public: validators[0].clone() },
-                sr25519::Signature::from_raw([0u8;64])
-            ));
+            // H-N2: ceiling division needs all 3 matching votes to finalize for 3 validators.
+            for v in &validators {
+                assert_ok!(TestingPallet::submit_signature_result(
+                    RuntimeOrigin::none(),
+                    crate::payloads::SubmitSignatureResultPayload { session_id: sign_id, signature: sig.clone(), public: v.clone() },
+                    sr25519::Signature::from_raw([0u8;64])
+                ));
+            }
             assert_eq!(ProposedSignatures::<Test>::iter_prefix(sign_id).count(), 0, "Votes cleared on completion");
         });
     }

@@ -9,7 +9,8 @@ impl ECDSAManager {
         index: ECDSAIndexWrapper,
         message: &Vec<u8>,
     ) -> Result<SendingMessages, ECDSAError> {
-        println!("TSS: handle_keygen_message from index {:?}", index.get_index());
+        // L-N2: was `println!` — converted to structured log so RUST_LOG filtering applies.
+        log::debug!("[TSS][ECDSA][Keygen] handle_keygen_message from index {:?}", index.get_index());
         log::debug!(
             "[TSS][ECDSA][Keygen] Incoming keygen message session_id={} from index={} message_len={}",
             session_id,

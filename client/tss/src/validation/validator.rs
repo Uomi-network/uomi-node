@@ -106,12 +106,15 @@ impl<B: BlockT> Validator<B> for TssValidator {
                     log::warn!("[TSS]: Message signature verification failed from {}", sender.to_base58());
                     return ValidationResult::Discard;
                 }
-                // Check block number to prevent replay attacks
-                // let current_block = (self.get_block_number)();
-                // if !verification::is_block_number_valid(&signed_message, current_block, self.max_message_age_blocks) {
-                //     log::warn!("[TSS]: Message block number invalid or too old from {}", sender.to_base58());
-                //     return ValidationResult::Discard;
-                // }
+                // H-N3: Enforce block-age replay protection. Without this, captured signed
+                // messages (including stale Announces from retired validators) are replayable
+                // forever against the session manager.
+                let current_block = (self.get_block_number)();
+                if !verification::is_block_number_valid(&signed_message, current_block, self.max_message_age_blocks) {
+                    log::warn!("[TSS][SEC]: Rejecting replayed/stale message from {} (msg_block={}, current_block={}, max_age={})",
+                        sender.to_base58(), signed_message.block_number, current_block, self.max_message_age_blocks);
+                    return ValidationResult::Discard;
+                }
 
                 log::debug!("[TSS]: ✅ Verified signed message from {} - signature and block number valid", sender.to_base58());
             }

@@ -226,7 +226,21 @@ impl PeerMapper {
     }
 
     pub fn add_peer(&mut self, peer_id: PeerId, public_key_data: TSSPublic) {
-        log::info!("Adding Peer {:?} with public key {:?}", peer_id, public_key_data);
+        // L-N3: reject silent rebind (defense-in-depth behind H-N2's inner/outer pubkey check).
+        // A legitimate peer's pubkey should never change for the same PeerId. If it does,
+        // log a SEC warning and refuse the overwrite; the operator can investigate.
+        if let Some(existing) = self.peers.get(&peer_id) {
+            if existing != &public_key_data {
+                log::warn!(
+                    "[TSS][SEC] Refusing to rebind PeerId {:?}: existing pubkey != new pubkey",
+                    peer_id
+                );
+                return;
+            }
+            // Same mapping already present — noop.
+            return;
+        }
+        log::info!("[TSS] Adding Peer {:?} to peer_mapper", peer_id);
         self.peers.insert(peer_id, public_key_data);
     }
 

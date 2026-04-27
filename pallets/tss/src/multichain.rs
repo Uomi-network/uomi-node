@@ -194,7 +194,22 @@ impl From<RpcError> for &'static str {
 pub struct MultiChainRpcClient;
 
 impl MultiChainRpcClient {
-    /// Get chain configuration by chain ID
+    /// Get chain configuration by chain ID, preferring the on-chain override
+    /// (`ChainConfigOverrides::<T>`) when present and falling back to the hardcoded
+    /// defaults otherwise. This is the preferred entry point — callers with access
+    /// to the runtime `T` should use this instead of `get_chain_config`. (L-3 fix)
+    pub fn get_chain_config_for<T: crate::pallet::Config>(
+        chain_id: u32,
+    ) -> Result<ChainConfig, &'static str> {
+        if let Some(cfg) = crate::pallet::ChainConfigOverrides::<T>::get(chain_id) {
+            return Ok(cfg);
+        }
+        Self::get_chain_config(chain_id)
+    }
+
+    /// Get chain configuration by chain ID (hardcoded defaults only).
+    /// Kept for callers that don't have a `T: Config` in scope. Prefer
+    /// `get_chain_config_for::<T>` whenever possible so that on-chain overrides apply.
     pub fn get_chain_config(chain_id: u32) -> Result<ChainConfig, &'static str> {
         let supported_chain = match chain_id {
             1 => SupportedChain::Ethereum,
@@ -648,7 +663,17 @@ impl TransactionBuilder {
         s: U256,
         recid: u8,
     ) -> Vec<u8> {
-        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 | 2 | 3 => recid & 0x01, _ => panic!("invalid recid"), } as u64;
+        // M-N2: never panic on out-of-band recid; log and fall back to the low-bit parity.
+        // A bogus recid from upstream should not crash the offchain worker — the worst case is
+        // an invalid signature that the destination chain will reject.
+        let y_parity = match recid {
+            27 | 28 => (recid - 27) as u64,
+            0 | 1 | 2 | 3 => (recid & 0x01) as u64,
+            other => {
+                log::error!("[TSS][multichain] Unexpected ECDSA recid {} (expected 0..=3 or 27..=28); using low-bit parity fallback", other);
+                (other & 0x01) as u64
+            }
+        };
         let v = U256::from(35 + 2 * chain_id + y_parity);
         let mut srlp = RlpStream::new();
         srlp.begin_list(9);
@@ -706,7 +731,17 @@ impl TransactionBuilder {
         s: U256,
         recid: u8,
     ) -> Vec<u8> {
-        let y_parity = match recid { 27 | 28 => recid - 27, 0 | 1 | 2 | 3 => recid & 0x01, _ => panic!("invalid recid"), } as u64;
+        // M-N2: never panic on out-of-band recid; log and fall back to the low-bit parity.
+        // A bogus recid from upstream should not crash the offchain worker — the worst case is
+        // an invalid signature that the destination chain will reject.
+        let y_parity = match recid {
+            27 | 28 => (recid - 27) as u64,
+            0 | 1 | 2 | 3 => (recid & 0x01) as u64,
+            other => {
+                log::error!("[TSS][multichain] Unexpected ECDSA recid {} (expected 0..=3 or 27..=28); using low-bit parity fallback", other);
+                (other & 0x01) as u64
+            }
+        };
         let mut srlp = RlpStream::new();
         srlp.begin_list(12);
         srlp.append(&U256::from(chain_id));

@@ -3,6 +3,12 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+/// Per-session message buffer cap. Prevents unbounded memory growth when messages
+/// arrive before a session is known (M-1 fix).
+const MAX_BUFFERED_PER_SESSION: usize = 128;
+/// Maximum number of distinct session IDs in the buffer. Limits total memory footprint.
+const MAX_BUFFERED_SESSIONS: usize = 64;
+
 use sc_network_types::PeerId;
 use sp_core::{sr25519, ByteArray};
 use sp_io::crypto::sr25519_verify;
@@ -163,13 +169,21 @@ impl MessageProcessor {
                 // Check if this session exists or is timed out
                 if !session_manager.session_exists(session_id) {
                     log::warn!("[TSS] Received DKGRound1 message for non-existent session {}", session_id);
-                    // Buffer the message in case session is created later
-                    session_manager.buffer
-                        .lock()
-                        .unwrap()
-                        .entry(*session_id)
-                        .or_insert(Vec::new())
-                        .push((sender_peer_id.to_bytes(), TssMessage::DKGRound1(*session_id, bytes.clone())));
+                    // M-N2: only refuse to create NEW session buckets when the global cap is hit;
+                    // existing buffered sessions must still accept incoming messages up to their
+                    // per-session cap, otherwise legitimate in-flight DKGs are starved.
+                    let mut buf = session_manager.buffer.lock().unwrap();
+                    let session_exists_in_buf = buf.contains_key(session_id);
+                    if !session_exists_in_buf && buf.len() >= MAX_BUFFERED_SESSIONS {
+                        log::warn!("[TSS] Global buffer at capacity ({} sessions); dropping DKGRound1 for new session {}", buf.len(), session_id);
+                    } else {
+                        let entry = buf.entry(*session_id).or_insert(Vec::new());
+                        if entry.len() < MAX_BUFFERED_PER_SESSION {
+                            entry.push((sender_peer_id.to_bytes(), TssMessage::DKGRound1(*session_id, bytes.clone())));
+                        } else {
+                            log::warn!("[TSS] Per-session buffer full for session {}; dropping DKGRound1", session_id);
+                        }
+                    }
                     return;
                 }
                 
@@ -192,12 +206,19 @@ impl MessageProcessor {
                     match error {
                         SessionManagerError::IdentifierNotFound => {
                             log::debug!("[TSS] Buffering DKGRound1 message for session {} (identifier not found yet)", session_id);
-                            session_manager.buffer
-                                .lock()
-                                .unwrap()
-                                .entry(*session_id)
-                                .or_insert(Vec::new())
-                                .push((sender_peer_id.to_bytes(), TssMessage::DKGRound1(*session_id, bytes.clone())));
+                            // M-N2: let existing buckets keep buffering once global cap is hit.
+                            let mut buf = session_manager.buffer.lock().unwrap();
+                            let session_exists_in_buf = buf.contains_key(session_id);
+                            if !session_exists_in_buf && buf.len() >= MAX_BUFFERED_SESSIONS {
+                                log::warn!("[TSS] Global buffer at capacity ({} sessions); dropping DKGRound1 retry for new session {}", buf.len(), session_id);
+                            } else {
+                                let entry = buf.entry(*session_id).or_insert(Vec::new());
+                                if entry.len() < MAX_BUFFERED_PER_SESSION {
+                                    entry.push((sender_peer_id.to_bytes(), TssMessage::DKGRound1(*session_id, bytes.clone())));
+                                } else {
+                                    log::warn!("[TSS] Per-session buffer full for session {}; dropping DKGRound1 retry", session_id);
+                                }
+                            }
                         },
                         _ => {
                             log::error!("[TSS] Error handling DKGRound1 for session {}: {:?}", session_id, error);
@@ -225,10 +246,12 @@ impl MessageProcessor {
                     return;
                 }
 
+                // M-N4: don't dump encrypted round2 packages into logs — they contain
+                // ciphertext secret shares whose analysis is easier with the bytes in hand.
                 log::debug!(
-                    "[TSS] TssMessage::DKGRound2({:?}, {:?}, {:?})",
+                    "[TSS] TssMessage::DKGRound2(session={}, bytes_len={}, recipient={:?})",
                     session_id,
-                    bytes,
+                    bytes.len(),
                     recipient
                 );
                 if let Err(error) = session_manager.dkg_handle_round2_message(
@@ -240,19 +263,26 @@ impl MessageProcessor {
                     match error {
                         SessionManagerError::Round2SecretPackageNotYetAvailable => {
                             log::debug!("[TSS] Buffering DKGRound2 message for session {} (round 2 not ready yet)", session_id);
-                            session_manager.buffer
-                                .lock()
-                                .unwrap()
-                                .entry(*session_id)
-                                .or_insert(Vec::new())
-                                .push((
-                                    sender_peer_id.to_bytes(),
-                                    TssMessage::DKGRound2(
-                                        *session_id,
-                                        bytes.clone(),
-                                        recipient.clone(),
-                                    ),
-                                ));
+                            // M-N2: let existing buckets keep buffering once global cap is hit.
+                            let mut buf = session_manager.buffer.lock().unwrap();
+                            let session_exists_in_buf = buf.contains_key(session_id);
+                            if !session_exists_in_buf && buf.len() >= MAX_BUFFERED_SESSIONS {
+                                log::warn!("[TSS] Global buffer at capacity ({} sessions); dropping DKGRound2 for new session {}", buf.len(), session_id);
+                            } else {
+                                let entry = buf.entry(*session_id).or_insert(Vec::new());
+                                if entry.len() < MAX_BUFFERED_PER_SESSION {
+                                    entry.push((
+                                        sender_peer_id.to_bytes(),
+                                        TssMessage::DKGRound2(
+                                            *session_id,
+                                            bytes.clone(),
+                                            recipient.clone(),
+                                        ),
+                                    ));
+                                } else {
+                                    log::warn!("[TSS] Per-session buffer full for session {}; dropping DKGRound2", session_id);
+                                }
+                            }
                         },
                         _ => {
                             log::error!("[TSS] Error handling DKGRound2 for session {}: {:?}", session_id, error);
@@ -411,29 +441,51 @@ impl MessageProcessor {
             TssMessage::Announce(nonce, peer_id_bytes, public_key_data, signature, challenge_answer) => {
                 // Handle the announcement by extracting peer information and adding to peer_mapper
                 if let Ok(announcing_peer_id) = PeerId::from_bytes(&peer_id_bytes[..]) {
-                    log::debug!("[TSS] 📢 Processing signed announcement from peer: {} with public key: {:?}", 
-                        announcing_peer_id.to_base58(), 
+                    log::debug!("[TSS] 📢 Processing signed announcement from peer: {} with public key: {:?}",
+                        announcing_peer_id.to_base58(),
                         public_key_data);
-                    
-                    // Verify the inner announcement signature (this is the original sr25519 signature of the announcement)
-                    let public_key = &sr25519::Public::from_slice(&&public_key_data[..]).unwrap();
+
+                    // H-N2: the inner public_key_data MUST match the outer signed-message sender.
+                    // Otherwise an attacker can wrap a victim's pubkey in an Announce they themselves
+                    // sign outerly, poisoning the peer_mapper.
+                    if public_key_data[..] != sender_public_key[..] {
+                        log::warn!("[TSS][SEC] Announce inner pubkey != outer sender; rejecting announcement from peer {}", announcing_peer_id.to_base58());
+                        return;
+                    }
+
+                    // C-N1: `Public::from_slice` panics on wrong length; `try_into::<[u8; 64]>`
+                    // panics if signature isn't exactly 64 bytes. Both inputs come from the network
+                    // and are attacker-controlled, so we must error rather than unwrap.
+                    let public_key = match sr25519::Public::from_slice(&public_key_data[..]) {
+                        Ok(pk) => pk,
+                        Err(_) => {
+                            log::warn!("[TSS][SEC] Announce has invalid pubkey length {} (expected 32); rejecting", public_key_data.len());
+                            return;
+                        }
+                    };
+                    let sig_bytes: [u8; 64] = match signature[..].try_into() {
+                        Ok(s) => s,
+                        Err(_) => {
+                            log::warn!("[TSS][SEC] Announce has invalid signature length {} (expected 64); rejecting", signature.len());
+                            return;
+                        }
+                    };
+
+                    // Verify the inner announcement signature. The signed payload includes
+                    // `challenge_answer` (H-N1 fix: the prior production path omitted it, making
+                    // the M-6 hardening dead code).
                     let is_valid_signature = {
-                        // In test environments, skip signature verification for dummy signatures
                         #[cfg(test)]
                         {
                             if signature == &vec![0u8; 64] {
                                 true
                             } else {
-                                // sign(public_key || peer_id || nonce_le)
                                 let mut payload = Vec::new();
                                 payload.extend_from_slice(&public_key_data[..]);
                                 payload.extend_from_slice(&peer_id_bytes[..]);
                                 payload.extend_from_slice(&nonce.to_le_bytes());
-                                sr25519_verify(
-                                    &signature[..].try_into().unwrap(),
-                                    &payload,
-                                    public_key,
-                                )
+                                payload.extend_from_slice(&challenge_answer.to_le_bytes());
+                                sr25519_verify(&sp_core::sr25519::Signature::from_raw(sig_bytes), &payload, &public_key)
                             }
                         }
                         #[cfg(not(test))]
@@ -442,30 +494,29 @@ impl MessageProcessor {
                             payload.extend_from_slice(&public_key_data[..]);
                             payload.extend_from_slice(&peer_id_bytes[..]);
                             payload.extend_from_slice(&nonce.to_le_bytes());
-                            sr25519_verify(
-                                &signature[..].try_into().unwrap(),
-                                &payload,
-                                public_key,
-                            )
+                            payload.extend_from_slice(&challenge_answer.to_le_bytes());
+                            sr25519_verify(&sp_core::sr25519::Signature::from_raw(sig_bytes), &payload, &public_key)
                         }
                     };
-                    
+
                     if is_valid_signature {
-                        // Validate challenge if one existed
+                        // H-N4: compare the Announce-carried `challenge_answer` to the nonce we sent.
+                        // Reject mismatches; previous code only logged.
                         {
                             let mut outstanding = session_manager.outstanding_challenges.lock().unwrap();
                             if let Some(sent_nonce) = outstanding.remove(&peer_id_bytes.clone()) {
-                                log::debug!("[TSS] Matching announcement to prior challenge nonce {}", sent_nonce);
-                                // Track satisfaction (bounded list of 512)
+                                if *challenge_answer != sent_nonce {
+                                    log::warn!("[TSS][SEC] Announce challenge_answer ({}) != sent nonce ({}); rejecting from peer {}", challenge_answer, sent_nonce, announcing_peer_id.to_base58());
+                                    return;
+                                }
+                                log::debug!("[TSS] Challenge satisfied for peer {} (nonce {})", announcing_peer_id.to_base58(), sent_nonce);
                                 let mut satisfied = session_manager.satisfied_challenges.lock().unwrap();
                                 satisfied.push((peer_id_bytes.clone(), sent_nonce));
                                 if satisfied.len() > 512 { satisfied.remove(0); }
                             } else {
-                                log::debug!("[TSS] Announcement arrived without outstanding challenge (unsolicited or replay)");
+                                log::debug!("[TSS] Announcement arrived without outstanding challenge (unsolicited)");
                             }
                         }
-                        // If this announcement carries a challenge answer, ensure no spoof (optional future enhancement)
-                        if *challenge_answer != 0 { log::debug!("[TSS] Announcement includes challenge answer {}", challenge_answer); }
                         // Add the peer to our peer_mapper
                         let mut peer_mapper = session_manager.session_core.peer_mapper.lock().unwrap();
                         peer_mapper.add_peer(announcing_peer_id.clone(), public_key_data.clone());

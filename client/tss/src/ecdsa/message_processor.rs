@@ -489,7 +489,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         msg: String,
         ecdsa_manager: &mut MutexGuard<'_, ECDSAManager>,
     ) {
-        log::debug!("[TSS] ECDSA Keygen successful, storing keys {:?}", msg);
+        log::debug!("[TSS] ECDSA Keygen successful, storing keys (redacted)");
 
         if self.store_result_data(
             session_id,
@@ -551,7 +551,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         msg: String,
         ecdsa_manager: &mut MutexGuard<'_, ECDSAManager>,
     ) {
-        log::debug!("[TSS] ECDSA Reshare successful, storing keys {:?}", msg);
+        log::debug!("[TSS] ECDSA Reshare successful, storing keys (redacted)");
 
         if self.store_result_data(
             session_id,
@@ -665,7 +665,9 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         drop(peer_mapper);
 
         let _id = index.unwrap();
-        log::debug!("[TSS] My Id is {:?}", _id);
+        // L-N1: drop identifier to trace level — useful for debug but uniquely identifies
+        // this node inside the FROST protocol when combined with validator metadata.
+        log::trace!("[TSS] My Id resolved (trace only)");
         let _id: frost_ed25519::Identifier = _id.try_into().unwrap();
         _id
     }

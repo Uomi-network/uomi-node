@@ -157,6 +157,7 @@ std = [
 	"pallet-evm/std",
 	"pallet-staking/std",
 	"pallet-session/std",
+	"pallet-tss/std",
 	"sp-genesis-builder/std",
 	"node-primitives/std",
 	"pallet-evm-precompile-blake2/std",

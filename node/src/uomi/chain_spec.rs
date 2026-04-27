@@ -246,6 +246,7 @@ fn mainnet_genesis(
         treasury: Default::default(),
         base_fee: Default::default(),
         community_treasury: Default::default(),
+        tss: Default::default(),
     };
     serde_json::to_value(&config).expect("Could not build genesis config.")
 }

@@ -496,7 +496,8 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let (t, _, _, _) = data.unwrap();
 
         let signature_shares = signature_shares.unwrap();
-        log::info!("signature_shares = {:?}", signature_shares);
+        // M-N4: avoid dumping full share map at info level (participation fingerprint).
+        log::debug!("[TSS] signature_shares collected: session={} count={}", session_id, signature_shares.len());
 
         if signature_shares.len() >= t.into() {
             let signing_package = storage.read_signing_package(session_id);

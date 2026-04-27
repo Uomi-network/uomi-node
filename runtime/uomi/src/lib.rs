@@ -1839,10 +1839,8 @@ pub type Executive = frame_executive::Executive<
 
 // Add pallet_tss storage migrations here. Each element must implement OnRuntimeUpgrade.
 pub type Migrations = (
-    // pallet_uomi_engine::migrations::v2::Migration<Runtime>,
+    pallet_tss::migrations::MigrateAddAllocatedAt<Runtime>,
 );
-//     pallet_tss::migrations::MigrateV0ToV1<Runtime>,
-// );
 
 type EventRecord = frame_system::EventRecord<
     <Runtime as frame_system::Config>::RuntimeEvent,
@@ -2855,7 +2853,11 @@ impl_runtime_apis! {
             offence_type: u8,
             offenders: Vec<[u8; 32]>,
         ) {
-            let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, pallet_tss::TssOffenceType::from(offence_type), offenders);
+            use core::convert::TryFrom;
+            if let Ok(ty) = pallet_tss::TssOffenceType::try_from(offence_type) {
+                let _ = pallet_tss::pallet::Pallet::<Runtime>::report_tss_offence_from_client(session_id, ty, offenders);
+            }
+            // Unknown offence_type bytes are silently dropped (M-3 hardening).
         }
     }
 }

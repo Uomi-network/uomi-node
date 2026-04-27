@@ -11,8 +11,27 @@ use std::fs::{self as fs, File};
 use std::io::{self, ErrorKind, Read, Write as IoWrite};
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::OnceLock;
+
+/// M-N1: open a file for writing with owner-only permissions (0o600) on Unix.
+/// Secret TSS material flows through these helpers and must not be world-readable.
+fn create_secret_file(path: &StdPath) -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        return std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path);
+    }
+    #[cfg(not(unix))]
+    {
+        File::create(path)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum StorageType {
@@ -212,13 +231,13 @@ pub trait Storage {
         session_id: SessionId,
         identifier: &Identifier
     ) -> Result<frost_ed25519::keys::KeyPackage, frost_ed25519::Error> {
+        // M-N3: do NOT unwrap after map_err — propagate storage errors instead of panicking.
         let data = self
             .read_data(session_id, StorageType::Key, Some(&identifier.serialize()[..]))
             .map_err(|err| {
-                log::error!("Errrr {:?}", err);
+                log::error!("[TSS] get_key_package storage read failed: {:?}", err);
                 frost_ed25519::Error::DeserializationError
-            })
-            .unwrap();
+            })?;
         frost_ed25519::keys::KeyPackage::deserialize(&data)
             .map_err(|_| frost_ed25519::Error::DeserializationError)
     }
@@ -229,8 +248,10 @@ pub trait Storage {
     ) -> Result<frost_ed25519::round1::SigningNonces, frost_ed25519::Error> {
         let data = self
             .read_data(session_id, StorageType::SigningNonces, None)
-            .map_err(|_| frost_ed25519::Error::DeserializationError)
-            .unwrap();
+            .map_err(|err| {
+                log::error!("[TSS] get_signing_nonces storage read failed: {:?}", err);
+                frost_ed25519::Error::DeserializationError
+            })?;
         frost_ed25519::round1::SigningNonces::deserialize(&data)
             .map_err(|_| frost_ed25519::Error::DeserializationError)
     }
@@ -238,8 +259,10 @@ pub trait Storage {
     fn get_pubkey(&self, session_id: SessionId, identifier: &Identifier) -> Result<PublicKeyPackage, frost_ed25519::Error> {
         let data = self
             .read_data(session_id, StorageType::PubKey, Some(&identifier.serialize()[..]))
-            .map_err(|_| frost_ed25519::Error::DeserializationError)
-            .unwrap();
+            .map_err(|err| {
+                log::error!("[TSS] get_pubkey storage read failed: {:?}", err);
+                frost_ed25519::Error::DeserializationError
+            })?;
         PublicKeyPackage::deserialize(&data).map_err(|_| frost_ed25519::Error::DeserializationError)
     }
 
@@ -340,7 +363,8 @@ impl MemoryStorage {
         // Dump main data (BTreeMap<(SessionId, StorageType), Vec<u8>>)
         {
             let data_path = data_dir.join("data.bin");
-            let mut file = File::create(data_path).expect("Failed to create data file");
+            // M-N1: mode 0o600 on Unix.
+            let mut file = create_secret_file(&data_path).expect("Failed to create data file");
             
             // Write number of entries
             let count = self.data.len() as u32;
@@ -362,7 +386,8 @@ impl MemoryStorage {
     
         // Helper function to serialize a BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>
         fn serialize_nested_map(path: &Path, map: &BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>) -> io::Result<()> {
-            let mut file = File::create(path)?;
+            // M-N1: mode 0o600 on Unix (via module-level helper).
+            let mut file = crate::dkghelpers::create_secret_file(path)?;
             
             // Write number of outer entries
             let count = map.len() as u32;
@@ -832,7 +857,8 @@ impl Storage for FileStorage {
         data: &[u8],
         identifier: Option<&[u8]>,
     ) -> io::Result<()> {
-        println!("Storing data for session {} type {:?}, identifier {:?}", session_id, storage_type, identifier);
+        // L-N2: was `println!` — converted to structured log so RUST_LOG filtering applies.
+        log::debug!("[TSS] Storing data for session {} type {:?} (identifier_present={})", session_id, storage_type, identifier.is_some());
         let filename = format_filename(session_id, &storage_type, identifier);
         store_file(filename, data)
     }
@@ -972,13 +998,14 @@ pub fn set_tss_fallback_base_path(path: PathBuf) {
 pub fn store_file(filename: String, bytes: &[u8]) -> io::Result<()> {
     let mut path = get_base_directory();
     path.push(PathBuf::from(&filename));
-    
+
     // Create all parent directories if they don't exist
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    
-    let mut file = File::create(path)?;
+
+    // M-N1: TSS key/share material is long-term secret; owner-only on Unix.
+    let mut file = create_secret_file(&path)?;
     file.write_all(bytes)?;
     Ok(())
 }

@@ -18,7 +18,7 @@ const MAX_CID_SIZE: u32 = 59;
 const MAX_RPC_URL_SIZE: u32 = 256;
 const MAX_CHAIN_NAME_SIZE: u32 = 32;
 const MAX_TX_HASH_SIZE: u32 = 66; // 0x + 64 hex chars
-const MAX_PENDING_NONCES: u32 = 64; // window size for outstanding nonces per agent+chain
+const MAX_PENDING_NONCES: u32 = 256; // window size for outstanding nonces per agent+chain
 
 parameter_types! {
     pub const MaxKeySize: u32 = MAX_KEY_SIZE;
@@ -63,6 +63,8 @@ pub enum PendingStatus {
 pub struct PendingNonce {
     pub nonce: u64,
     pub status: PendingStatus,
+    /// Block number when this nonce was allocated; used to expire stale Allocated entries.
+    pub allocated_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen, Default)]
@@ -76,7 +78,7 @@ pub struct NonceState {
 }
 
 /// Chain configuration for multi-chain support
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, TypeInfo, MaxEncodedLen)]
 pub struct ChainConfig {
     pub chain_id: u32,
     pub name: BoundedVec<u8, MaxChainNameSize>,

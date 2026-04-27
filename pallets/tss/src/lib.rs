@@ -59,7 +59,7 @@ pub use utils::*;
 // Storage version for pallet_tss. Start at 0; first real migration will bump to 1.
 // Do NOT change this constant directly when writing a migration; instead add a new migration
 // module (e.g. migrations::v1) and bump the constant there as part of that migration.
-pub const STORAGE_VERSION: frame_support::traits::StorageVersion = frame_support::traits::StorageVersion::new(0);
+pub const STORAGE_VERSION: frame_support::traits::StorageVersion = frame_support::traits::StorageVersion::new(1);
 
 // Migrations module following Polkadot SDK best practices (VersionedMigration + UncheckedOnRuntimeUpgrade).
 // Each version hop lives in its own submodule (v1, v2, ...). Add them under migrations/ if they grow large.
@@ -140,18 +140,16 @@ pub enum TssOffenceType {
 }
 
 // Helper to decode u8 into TssOffenceType
-impl From<u8> for TssOffenceType {
-    fn from(value: u8) -> Self {
-    match value {
-        0 => TssOffenceType::DkgNonParticipation,
-        1 => TssOffenceType::SigningNonParticipation,
-        2 => TssOffenceType::InvalidCryptographicData,
-        3 => TssOffenceType::UnresponsiveBehavior,
-        _ => {
-            log::warn!("[TSS] Unknown offence type value: {}, treating as UnresponsiveBehavior", value);
-            TssOffenceType::UnresponsiveBehavior
+impl sp_std::convert::TryFrom<u8> for TssOffenceType {
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, ()> {
+        match value {
+            0 => Ok(TssOffenceType::DkgNonParticipation),
+            1 => Ok(TssOffenceType::SigningNonParticipation),
+            2 => Ok(TssOffenceType::InvalidCryptographicData),
+            3 => Ok(TssOffenceType::UnresponsiveBehavior),
+            _ => Err(()),
         }
-    }
     }
 }
 // Helper to encode TssOffenceType into u8
@@ -334,6 +332,13 @@ pub mod pallet {
     pub type RequestRetryCount<T: Config> =
     StorageMap<_, Blake2_128Concat, U256, u8, ValueQuery>;
 
+    /// L-N2: DEPRECATED. This storage slot was never written in production (no extrinsic
+    /// or internal helper assigns to it) and reading always returns `PublicKey::default()`.
+    /// Kept only to preserve the pallet storage schema until a dedicated drop-key migration
+    /// lands. New code MUST NOT read or write `TSSKey` — use `AggregatedPublicKeys` keyed
+    /// by the relevant DKG session id instead. A future migration should clear and remove
+    /// this storage item; bumping the struct schema now would require another migration
+    /// which we defer to reduce upgrade surface in this security patch release.
     #[pallet::storage]
     #[pallet::getter(fn get_tss_key)]
     pub type TSSKey<T: Config> = StorageValue<_, PublicKey, ValueQuery>;
@@ -492,7 +497,19 @@ pub mod pallet {
         OptionQuery
     >;
 
-    
+    /// On-chain overrides for chain RPC configuration. When present, this supersedes the
+    /// hardcoded defaults in `MultiChainRpcClient::get_chain_config` (L-3 fix).
+    /// Operators update this via the `set_chain_config` / `remove_chain_config` extrinsics (Root origin).
+    #[pallet::storage]
+    #[pallet::getter(fn chain_config_override)]
+    pub type ChainConfigOverrides<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat, u32,
+        crate::types::ChainConfig,
+        OptionQuery
+    >;
+
+
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -522,6 +539,7 @@ pub mod pallet {
     MultiChainTransactionConfirmed(u32, Vec<u8>), // Chain ID, Transaction hash
     MultiChainTransactionFailed(u32, Vec<u8>),    // Chain ID, Transaction hash
     ChainConfigurationUpdated(u32),               // Chain ID updated
+    ChainConfigurationRemoved(u32),               // Chain ID override removed (reverted to default)
     /// Transaction request submitted to FSA
     TransactionRequestSubmitted(NftId, u32),      // NFT ID, Chain ID
     // Nonce tracking events
@@ -570,6 +588,32 @@ pub mod pallet {
     PendingStorageFull,
     /// Called a deprecated / removed extrinsic retained only for decoding legacy transactions
     DeprecatedExtrinsic,
+    }
+
+    #[pallet::genesis_config]
+    #[derive(frame_support::DefaultNoBound)]
+    pub struct GenesisConfig<T: Config> {
+        pub initial_validators: Vec<T::AccountId>,
+    }
+
+    #[pallet::genesis_build]
+    impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+        fn build(&self) {
+            if self.initial_validators.is_empty() {
+                return;
+            }
+            let bounded: BoundedVec<T::AccountId, T::MaxNumberOfShares> =
+                BoundedVec::try_from(self.initial_validators.clone())
+                    .expect("initial_validators exceeds MaxNumberOfShares");
+            ActiveValidators::<T>::put(bounded);
+            let mut next_id = 1u32;
+            for v in &self.initial_validators {
+                ValidatorIds::<T>::insert(v, next_id);
+                IdToValidator::<T>::insert(next_id, v);
+                next_id = next_id.saturating_add(1);
+            }
+            NextValidatorId::<T>::put(next_id);
+        }
     }
 
     #[pallet::call]
@@ -658,6 +702,24 @@ pub mod pallet {
 
         let new_validators = payload.validators;
 
+        log::info!("[TSS] update_validators NATIVE called with {} validators", new_validators.len());
+
+        // M-N4: cross-reference pallet_session's canonical validator set. Do NOT trust
+        // attacker-supplied account lists; `assign_validator_id` would otherwise permanently
+        // register arbitrary accounts into `ValidatorIds`/`IdToValidator`.
+        #[cfg(not(test))]
+        {
+            let canonical = pallet_session::Pallet::<T>::validators();
+            log::info!("[TSS] update_validators M-N4: canonical={}, payload={}", canonical.len(), new_validators.len());
+            for v in new_validators.iter() {
+                if !canonical.contains(v) {
+                    log::error!("[TSS] update_validators M-N4 FAIL: validator not in canonical set");
+                    return Err(Error::<T>::UnauthorizedParticipation.into());
+                }
+            }
+            log::info!("[TSS] update_validators M-N4 passed");
+        }
+
         // Assign IDs to any new validators
         for validator in new_validators.clone() {
             Self::assign_validator_id(validator)?;
@@ -668,6 +730,7 @@ pub mod pallet {
                 .map_err(|_| Error::<T>::InvalidParticipantsCount)?
         );
 
+        log::info!("[TSS] update_validators SUCCESS: ActiveValidators set to {} entries", new_validators.len());
         Ok(())
     }
 
@@ -765,9 +828,21 @@ pub mod pallet {
     pub fn create_signing_session_unsigned(
         origin: OriginFor<T>,
         payload: CreateSigningSessionPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be a currently-active validator.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
 
         // Convert U256 to NftId (BoundedVec<u8, MaxCidSize>)
         let nft_id_bytes: Vec<u8> = payload.nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
@@ -793,9 +868,24 @@ pub mod pallet {
     pub fn update_last_opoc_request_id_unsigned(
         origin: OriginFor<T>,
         payload: UpdateLastOpocRequestIdPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // Enforce monotonicity: reject stale or equal request IDs to prevent replay/rollback attacks
+        let current = LastOpocRequestId::<T>::get();
+        ensure!(payload.last_request_id > current, Error::<T>::InvalidSessionState);
+
+        // Only active validators may advance the opoc pointer
+        let caller = payload.public().into_account();
+        let active = ActiveValidators::<T>::get();
+        ensure!(active.contains(&caller), Error::<T>::UnauthorizedParticipation);
+
         LastOpocRequestId::<T>::put(payload.last_request_id);
         Ok(())
     }
@@ -819,6 +909,13 @@ pub mod pallet {
         log::debug!("[TSS] Call::submit_dkg_result");
 
         let who = payload.public().into_account();
+
+        // H-N1: caller must currently be an active validator, in addition to the
+        // session.participants check below. Historical participants whose keys still
+        // exist must not retain power to finalize current DKG rounds.
+        #[cfg(not(test))]
+        ensure!(ActiveValidators::<T>::get().contains(&who), Error::<T>::UnauthorizedParticipation);
+
         let session_id = payload.session_id;
         let aggregated_key = payload.public_key;
 
@@ -850,13 +947,10 @@ pub mod pallet {
         let threshold = T::MinimumValidatorThreshold::get(); // percentage of validators needed to sign
 
         // Check if the number of votes meets the threshold
-        let mut votes = 0;
-
-    for (_validator_id, key) in ProposedPublicKeys::<T>::iter_prefix(nft_id.clone()) {
-            if key == aggregated_key {
-                votes += 1;
-            }
-        }
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
+        let proposed: sp_std::collections::btree_map::BTreeMap<_, _> =
+            ProposedPublicKeys::<T>::iter_prefix(nft_id.clone()).collect();
+        let votes = proposed.values().filter(|k| **k == aggregated_key).count() as u32;
 
         let total_validators = session.participants.len() as u32;
         let required_votes = ((total_validators * threshold) + 99) / 100; // ceiling division for strict majority
@@ -901,11 +995,22 @@ pub mod pallet {
     pub fn submit_signature_result(
         origin: OriginFor<T>,
         payload: crate::payloads::SubmitSignatureResultPayload<T>,
-        _signature: T::Signature,
+        ext_signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(ext_signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
         let who = payload.public().into_account();
+
+        // H-N1: caller must currently be an active validator, in addition to the
+        // dkg_session.participants check below.
+        #[cfg(not(test))]
+        ensure!(ActiveValidators::<T>::get().contains(&who), Error::<T>::UnauthorizedParticipation);
+
         let session_id = payload.session_id;
         let signature = payload.signature.clone();
 
@@ -926,13 +1031,15 @@ pub mod pallet {
         ProposedSignatures::<T>::insert(session_id, validator_id, signature.clone());
 
         // Count votes for this signature
+        // IMPORTANT: Collect into BTreeMap for deterministic iteration order.
         let threshold_pct = T::MinimumValidatorThreshold::get();
-        let mut votes = 0u32;
-        for (_validator_id, sig) in ProposedSignatures::<T>::iter_prefix(session_id) {
-            if sig == signature { votes += 1; }
-        }
+        let all_sigs: sp_std::collections::btree_map::BTreeMap<_, _> =
+            ProposedSignatures::<T>::iter_prefix(session_id).collect();
+        let votes = all_sigs.values().filter(|s| **s == signature).count() as u32;
         let total = dkg_session.participants.len() as u32;
-        let required = (total * threshold_pct) / 100;
+        // H-N2: ceiling division matches the strict-majority semantics used by
+        // submit_dkg_result. Floor division previously accepted 66.67% as "≥67%".
+        let required = ((total * threshold_pct) + 99) / 100;
 
         if votes >= required {
             // Finalize
@@ -985,44 +1092,21 @@ pub mod pallet {
         Ok(())
     }
 
+    /// Deprecated. Retained only to preserve call_index 4.
+    ///
+    /// M-N1: previous implementation used `sp_core::ecdsa::Signature::verify` which internally
+    /// blake2-hashes the message, but TSS signatures are produced over keccak256 preimages.
+    /// Verification therefore always failed, making this a dead-end DoS vector. Signing vote
+    /// flow now lives in `submit_signature_result` (call_index 15). This stub rejects unconditionally.
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::submit_aggregated_signature())]
     #[pallet::call_index(4)]
     pub fn submit_aggregated_signature(
         origin: OriginFor<T>,
-        session_id: SessionId,
-        signature: Signature,
+        _session_id: SessionId,
+        _signature: Signature,
     ) -> DispatchResult {
-        let _who = ensure_signed(origin)?; // Could add participant check
-
-        let mut session =
-            SigningSessions::<T>::get(session_id).ok_or(Error::<T>::SigningSessionNotFound)?;
-
-        ensure!(
-            session.state == SessionState::SigningInProgress,
-            Error::<T>::InvalidSessionState
-        );
-
-        // Verify signature against stored message and TSS key
-        let public_key = TSSKey::<T>::get();
-        ensure!(
-            verify_signature::<T>(&public_key, &session.message, &signature),
-            Error::<T>::InvalidSignature
-        );
-
-        session.aggregated_sig = Some(signature.clone());
-        session.state = SessionState::SigningComplete;
-    let req_id_for_cleanup = session.request_id;
-    SigningSessions::<T>::insert(session_id, session.clone());
-    RequestRetryCount::<T>::remove(req_id_for_cleanup);
-
-        // Signature is already stored in session.aggregated_sig for FSA processing
-        log::info!("Completed signature for session {} ready for transaction submission", session_id);
-
-    // GC: clear votes for this signing session
-    let _ = ProposedSignatures::<T>::clear_prefix(session_id, u32::MAX, None);
-
-        Self::deposit_event(Event::SigningCompleted(session_id, signature));
-        Ok(())
+        let _ = ensure_signed(origin)?;
+        Err(Error::<T>::InvalidSessionState.into())
     }
 
     #[pallet::weight(<T as pallet::Config>::TssWeightInfo::create_reshare_dkg_session())]
@@ -1044,9 +1128,22 @@ pub mod pallet {
     pub fn create_reshare_dkg_session_unsigned(
         origin: OriginFor<T>,
         payload: crate::CreateReshareDkgSessionPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be an active validator.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
+
         Self::internal_create_reshare_dkg_session(
             payload.nft_id.clone(),
             payload.threshold,
@@ -1059,9 +1156,34 @@ pub mod pallet {
     pub fn complete_reshare_session_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::CompleteResharePayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be an active validator.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
+
+        // H-N3: only the finalization of an in-progress reshare may be signaled here.
+        // Without this, any tss-keystore holder could forge DKGComplete on any session.
+        let session = DkgSessions::<T>::get(payload.session_id)
+            .ok_or(Error::<T>::DkgSessionNotFound)?;
+        ensure!(
+            matches!(session.state, SessionState::DKGInProgress | SessionState::DKGCreated),
+            Error::<T>::InvalidSessionState
+        );
+        // A reshare session is the one that carries `old_participants` — sessions without
+        // that marker were created via `create_dkg_session` and must NOT be completed here.
+        ensure!(session.old_participants.is_some(), Error::<T>::InvalidSessionState);
+
         // Only call internal helper with provided session id
         Self::complete_reshare_session(payload.session_id)
     }
@@ -1071,11 +1193,22 @@ pub mod pallet {
     pub fn report_participant(
         origin: OriginFor<T>,
         payload: ReportParticipantsPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         let _ = ensure_none(origin)?;
 
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
         let who = payload.public().into_account();
+
+        // H-N1: only active validators may lodge participant-misbehavior reports. The
+        // session.participants check elsewhere is too permissive if a historical
+        // participant's tss keystore is compromised.
+        #[cfg(not(test))]
+        ensure!(ActiveValidators::<T>::get().contains(&who), Error::<T>::UnauthorizedParticipation);
 
         // Check if the session exists
         let _session =
@@ -1116,12 +1249,22 @@ pub mod pallet {
     pub fn report_tss_offence(
         origin: OriginFor<T>,
         payload: ReportTssOffencePayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
         let who = payload.public().into_account();
-        
+
+        // H-N1: caller must currently be an active validator, in addition to the
+        // session.participants check below.
+        #[cfg(not(test))]
+        ensure!(ActiveValidators::<T>::get().contains(&who), Error::<T>::UnauthorizedParticipation);
+
         // Verify the session exists
         let session = DkgSessions::<T>::get(payload.session_id).ok_or(Error::<T>::DkgSessionNotFound)?;
         
@@ -1285,9 +1428,23 @@ pub mod pallet {
     pub fn submit_fsa_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::SubmitFsaTransactionPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be an active validator. Without this, any tss-keystore
+        // holder can remove any FSA request by id and fake tx-submitted events.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
+
         let chain_id = payload.chain_id;
         let current_block = frame_system::Pallet::<T>::block_number();
         let max_wait_blocks = 300u32; // keep consistent with previous logic
@@ -1304,9 +1461,22 @@ pub mod pallet {
     pub fn timeout_pending_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::TimeoutPendingTransactionPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be an active validator.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
+
         // Ensure still pending
         if PendingTransactions::<T>::contains_key(payload.chain_id, &payload.tx_hash) {
             PendingTransactions::<T>::remove(payload.chain_id, &payload.tx_hash);
@@ -1322,9 +1492,22 @@ pub mod pallet {
     pub fn fail_multi_chain_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::FailMultiChainTransactionPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be an active validator.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
+
         // Ensure still pending
         let request_id = payload.request_id;
 
@@ -1343,9 +1526,22 @@ pub mod pallet {
     pub fn create_gap_filler_signing_session_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::GapFillerSigningSessionPayload<T>,
-        _signature: T::Signature,
+        signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
+
+        #[cfg(not(test))]
+        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
+            return Err(Error::<T>::InvalidSignature.into());
+        }
+
+        // H-N1: caller must be an active validator.
+        #[cfg(not(test))]
+        {
+            let caller = payload.public().into_account();
+            ensure!(ActiveValidators::<T>::get().contains(&caller), Error::<T>::UnauthorizedParticipation);
+        }
+
         // Convert nft_id U256 -> NftId
         let nft_id_bytes: Vec<u8> = payload.nft_id.0.iter().flat_map(|&x| x.to_le_bytes()).collect();
         let nft_id = BoundedVec::try_from(nft_id_bytes).map_err(|_| Error::<T>::InvalidTransactionData)?;
@@ -1387,6 +1583,44 @@ pub mod pallet {
     }
     // (Removed public nonce extrinsics; nonce flow handled internally via unsigned offchain submissions)
 
+    /// Root-only: install or update an on-chain override for a chain's RPC configuration.
+    /// This supersedes the hardcoded defaults baked into `MultiChainRpcClient::get_chain_config`.
+    /// (L-3 fix — operators can point validators at private/trusted RPC endpoints instead of
+    /// public ones like `eth.llamarpc.com`, and update URLs without a runtime upgrade.)
+    #[pallet::weight(10_000)]
+    #[pallet::call_index(23)]
+    pub fn set_chain_config(
+        origin: OriginFor<T>,
+        chain_id: u32,
+        name: BoundedVec<u8, crate::types::MaxChainNameSize>,
+        rpc_url: BoundedVec<u8, crate::types::MaxRpcUrlSize>,
+        is_testnet: bool,
+    ) -> DispatchResult {
+        ensure_root(origin)?;
+        let config = crate::types::ChainConfig { chain_id, name, rpc_url, is_testnet };
+        // H-N4: validate format (chain_id != 0, name non-empty, rpc_url starts with
+        // http(s)://). Even Root must not install obviously malformed overrides that
+        // would cause offchain workers to burn CPU on failing RPC calls.
+        crate::multichain::MultiChainRpcClient::validate_chain_config(&config)
+            .map_err(|_| Error::<T>::InvalidChainConfig)?;
+        ChainConfigOverrides::<T>::insert(chain_id, config);
+        Self::deposit_event(Event::ChainConfigurationUpdated(chain_id));
+        Ok(())
+    }
+
+    /// Root-only: remove a chain config override, restoring the hardcoded default behavior.
+    #[pallet::weight(10_000)]
+    #[pallet::call_index(24)]
+    pub fn remove_chain_config(
+        origin: OriginFor<T>,
+        chain_id: u32,
+    ) -> DispatchResult {
+        ensure_root(origin)?;
+        ChainConfigOverrides::<T>::remove(chain_id);
+        Self::deposit_event(Event::ChainConfigurationRemoved(chain_id));
+        Ok(())
+    }
+
     }
 
 
@@ -1417,71 +1651,71 @@ pub mod pallet {
             // Handle inherent extrinsics
             Call::update_validators { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::report_participant { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::report_tss_offence { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::create_signing_session_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::submit_dkg_result { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::submit_signature_result { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::update_last_opoc_request_id_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::submit_fsa_transaction_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
-                    .longevity(64)
+                    .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
             }
             Call::create_reshare_dkg_session_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX)
+                    .priority(100)
                     .and_provides(call.encode())
                     .longevity(32)
                     .propagate(true)
@@ -1489,7 +1723,7 @@ pub mod pallet {
             }
             Call::create_gap_filler_signing_session_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX / 2) // lower than normal sessions
+                    .priority(90) // lower than normal sessions
                     .and_provides(call.encode())
                     .longevity(32)
                     .propagate(true)
@@ -1497,7 +1731,7 @@ pub mod pallet {
             }
             Call::timeout_pending_transaction_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX / 4)
+                    .priority(80)
                     .and_provides(call.encode())
                     .longevity(16)
                     .propagate(true)
@@ -1505,7 +1739,7 @@ pub mod pallet {
             }
             Call::fail_multi_chain_transaction_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX / 4)
+                    .priority(80)
                     .and_provides(call.encode())
                     .longevity(16)
                     .propagate(true)
@@ -1514,7 +1748,7 @@ pub mod pallet {
 
             Call::complete_reshare_session_unsigned { .. } => {
                 return ValidTransaction::with_tag_prefix("TssPallet")
-                    .priority(TransactionPriority::MAX / 4)
+                    .priority(80)
                     .and_provides(call.encode())
                     .longevity(16)
                     .propagate(true)
@@ -1731,6 +1965,33 @@ pub mod pallet {
 
     // FSA processing moved to offchain worker (unsigned extrinsics); no on-chain direct call
 
+    // Expire stale Allocated nonces: if a nonce has been Allocated for > 300 blocks with no tx hash,
+    // remove it so the window doesn't permanently block further allocation (M-2 fix).
+    {
+        const NONCE_EXPIRY_BLOCKS: u64 = 300;
+        let current_block_u64: u64 = n.try_into().unwrap_or(0u64);
+        // Collect keys first to avoid mutating during iteration
+        let nonce_keys: sp_std::vec::Vec<(NftId, u32)> = NonceStates::<T>::iter_keys().collect();
+        for (nft_id, chain_id) in nonce_keys {
+            NonceStates::<T>::mutate(&nft_id, chain_id, |state| {
+                state.pending.retain(|p| {
+                    if matches!(p.status, crate::types::PendingStatus::Allocated) {
+                        current_block_u64.saturating_sub(p.allocated_at) < NONCE_EXPIRY_BLOCKS
+                    } else {
+                        true
+                    }
+                });
+                // Recalculate last_allocated after pruning
+                if let Some(max_nonce) = state.pending.iter().map(|p| p.nonce).max() {
+                    if state.last_allocated.map(|v| max_nonce < v).unwrap_or(false) {
+                        state.last_allocated = Some(max_nonce);
+                    }
+                } else if state.pending.is_empty() && state.last_accepted.is_none() {
+                    state.last_allocated = None;
+                }
+            });
+        }
+    }
 
         // Report count reset
         let previous_era = Pallet::<T>::previous_era();
@@ -1832,6 +2093,7 @@ impl<T: Config> Pallet<T> {
     // ------------------- Internal Nonce Helpers -------------------
     fn allocate_next_nonce_internal(nft_id: &NftId, chain_id: u32) -> Result<u64, Error<T>> {
         ensure!(Self::is_chain_supported(chain_id), Error::<T>::UnsupportedChain);
+        let current_block: u64 = frame_system::Pallet::<T>::block_number().try_into().unwrap_or(0u64);
         let mut result: Option<u64> = None;
         NonceStates::<T>::mutate(nft_id, chain_id, |state| {
             let next = state.last_allocated.map(|v| v + 1).unwrap_or(0);
@@ -1843,7 +2105,11 @@ impl<T: Config> Pallet<T> {
             let max_window = <crate::types::MaxPendingNonces as Get<u32>>::get() as u64;
             if window >= max_window { return; }
             if !state.pending.iter().any(|p| p.nonce == next) {
-                let entry = crate::types::PendingNonce { nonce: next, status: crate::types::PendingStatus::Allocated };
+                let entry = crate::types::PendingNonce {
+                    nonce: next,
+                    status: crate::types::PendingStatus::Allocated,
+                    allocated_at: current_block,
+                };
                 if state.pending.try_push(entry).is_err() { return; }
             }
             state.last_allocated = Some(next);
@@ -1869,7 +2135,7 @@ impl<T: Config> Pallet<T> {
             let from_addr = crate::fsa::derive_from_address::<T>(nft_id.clone());
             let addr_hex = match from_addr { Some(s) => s, None => continue };
             // Fetch chain config + chain nonce
-            let chain_cfg = if let Ok(cfg) = MultiChainRpcClient::get_chain_config(chain_id) { cfg } else { continue; };
+            let chain_cfg = if let Ok(cfg) = MultiChainRpcClient::get_chain_config_for::<T>(chain_id) { cfg } else { continue; };
             let chain_nonce = match MultiChainRpcClient::get_account_nonce(&chain_cfg, &addr_hex) { Ok(n) => n, Err(_) => continue };
             // If chain nonce already ahead or equal, no gap (internal last_alloc should never be < chain_nonce)
             if chain_nonce >= last_alloc + 1 { continue; }
@@ -1960,10 +2226,10 @@ impl<T: Config> Pallet<T> {
         signed_transaction: &[u8],
     ) -> Result<crate::types::RpcResponse, &'static str> {
         use crate::fsa::submit_transaction_to_chain;
-        
+
         log::info!("Submitting multi-chain transaction to chain ID: {}", chain_id);
-        
-        submit_transaction_to_chain(chain_id, signed_transaction)
+
+        submit_transaction_to_chain::<T>(chain_id, signed_transaction)
             .map_err(|e| {
                 log::error!("Failed to submit transaction: {:?}", e);
                 "Failed to submit multi-chain transaction"
@@ -1976,10 +2242,10 @@ impl<T: Config> Pallet<T> {
         tx_hash: &str,
     ) -> Result<crate::types::RpcResponse, &'static str> {
         use crate::fsa::check_transaction_status;
-        
+
         log::info!("Checking transaction status for hash: {} on chain ID: {}", tx_hash, chain_id);
-        
-        check_transaction_status(chain_id, tx_hash)
+
+        check_transaction_status::<T>(chain_id, tx_hash)
             .map_err(|e| {
                 log::error!("Failed to check transaction status: {:?}", e);
                 "Failed to check transaction status"
@@ -2011,21 +2277,29 @@ impl<T: Config> Pallet<T> {
         log::debug!("[TSS] Reporting offence from client: {:?} for session {} with {} offenders", 
             offence_type, session_id, offenders.len());
 
-        let offenders_count = offenders.len() as u32;
-
-        // Convert Vec<[u8; 32]> to Vec<T::AccountId>
+        // M-N3: drop offenders whose bytes don't decode as this runtime's AccountId rather
+        // than silently replacing them with the zero account (which then gets recorded as a
+        // legitimate offender and appears as the synthetic reporter below).
         let account_offenders: Vec<T::AccountId> = offenders
             .into_iter()
-            .map(|bytes| {
+            .filter_map(|bytes| {
                 use sp_core::crypto::AccountId32;
-                // Convert [u8; 32] to AccountId32 and then to T::AccountId
                 let account_id32 = AccountId32::from(bytes);
-                T::AccountId::decode(&mut &account_id32.encode()[..]).unwrap_or_else(|_| {
-                    // If decoding fails, create a placeholder AccountId
-                    T::AccountId::decode(&mut &[0u8; 32][..]).unwrap()
-                })
+                match T::AccountId::decode(&mut &account_id32.encode()[..]) {
+                    Ok(acc) => Some(acc),
+                    Err(e) => {
+                        log::warn!(
+                            "[TSS] Skipping offender with undecodable AccountId for session {}: {:?}",
+                            session_id, e
+                        );
+                        None
+                    }
+                }
             })
             .collect();
+
+        let offenders_count = account_offenders.len() as u32;
+        ensure!(offenders_count > 0, Error::<T>::InvalidParticipantsCount);
 
         // Convert Vec to BoundedVec
         let bounded_offenders: BoundedVec<T::AccountId, T::MaxNumberOfShares> = account_offenders
@@ -2051,8 +2325,8 @@ impl<T: Config> Pallet<T> {
     /// Validate if a chain ID is supported
     pub fn is_chain_supported(chain_id: u32) -> bool {
         use crate::multichain::MultiChainRpcClient;
-        
-        MultiChainRpcClient::get_chain_config(chain_id).is_ok()
+
+        MultiChainRpcClient::get_chain_config_for::<T>(chain_id).is_ok()
     }
 
     /// Build a transaction for a specific chain
@@ -2314,7 +2588,7 @@ impl<T: Config> Pallet<T> {
                     out[2 + i*2 + 1] = HEX[(b & 0x0f) as usize];
                 }
                 // Avoid requiring ToString trait in no_std by using From<&str> for String
-                sp_std::borrow::Cow::Owned(unsafe { core::str::from_utf8_unchecked(&out) }.into())
+                sp_std::borrow::Cow::Owned(core::str::from_utf8(&out).expect("ascii hex is valid utf8").into())
             } else {
                 // Previously we re-hex-encoded ASCII here causing double encoding; log and try to use as-is.
                 if tx_hash_bytes.starts_with(b"0x") {
@@ -2444,7 +2718,7 @@ impl<T: Config> Pallet<T> {
         };
 
         // Submit via FSA module using finalized raw tx
-        match crate::fsa::submit_transaction_to_chain(chain_id, &signed_transaction) {
+        match crate::fsa::submit_transaction_to_chain::<T>(chain_id, &signed_transaction) {
             Ok(response) => {
                 match response.tx_hash {
                     Some(hash) => {
@@ -2488,8 +2762,8 @@ impl<T: Config> Pallet<T> {
         chain_id: u32,
         tx_hash: &str,
     ) -> Option<crate::types::TransactionStatus> {
-        // Get chain configuration
-        let chain_config = match crate::multichain::MultiChainRpcClient::get_chain_config(chain_id) {
+        // Get chain configuration (prefers on-chain override when present, L-3 fix)
+        let chain_config = match crate::multichain::MultiChainRpcClient::get_chain_config_for::<T>(chain_id) {
             Ok(config) => config,
             Err(e) => {
                 log::error!("[OFFCHAIN] Failed to get chain config for chain {}: {}", chain_id, e);
@@ -2515,7 +2789,7 @@ impl<T: Config> Pallet<T> {
         chain_id: u32,
         tx_hash: &str,
     ) -> Option<crate::types::TransactionStatus> {
-        match crate::fsa::check_transaction_status(chain_id, tx_hash) {
+        match crate::fsa::check_transaction_status::<T>(chain_id, tx_hash) {
             Ok(response) => Some(response.status),
             Err(e) => {
                 log::error!("[FSA] Failed to check transaction status: {:?}", e);

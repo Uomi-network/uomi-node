@@ -177,10 +177,14 @@ impl<T: Config> crate::pallet::Pallet<T> {
 /// 4. keccak256(pubkey[0..64]) and take last 20 bytes -> H160.
 /// 5. Return hex string 0x + lowercase.
 pub(crate) fn derive_from_address<T: Config>(nft_id: crate::types::NftId) -> Option<String> {
-    // Find session id with this nft_id (linear scan; could be optimized with reverse index later)
-    let mut found_session: Option<crate::types::SessionId> = None;
-    for (sid, sess) in DkgSessions::<T>::iter() { if sess.nft_id == nft_id { found_session = Some(sid); break; } }
-    let session_id = found_session?;
+    // Find the most recent completed DKG session for this nft_id.
+    // Collect into BTreeMap for deterministic order, then take highest session_id with DKGComplete.
+    let sessions: BTreeMap<crate::types::SessionId, _> = DkgSessions::<T>::iter().collect();
+    let session_id = sessions
+        .iter()
+        .filter(|(_, s)| s.nft_id == nft_id && s.state == crate::pallet::SessionState::DKGComplete)
+        .max_by_key(|(id, _)| *id)
+        .map(|(id, _)| *id)?;
     let pubkey = AggregatedPublicKeys::<T>::get(session_id)?; // BoundedVec<u8>
     let key_bytes: Vec<u8> = pubkey.to_vec();
     let slice = key_bytes.as_slice();
@@ -205,18 +209,29 @@ mod tests {
     use sp_io::TestExternalities;
     use crate::pallet::{DKGSession, SessionState};
 
-    // Helper: decode hex (0x...) -> Vec<u8>
-    fn hex_to_bytes(s: &str) -> Vec<u8> {
-        let clean = s.strip_prefix("0x").unwrap_or(s);
-        let mut out = Vec::with_capacity(clean.len()/2);
+    // Helper: decode hex (0x...) -> Vec<u8>, returning Err on malformed input.
+    // Consolidated with the production `decode_hex` behavior (no panics — L-2 fix).
+    fn hex_to_bytes(s: &str) -> Result<Vec<u8>, &'static str> {
+        let clean = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+        if clean.len() % 2 != 0 { return Err("odd-length hex string"); }
         let bytes = clean.as_bytes();
-        let mut i = 0; 
-        while i < bytes.len() { 
-            let h = |c: u8| -> u8 { match c { b'0'..=b'9' => c-b'0', b'a'..=b'f' => 10 + c - b'a', b'A'..=b'F' => 10 + c - b'A', _ => panic!("bad hex") } }; 
-            out.push((h(bytes[i])<<4) | h(bytes[i+1]));
-            i += 2; 
+        let hex_val = |c: u8| -> Option<u8> {
+            match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(10 + c - b'a'),
+                b'A'..=b'F' => Some(10 + c - b'A'),
+                _ => None,
+            }
+        };
+        let mut out = Vec::with_capacity(clean.len() / 2);
+        let mut i = 0;
+        while i < bytes.len() {
+            let hi = hex_val(bytes[i]).ok_or("invalid hex character")?;
+            let lo = hex_val(bytes[i + 1]).ok_or("invalid hex character")?;
+            out.push((hi << 4) | lo);
+            i += 2;
         }
-        out
+        Ok(out)
     }
 
     #[test]
@@ -228,7 +243,7 @@ mod tests {
             let session_id: u64 = 1;
             let nft_id: NftId = BoundedVec::try_from(vec![1u8]).unwrap();
             let pubkey_hex = "0x1c3f03c972f0c4d8f94e6e4f63c2abb5e40a24cbdf82b2234f3ffbee8d9bb7a2228121a5c3bb15c2e39ed2fca0e1a0618c08a510d999124e731f41d1647364ce"; // 64-byte uncompressed (no 0x04)
-            let pubkey_bytes = hex_to_bytes(pubkey_hex);
+            let pubkey_bytes = hex_to_bytes(pubkey_hex).expect("valid hex");
             assert_eq!(pubkey_bytes.len(), 64, "public key must be 64 bytes");
             let pubkey: PublicKey = BoundedVec::try_from(pubkey_bytes.clone()).expect("bounded");
 
@@ -286,7 +301,7 @@ fn parse_num_u64(label: &str, v: &str) -> Option<u64> {
 
 fn build_or_passthrough_with_nonce<T: Config>(action: &Action, nft_id: &U256) -> Result<Option<(u32, Vec<u8>)>, ProcessingError> {
     // Always validate chain config first
-    let chain_config = MultiChainRpcClient::get_chain_config(action.chain_id)
+    let chain_config = MultiChainRpcClient::get_chain_config_for::<T>(action.chain_id)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
     MultiChainRpcClient::validate_chain_config(&chain_config)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
@@ -310,32 +325,38 @@ fn build_or_passthrough_with_nonce<T: Config>(action: &Action, nft_id: &U256) ->
         }
         Ok(out)
     }
-    let data_bytes = match decode_hex(&action.data) { Ok(v) => v, Err(_) => { log::warn!("Invalid hex in action.data '{}', using empty bytes", action.data); Vec::new() } };
+    let data_bytes = match decode_hex(&action.data) {
+        Ok(v) => v,
+        Err(_) => {
+            log::warn!("[FSA] Invalid hex in action.data '{}', skipping action to prevent signing malformed data", action.data);
+            return Ok(None);
+        }
+    };
 
     // If we have structured fields, attempt to construct a preimage; otherwise fallback to raw data
     if let Some(ref to) = action.to {
         use crate::multichain::TransactionBuilder;
         // Helper wrappers so unit tests (non-offchain context) don't invoke offchain RPC APIs and panic.
         #[cfg(test)]
-        fn try_fetch_gas_price(_chain_id: u32) -> Option<u64> { None }
+        fn try_fetch_gas_price<C: Config>(_chain_id: u32) -> Option<u64> { None }
         #[cfg(not(test))]
-        fn try_fetch_gas_price(chain_id: u32) -> Option<u64> {
-            MultiChainRpcClient::get_chain_config(chain_id).ok()
+        fn try_fetch_gas_price<C: Config>(chain_id: u32) -> Option<u64> {
+            MultiChainRpcClient::get_chain_config_for::<C>(chain_id).ok()
                 .and_then(|cfg| MultiChainRpcClient::get_gas_price(&cfg).ok())
         }
         #[cfg(test)]
-        fn try_estimate_gas(_chain_id: u32, _from: &str, _to: &str, _value: Option<u64>, _data: &[u8]) -> Option<u64> { None }
+        fn try_estimate_gas<C: Config>(_chain_id: u32, _from: &str, _to: &str, _value: Option<u64>, _data: &[u8]) -> Option<u64> { None }
         #[cfg(not(test))]
-        fn try_estimate_gas(chain_id: u32, from: &str, to: &str, value: Option<u64>, data: &[u8]) -> Option<u64> {
-            MultiChainRpcClient::get_chain_config(chain_id).ok()
+        fn try_estimate_gas<C: Config>(chain_id: u32, from: &str, to: &str, value: Option<u64>, data: &[u8]) -> Option<u64> {
+            MultiChainRpcClient::get_chain_config_for::<C>(chain_id).ok()
                 .and_then(|cfg| MultiChainRpcClient::estimate_gas(&cfg, from, to, value, Some(data)).ok())
         }
         // RPC nonce fetch retained only as fallback when internal allocation fails and no explicit nonce provided.
         #[cfg(test)]
-        fn try_fetch_nonce(_chain_id: u32, _from: &str) -> Option<u64> { None }
+        fn try_fetch_nonce<C: Config>(_chain_id: u32, _from: &str) -> Option<u64> { None }
         #[cfg(not(test))]
-        fn try_fetch_nonce(chain_id: u32, from: &str) -> Option<u64> {
-            MultiChainRpcClient::get_chain_config(chain_id).ok()
+        fn try_fetch_nonce<C: Config>(chain_id: u32, from: &str) -> Option<u64> {
+            MultiChainRpcClient::get_chain_config_for::<C>(chain_id).ok()
                 .and_then(|cfg| MultiChainRpcClient::get_account_nonce(&cfg, from).ok())
         }
         let value = action.value.as_ref().and_then(|v| parse_num_u64("value", v)).unwrap_or(0);
@@ -344,7 +365,7 @@ fn build_or_passthrough_with_nonce<T: Config>(action: &Action, nft_id: &U256) ->
         // gas_price / max fees
         let mut rpc_gas_price: Option<u64> = None;
         if action.gas_price.is_none() || action.tx_type.as_deref().map(|t| t.eq_ignore_ascii_case("eip1559")).unwrap_or(true) {
-            rpc_gas_price = try_fetch_gas_price(action.chain_id);
+            rpc_gas_price = try_fetch_gas_price::<T>(action.chain_id);
         }
         let gas_price = action.gas_price.as_ref()
             .and_then(|v| parse_num_u64("gas_price", v))
@@ -355,31 +376,24 @@ fn build_or_passthrough_with_nonce<T: Config>(action: &Action, nft_id: &U256) ->
         let mut rpc_gas_limit: Option<u64> = None;
         if action.gas_limit.is_none() {
             if let Some(ref from_addr) = action.from {
-                rpc_gas_limit = try_estimate_gas(action.chain_id, from_addr, to, action.value.as_ref().and_then(|v| parse_num_u64("value", v)), &data_bytes);
+                rpc_gas_limit = try_estimate_gas::<T>(action.chain_id, from_addr, to, action.value.as_ref().and_then(|v| parse_num_u64("value", v)), &data_bytes);
             }
             // rpc_gas_limit = Some(25_000); // todo: fix.
         }
         let gas_limit = action.gas_limit.as_ref().and_then(|v| parse_num_u64("gas_limit", v)).or(rpc_gas_limit).unwrap_or(21_000);
 
-        // Nonce selection priority: explicit action.nonce > internally allocated > RPC > 0
+        // L-N1: do NOT call `allocate_next_nonce_internal` from offchain context here —
+        // offchain `NonceStates::mutate` writes are discarded and do not reach on-chain
+        // state, so the preimage would embed a ghost nonce that diverges from what the
+        // on-chain `create_signing_session` later allocates. Instead, fall back to
+        // explicit nonce > RPC-reported chain nonce > 0. The on-chain path owns nonce
+        // allocation authoritatively via `SigningSessionNonces`.
         let explicit_nonce = action.nonce.as_ref().and_then(|v| parse_num_u64("nonce", v));
-        let internal_allocated = if explicit_nonce.is_none() {
-            // Convert U256 nft_id into crate::types::NftId (little endian bytes -> bounded vec)
-            let le_bytes: Vec<u8> = {
-                let mut tmp = [0u8; 32]; 
-                nft_id.to_little_endian().to_vec()
-            };
-            if let Ok(bounded) = crate::types::NftId::try_from(le_bytes) {
-                match crate::pallet::Pallet::<T>::allocate_next_nonce_internal(&bounded, action.chain_id) {
-                    Ok(n) => Some(n),
-                    Err(e) => { log::warn!("[nonce] internal allocation failed: {:?}", e); None }
-                }
-            } else { None }
+        let _ = nft_id; // reserved for future on-chain-deterministic allocation path
+        let rpc_nonce = if explicit_nonce.is_none() {
+            if let Some(ref from_addr) = action.from { try_fetch_nonce::<T>(action.chain_id, from_addr) } else { None }
         } else { None };
-        let rpc_nonce = if explicit_nonce.is_none() && internal_allocated.is_none() {
-            if let Some(ref from_addr) = action.from { try_fetch_nonce(action.chain_id, from_addr) } else { None }
-        } else { None };
-        let nonce = explicit_nonce.or(internal_allocated).or(rpc_nonce).unwrap_or(0);
+        let nonce = explicit_nonce.or(rpc_nonce).unwrap_or(0);
 
         let tx_type = action.tx_type.as_deref().unwrap_or("eip1559");
 
@@ -470,12 +484,12 @@ fn process_ethereum_transaction_data(
 }
 
 /// Submit a signed transaction to the appropriate chain
-pub fn submit_transaction_to_chain(
+pub fn submit_transaction_to_chain<T: Config>(
     chain_id: u32,
     signed_transaction: &[u8],
 ) -> Result<RpcResponse, ProcessingError> {
-    // Get chain configuration
-    let chain_config = MultiChainRpcClient::get_chain_config(chain_id)
+    // Get chain configuration (prefers on-chain override when present, L-3 fix)
+    let chain_config = MultiChainRpcClient::get_chain_config_for::<T>(chain_id)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
 
     // Submit transaction via RPC
@@ -492,11 +506,11 @@ pub fn submit_transaction_to_chain(
 }
 
 /// Check transaction status on a specific chain
-pub fn check_transaction_status(
+pub fn check_transaction_status<T: Config>(
     chain_id: u32,
     tx_hash: &str,
 ) -> Result<RpcResponse, ProcessingError> {
-    let chain_config = MultiChainRpcClient::get_chain_config(chain_id)
+    let chain_config = MultiChainRpcClient::get_chain_config_for::<T>(chain_id)
         .map_err(|e| ProcessingError::ChainConfigError(e))?;
 
     let response = MultiChainRpcClient::get_transaction_receipt(&chain_config, tx_hash)

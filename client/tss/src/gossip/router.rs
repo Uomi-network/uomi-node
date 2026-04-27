@@ -151,7 +151,10 @@ pub fn process_announcement(
         payload.extend_from_slice(&public_key_data[..]);
         payload.extend_from_slice(&peer_id[..]);
     payload.extend_from_slice(&nonce.to_le_bytes());
-    if challenge_answer != 0 { payload.extend_from_slice(&challenge_answer.to_le_bytes()); }
+    // Always include challenge_answer in the signed payload (even if 0) so that a
+    // zero-challenge Announce is bound to the value 0 and cannot be replayed as a
+    // challenge response by setting a different challenge_answer. (M-6 fix)
+    payload.extend_from_slice(&challenge_answer.to_le_bytes());
 
         let Ok(sig_bytes): Result<[u8;64], _> = signature.clone().try_into() else {
             log::warn!("[TSS] Invalid signature length in announcement");
@@ -198,8 +201,9 @@ mod tests {
         payload.extend_from_slice(&pubkey);
         payload.extend_from_slice(&peer_bytes);
         payload.extend_from_slice(&nonce.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes()); // always include challenge_answer (M-6 fix)
         let signature = pair.sign(&payload).0.to_vec();
-    TssMessage::Announce(nonce, peer_bytes, pubkey, signature, 0)
+        TssMessage::Announce(nonce, peer_bytes, pubkey, signature, 0)
     }
 
     fn make_signed_announce_with_challenge(nonce: u16, challenge_answer: u32, pair: &sr25519::Pair, peer_id: &PeerId) -> TssMessage {
@@ -209,7 +213,7 @@ mod tests {
         payload.extend_from_slice(&pubkey);
         payload.extend_from_slice(&peer_bytes);
         payload.extend_from_slice(&nonce.to_le_bytes());
-        if challenge_answer != 0 { payload.extend_from_slice(&challenge_answer.to_le_bytes()); }
+        payload.extend_from_slice(&challenge_answer.to_le_bytes()); // always include (M-6 fix)
         let signature = pair.sign(&payload).0.to_vec();
         TssMessage::Announce(nonce, peer_bytes, pubkey, signature, challenge_answer)
     }

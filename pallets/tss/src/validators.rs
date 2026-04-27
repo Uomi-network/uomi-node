@@ -4,7 +4,7 @@ use sp_std::vec::Vec;
 use crate::pallet::{
     Config, Pallet, ActiveValidators, ValidatorIds, IdToValidator, NextValidatorId,
     ParticipantReportCount, PreviousEraValidators, Event,
-    DkgSessions, SessionState, TSSKey,
+    DkgSessions, SessionState,
 };
 use crate::types::{SessionId, NftId};
 

@@ -15,7 +15,9 @@ use crate::types::SessionId;
 impl<T: Config> Pallet<T> {
     pub fn get_next_session_id() -> SessionId {
         let session_id = Self::next_session_id();
-        NextSessionId::<T>::put(session_id + 1);
+        // L-N4: saturating_add protects against (unreachable in practice) u64 overflow and
+        // matches the codebase's conservative style elsewhere.
+        NextSessionId::<T>::put(session_id.saturating_add(1));
         session_id
     }
 
@@ -81,14 +83,15 @@ impl<T: Config> Pallet<T> {
         // Calculate the threshold for reporting (2/3 of total participants)
         let reporting_threshold = (total_participants * 2) / 3;
 
-        // Increment report count by actual number of reports for participants that meet the threshold
+        // M-N5: Each failed session counts as ONE strike regardless of how many distinct
+        // reporters converged. Previously incrementing by the reporter count made a single
+        // failed session look like a 3x strike (with a 3-of-3 quorum), conflating
+        // "number of failed sessions" with "number of reports across all failed sessions".
         for (reported_participant, report_count) in participant_report_counts.iter() {
             if *report_count >= reporting_threshold {
-                let current_count = ParticipantReportCount::<T>::get(reported_participant);
-                ParticipantReportCount::<T>::insert(
-                    reported_participant,
-                    current_count + (*report_count as u32),
-                );
+                ParticipantReportCount::<T>::mutate(reported_participant, |c| {
+                    *c = c.saturating_add(1);
+                });
             }
         }
         Ok(())
@@ -106,13 +109,23 @@ impl<T: Config> Pallet<T> {
             log::error!("TSS: No accounts available to sign report_participant");
             return;
         }
-        let reported_participants_bounded = BoundedVec::try_from(
-            reported_participants
-                .iter()
-                .map(|x| T::AccountId::decode(&mut &x[..]).unwrap())
-                .collect::<Vec<T::AccountId>>(),
-        )
-        .unwrap();
+        let decoded: Vec<T::AccountId> = reported_participants
+            .iter()
+            .filter_map(|x| match T::AccountId::decode(&mut &x[..]) {
+                Ok(account) => Some(account),
+                Err(e) => {
+                    log::warn!("[TSS] Skipping invalid participant bytes during report: {:?}", e);
+                    None
+                }
+            })
+            .collect();
+        let reported_participants_bounded = match BoundedVec::try_from(decoded) {
+            Ok(v) => v,
+            Err(_) => {
+                log::error!("[TSS] Too many participants to report, aborting");
+                return;
+            }
+        };
         log::debug!("[TSS] Sending.... {:?}", reported_participants_bounded);
 
         // Send unsigned transaction with signed payload
