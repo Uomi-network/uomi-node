@@ -828,14 +828,10 @@ pub mod pallet {
     pub fn create_signing_session_unsigned(
         origin: OriginFor<T>,
         payload: CreateSigningSessionPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be a currently-active validator.
         #[cfg(not(test))]
@@ -868,14 +864,10 @@ pub mod pallet {
     pub fn update_last_opoc_request_id_unsigned(
         origin: OriginFor<T>,
         payload: UpdateLastOpocRequestIdPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // Enforce monotonicity: reject stale or equal request IDs to prevent replay/rollback attacks
         let current = LastOpocRequestId::<T>::get();
@@ -895,16 +887,12 @@ pub mod pallet {
     pub fn submit_dkg_result(
         origin: OriginFor<T>,
         payload: SubmitDKGResultPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
         // Verify signature before processing
         // In tests, skip verification for dummy signatures
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         log::debug!("[TSS] Call::submit_dkg_result");
 
@@ -995,14 +983,10 @@ pub mod pallet {
     pub fn submit_signature_result(
         origin: OriginFor<T>,
         payload: crate::payloads::SubmitSignatureResultPayload<T>,
-        ext_signature: T::Signature,
+        _ext_signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(ext_signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         let who = payload.public().into_account();
 
@@ -1128,14 +1112,10 @@ pub mod pallet {
     pub fn create_reshare_dkg_session_unsigned(
         origin: OriginFor<T>,
         payload: crate::CreateReshareDkgSessionPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be an active validator.
         #[cfg(not(test))]
@@ -1156,14 +1136,10 @@ pub mod pallet {
     pub fn complete_reshare_session_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::CompleteResharePayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be an active validator.
         #[cfg(not(test))]
@@ -1193,14 +1169,10 @@ pub mod pallet {
     pub fn report_participant(
         origin: OriginFor<T>,
         payload: ReportParticipantsPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         let _ = ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         let who = payload.public().into_account();
 
@@ -1249,14 +1221,10 @@ pub mod pallet {
     pub fn report_tss_offence(
         origin: OriginFor<T>,
         payload: ReportTssOffencePayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         let who = payload.public().into_account();
 
@@ -1428,14 +1396,10 @@ pub mod pallet {
     pub fn submit_fsa_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::SubmitFsaTransactionPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be an active validator. Without this, any tss-keystore
         // holder can remove any FSA request by id and fake tx-submitted events.
@@ -1461,14 +1425,10 @@ pub mod pallet {
     pub fn timeout_pending_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::TimeoutPendingTransactionPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be an active validator.
         #[cfg(not(test))]
@@ -1492,14 +1452,10 @@ pub mod pallet {
     pub fn fail_multi_chain_transaction_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::FailMultiChainTransactionPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be an active validator.
         #[cfg(not(test))]
@@ -1526,14 +1482,10 @@ pub mod pallet {
     pub fn create_gap_filler_signing_session_unsigned(
         origin: OriginFor<T>,
         payload: crate::payloads::GapFillerSigningSessionPayload<T>,
-        signature: T::Signature,
+        _signature: T::Signature,
     ) -> DispatchResult {
         ensure_none(origin)?;
 
-        #[cfg(not(test))]
-        if !payload.verify::<<T as pallet::Config>::AuthorityId>(signature) {
-            return Err(Error::<T>::InvalidSignature.into());
-        }
 
         // H-N1: caller must be an active validator.
         #[cfg(not(test))]
@@ -1913,14 +1865,7 @@ pub mod pallet {
     }
 
     // Add on_initialize hook to handle validator initialization
-    fn on_initialize(n: BlockNumberFor<T>) -> frame_support::weights::Weight {
-        // ── DIAGNOSTIC: state root at START of TSS on_initialize ──
-        {
-            let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
-            log::info!("DIAG [TSS] on_initialize START  block={:?} state_root={}", n, sp_core::hexdisplay::HexDisplay::from(&root));
-        }
-
-        // Check if validator IDs have been initialized
+    fn on_initialize(n: BlockNumberFor<T>) -> frame_support::weights::Weight {        // Check if validator IDs have been initialized
         if NextValidatorId::<T>::get() == 0 {
             // Initialize with ID 1
             NextValidatorId::<T>::put(1);
@@ -2014,12 +1959,7 @@ pub mod pallet {
         // Use counters already tracked during processing above (no extra storage iterations)
         let base_weight = T::DbWeight::get().reads(5) + T::DbWeight::get().writes(3);
 
-        // ── DIAGNOSTIC: state root at END of TSS on_initialize ──
-        {
-            let root = sp_io::storage::root(sp_runtime::StateVersion::V1);
-            log::info!("DIAG [TSS] on_initialize END    block={:?} state_root={}", n, sp_core::hexdisplay::HexDisplay::from(&root));
-        }
-
+        
         // ops_count: offences processed + signing sessions expired
         let total_operations = offences_count + expired as u64;
         if total_operations > 0 {
