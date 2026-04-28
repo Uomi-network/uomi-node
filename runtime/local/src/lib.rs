@@ -140,8 +140,8 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("local"),
     impl_name: create_runtime_str!("local"),
     authoring_version: 1,
-    spec_version: 2, // Bumped for runtime upgrade: fix pallet-tss update_validators signature check
-    impl_version: 2,
+    spec_version: 3, // Bumped for runtime upgrade: remove payload.verify from all 12 unsigned extrinsics
+    impl_version: 3,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1, // Extrinsic payload shape change
     system_version: 1,
