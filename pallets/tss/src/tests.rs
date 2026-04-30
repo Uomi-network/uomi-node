@@ -1224,8 +1224,8 @@ mod tests {
 
             // Assert
             assert!(!DkgSessions::<Test>::contains_key(session_id)); // Session should be removed
-            System::assert_last_event(TssEvent::DKGExpired(session_id).into());
-            // update_report_count was called implicitly, check state change (already done by removal)
+            // DKGExpired must be emitted; retry also fires DKGSessionCreated (2 present, no reports).
+            System::assert_has_event(TssEvent::DKGExpired(session_id).into());
         });
     }
 
@@ -2894,6 +2894,318 @@ mod tests {
             let offenders: BoundedVec<_, MaxNumberOfShares> = BoundedVec::try_from(vec![validators[0].clone()]).unwrap();
             let payload = crate::ReportTssOffencePayload::<Test> { offence_type: crate::TssOffenceType::UnresponsiveBehavior, session_id: invalid_session_id, validator_set_count: validators.len() as u32, offenders, public: validators[0].clone() };
             assert_noop!(TestingPallet::report_tss_offence(RuntimeOrigin::none(), payload, sr25519::Signature::from_raw([0u8;64])), pallet::Error::<Test>::DkgSessionNotFound);
+        });
+    }
+
+    // --- Tests for DKG retry logic (maybe_retry_dkg) ---
+
+    fn make_dkg_session(
+        nft_id: NftId,
+        participants: &[AccountId],
+        threshold: u32,
+        deadline: u64,
+    ) -> DKGSession<Test> {
+        DKGSession {
+            nft_id,
+            participants: bounded_account_vec(participants),
+            threshold,
+            state: SessionState::DKGInProgress,
+            old_participants: None,
+            deadline,
+        }
+    }
+
+    #[test]
+    fn dkg_retry_two_of_three_present() {
+        // account(3) is reported absent by 2 reporters → retry with [account(1), account(2)]
+        new_test_ext().execute_with(|| {
+            let current_block = 200u64;
+            System::set_block_number(current_block);
+            let nft_id: NftId = bounded_vec![10];
+            let expired_id = 77u64;
+            let participants = vec![account(1), account(2), account(3)];
+
+            DkgSessions::<Test>::insert(
+                expired_id,
+                make_dkg_session(nft_id.clone(), &participants, 67, current_block - 1),
+            );
+
+            let absent: BoundedVec<AccountId, MaxNumberOfShares> = bounded_vec![account(3)];
+            ReportedParticipants::<Test>::insert(expired_id, account(1), absent.clone());
+            ReportedParticipants::<Test>::insert(expired_id, account(2), absent.clone());
+
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            assert!(!DkgSessions::<Test>::contains_key(expired_id));
+            let retry_id = 0u64; // first session id from get_next_session_id
+            let retry = DkgSessions::<Test>::get(retry_id).expect("retry session must exist");
+            assert_eq!(retry.participants, bounded_account_vec(&[account(1), account(2)]));
+            assert_eq!(retry.threshold, 67);
+            assert_eq!(retry.nft_id, nft_id);
+            assert_eq!(retry.state, SessionState::DKGCreated);
+            assert_eq!(retry.deadline, current_block + 100);
+            System::assert_has_event(TssEvent::DKGExpired(expired_id).into());
+            System::assert_has_event(TssEvent::DKGSessionCreated(retry_id).into());
+        });
+    }
+
+    #[test]
+    fn dkg_no_retry_when_present_below_minimum() {
+        // 2 participants, account(2) confirmed absent by account(1) → only 1 present → no retry
+        new_test_ext().execute_with(|| {
+            let current_block = 200u64;
+            System::set_block_number(current_block);
+            let nft_id: NftId = bounded_vec![10];
+            let expired_id = 77u64;
+            let participants = vec![account(1), account(2)];
+
+            DkgSessions::<Test>::insert(
+                expired_id,
+                make_dkg_session(nft_id.clone(), &participants, 67, current_block - 1),
+            );
+
+            // threshold = (2*2)/3 = 1 → 1 reporter is enough to confirm absent
+            let absent: BoundedVec<AccountId, MaxNumberOfShares> = bounded_vec![account(2)];
+            ReportedParticipants::<Test>::insert(expired_id, account(1), absent);
+
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            assert!(!DkgSessions::<Test>::contains_key(expired_id));
+            assert_eq!(DkgSessions::<Test>::iter().count(), 0, "no retry session should be created");
+            System::assert_has_event(TssEvent::DKGExpired(expired_id).into());
+        });
+    }
+
+    #[test]
+    fn dkg_retry_no_reports_uses_all_participants() {
+        // No reports → no one confirmed absent → retry with all 3 original participants
+        new_test_ext().execute_with(|| {
+            let current_block = 200u64;
+            System::set_block_number(current_block);
+            let nft_id: NftId = bounded_vec![10];
+            let expired_id = 77u64;
+            let participants = vec![account(1), account(2), account(3)];
+
+            DkgSessions::<Test>::insert(
+                expired_id,
+                make_dkg_session(nft_id.clone(), &participants, 67, current_block - 1),
+            );
+
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            assert!(!DkgSessions::<Test>::contains_key(expired_id));
+            let retry_id = 0u64;
+            let retry = DkgSessions::<Test>::get(retry_id).expect("retry session must exist");
+            assert_eq!(retry.participants, bounded_account_vec(&participants));
+            assert_eq!(retry.threshold, 67);
+        });
+    }
+
+    #[test]
+    fn dkg_no_retry_when_active_session_exists_for_same_nft() {
+        // An active (non-expired) session for the same NFT already exists → no duplicate created
+        new_test_ext().execute_with(|| {
+            let current_block = 200u64;
+            System::set_block_number(current_block);
+            let nft_id: NftId = bounded_vec![10];
+            let expired_id = 77u64;
+            let active_id = 78u64;
+            let participants = vec![account(1), account(2), account(3)];
+
+            DkgSessions::<Test>::insert(
+                expired_id,
+                make_dkg_session(nft_id.clone(), &participants, 67, current_block - 1),
+            );
+            DkgSessions::<Test>::insert(
+                active_id,
+                make_dkg_session(nft_id.clone(), &participants, 67, current_block + 100),
+            );
+
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            assert!(!DkgSessions::<Test>::contains_key(expired_id));
+            assert!(DkgSessions::<Test>::contains_key(active_id));
+            assert_eq!(DkgSessions::<Test>::iter().count(), 1, "only the active session should remain");
+        });
+    }
+
+    #[test]
+    fn dkg_retry_reports_gc_cleared() {
+        // After retry, ReportedParticipants for the expired session must be cleaned up
+        new_test_ext().execute_with(|| {
+            let current_block = 200u64;
+            System::set_block_number(current_block);
+            let expired_id = 77u64;
+            let participants = vec![account(1), account(2), account(3)];
+
+            DkgSessions::<Test>::insert(
+                expired_id,
+                make_dkg_session(bounded_vec![10], &participants, 67, current_block - 1),
+            );
+
+            let absent: BoundedVec<AccountId, MaxNumberOfShares> = bounded_vec![account(3)];
+            ReportedParticipants::<Test>::insert(expired_id, account(1), absent.clone());
+            ReportedParticipants::<Test>::insert(expired_id, account(2), absent.clone());
+
+            assert_ok!(TestingPallet::check_expired_sessions(current_block));
+
+            // Reports for the expired session must be gone
+            assert_eq!(
+                ReportedParticipants::<Test>::iter_prefix(expired_id).count(),
+                0,
+                "stale reports must be cleared"
+            );
+        });
+    }
+
+    // ── Security: vote immutability ─────────────────────────────────────────
+
+    #[test]
+    fn dkg_no_revote_allowed() {
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(200), account(201), account(202)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id: NftId = vec![42u8; 32].try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60,
+            ));
+
+            let aggk = BoundedVec::truncate_from(vec![1u8; 33]);
+
+            // First vote from account(200): accepted.
+            assert_ok!(TestingPallet::submit_dkg_result(
+                RuntimeOrigin::none(),
+                SubmitDKGResultPayload {
+                    session_id: dkg_session_id,
+                    public_key: aggk.clone(),
+                    public: account(200),
+                },
+                sr25519::Signature::from_raw([0u8; 64]),
+            ));
+
+            // Same validator re-voting (even with the same key): rejected.
+            assert_noop!(
+                TestingPallet::submit_dkg_result(
+                    RuntimeOrigin::none(),
+                    SubmitDKGResultPayload {
+                        session_id: dkg_session_id,
+                        public_key: aggk.clone(),
+                        public: account(200),
+                    },
+                    sr25519::Signature::from_raw([0u8; 64]),
+                ),
+                crate::pallet::Error::<Test>::AlreadyVoted,
+            );
+
+            // A different validator can still vote.
+            assert_ok!(TestingPallet::submit_dkg_result(
+                RuntimeOrigin::none(),
+                SubmitDKGResultPayload {
+                    session_id: dkg_session_id,
+                    public_key: aggk.clone(),
+                    public: account(201),
+                },
+                sr25519::Signature::from_raw([0u8; 64]),
+            ));
+        });
+    }
+
+    #[test]
+    fn signing_no_revote_allowed() {
+        use ethereum_types::U256;
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(210), account(211), account(212)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+
+            // Complete DKG first.
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_bytes: Vec<u8> = U256::from(77777u64).0.iter().flat_map(|&x| x.to_le_bytes()).collect();
+            let nft_id: NftId = nft_bytes.try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60,
+            ));
+            let aggk = BoundedVec::truncate_from(vec![5u8; 33]);
+            for v in &validators {
+                let s = TestingPallet::get_dkg_session(dkg_session_id).unwrap();
+                if s.state < SessionState::DKGComplete {
+                    assert_ok!(TestingPallet::submit_dkg_result(
+                        RuntimeOrigin::none(),
+                        SubmitDKGResultPayload { session_id: dkg_session_id, public_key: aggk.clone(), public: v.clone() },
+                        sr25519::Signature::from_raw([0u8; 64]),
+                    ));
+                }
+            }
+
+            // Create signing session.
+            let msg: BoundedVec<u8, crate::types::MaxMessageSize> = BoundedVec::try_from(vec![7u8]).unwrap();
+            assert_ok!(TestingPallet::create_signing_session(
+                RuntimeOrigin::none(),
+                U256::from(42u64),
+                nft_id.clone(),
+                msg,
+            ));
+            let (sid, _) = crate::SigningSessions::<Test>::iter().next().unwrap();
+            let sig = BoundedVec::truncate_from(vec![9u8; 65]);
+
+            // First vote: accepted.
+            assert_ok!(TestingPallet::submit_signature_result(
+                RuntimeOrigin::none(),
+                crate::payloads::SubmitSignatureResultPayload { session_id: sid, signature: sig.clone(), public: account(210) },
+                sr25519::Signature::from_raw([0u8; 64]),
+            ));
+
+            // Same validator re-voting: rejected.
+            assert_noop!(
+                TestingPallet::submit_signature_result(
+                    RuntimeOrigin::none(),
+                    crate::payloads::SubmitSignatureResultPayload { session_id: sid, signature: sig.clone(), public: account(210) },
+                    sr25519::Signature::from_raw([0u8; 64]),
+                ),
+                crate::pallet::Error::<Test>::AlreadyVoted,
+            );
+        });
+    }
+
+    // ── Security: threshold ceiling division ───────────────────────────────
+
+    #[test]
+    fn threshold_ceiling_not_floor() {
+        // 3 validators at 67%: floor(3*67/100)=2, ceil=((3*67)+99)/100=3.
+        // The pallet must require 3 votes, not 2, to finalize a DKG session.
+        new_test_ext().execute_with(|| {
+            let validators = vec![account(220), account(221), account(222)];
+            setup_active_validators(&validators);
+            let _ = TestingPallet::initialize_validator_ids();
+
+            let dkg_session_id = TestingPallet::next_session_id();
+            let nft_id: NftId = vec![55u8; 32].try_into().unwrap();
+            assert_ok!(TestingPallet::create_dkg_session(
+                RuntimeOrigin::signed(create_test_account(None)),
+                nft_id.clone(),
+                60,
+            ));
+
+            let aggk = BoundedVec::truncate_from(vec![7u8; 33]);
+
+            // 1 vote: not yet finalized (state stays DKGCreated until threshold).
+            assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: aggk.clone(), public: account(220) }, sr25519::Signature::from_raw([0u8; 64])));
+            assert_ne!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().state, SessionState::DKGComplete, "1/3 votes must not finalize");
+
+            // 2 votes: still not finalized (floor(3*67/100)=2 would wrongly finalize here).
+            assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: aggk.clone(), public: account(221) }, sr25519::Signature::from_raw([0u8; 64])));
+            assert_ne!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().state, SessionState::DKGComplete, "2/3 votes must not finalize with ceiling division");
+
+            // 3 votes: ceiling(3*67/100)=3 reached, session complete.
+            assert_ok!(TestingPallet::submit_dkg_result(RuntimeOrigin::none(), SubmitDKGResultPayload { session_id: dkg_session_id, public_key: aggk.clone(), public: account(222) }, sr25519::Signature::from_raw([0u8; 64])));
+            assert_eq!(TestingPallet::get_dkg_session(dkg_session_id).unwrap().state, SessionState::DKGComplete, "3/3 votes must finalize");
         });
     }
 }

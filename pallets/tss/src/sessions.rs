@@ -4,7 +4,7 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use sp_std::vec::Vec;
 
 use crate::pallet::{
-    Config, DkgSessions, Event, NextSessionId, Pallet, ParticipantReportCount,
+    Config, DKGSession, DkgSessions, Event, NextSessionId, Pallet, ParticipantReportCount,
     ReportedParticipants, SessionState, AggregatedPublicKeys, Error,
 };
 use crate::{ProposedPublicKeys};
@@ -22,24 +22,93 @@ impl<T: Config> Pallet<T> {
     }
 
     pub fn check_expired_sessions(n: BlockNumberFor<T>) -> DispatchResult {
-        // Collect sessions whose deadline expired (state still not finalized)
+        // Collect sessions whose deadline expired (state still not finalized).
         // IMPORTANT: Use BTreeMap for deterministic iteration order.
         // DkgSessions::iter() order depends on trie key hashing which can differ
         // between native and WASM, causing events in different order → state divergence.
-        let sessions_to_remove: sp_std::collections::btree_map::BTreeMap<SessionId, NftId> =
+        let sessions_to_expire: sp_std::collections::btree_map::BTreeMap<SessionId, DKGSession<T>> =
             DkgSessions::<T>::iter()
                 .filter(|(_, session)| session.state <= SessionState::DKGInProgress && n >= session.deadline)
-                .map(|(session_id, session)| (session_id, session.nft_id.clone()))
                 .collect();
-        // Remove them & GC any residual ProposedPublicKeys for their NFT
-        for (session_id, nft_id) in sessions_to_remove {
+
+        for (session_id, session) in sessions_to_expire {
+            // Snapshot participant data for retry logic before we touch storage.
+            let nft_id = session.nft_id.clone();
+
             Pallet::<T>::update_report_count(session_id).ok();
-            // Emit explicit expiration event (reuse DKGFailed event for backward compat if needed)
+            // Attempt to restart DKG with only the participants who were present.
+            // Must run BEFORE ReportedParticipants is cleared, since it reads that map.
+            Pallet::<T>::maybe_retry_dkg(n, &session, session_id).ok();
             Pallet::<T>::deposit_event(Event::DKGExpired(session_id));
             DkgSessions::<T>::remove(session_id);
-            // GC: clear any partial DKG result votes for this NFT (deadline reached, session aborted)
+            // GC: clear partial DKG result votes and stale reports for expired session.
             let _ = ProposedPublicKeys::<T>::clear_prefix(nft_id, u32::MAX, None);
+            let _ = ReportedParticipants::<T>::clear_prefix(session_id, u32::MAX, None);
         }
+        Ok(())
+    }
+
+    /// Restart a failed DKG session using only the participants that were present
+    /// (i.e., not confirmed-absent by a 2/3 quorum of reporters).
+    ///
+    /// Conditions for retry:
+    /// - At least 2 present participants remain.
+    /// - No other active DKG session already exists for the same NFT.
+    pub fn maybe_retry_dkg(
+        n: BlockNumberFor<T>,
+        expired_session: &DKGSession<T>,
+        expired_id: SessionId,
+    ) -> DispatchResult {
+        const MIN_RETRY_PARTICIPANTS: usize = 2;
+
+        let all_participants = &expired_session.participants;
+        let total = all_participants.len();
+
+        // Determine absent participants: those flagged by >= 2/3 of reporters.
+        // IMPORTANT: use BTreeMap for deterministic order (native vs WASM parity).
+        let all_reports: sp_std::collections::btree_map::BTreeMap<T::AccountId, _> =
+            ReportedParticipants::<T>::iter_prefix(expired_id).collect();
+        let reporting_threshold = (total * 2) / 3;
+
+        let present: Vec<T::AccountId> = all_participants
+            .iter()
+            .filter(|p| {
+                let report_count = all_reports
+                    .values()
+                    .filter(|list: &&BoundedVec<T::AccountId, _>| list.contains(p))
+                    .count();
+                report_count < reporting_threshold
+            })
+            .cloned()
+            .collect();
+
+        if present.len() < MIN_RETRY_PARTICIPANTS {
+            return Ok(());
+        }
+
+        // Don't create a new session if an active one already exists for this NFT.
+        let has_active = DkgSessions::<T>::iter().any(|(_, s)| {
+            s.nft_id == expired_session.nft_id && s.state <= SessionState::DKGInProgress
+        });
+        if has_active {
+            return Ok(());
+        }
+
+        let deadline = n + 100u32.into();
+        let new_session = DKGSession {
+            nft_id: expired_session.nft_id.clone(),
+            participants: BoundedVec::try_from(present)
+                .map_err(|_| Error::<T>::InvalidParticipantsCount)?,
+            threshold: expired_session.threshold,
+            state: SessionState::DKGCreated,
+            old_participants: None,
+            deadline,
+        };
+
+        let new_id = Self::get_next_session_id();
+        DkgSessions::<T>::insert(new_id, new_session);
+        Self::deposit_event(Event::DKGSessionCreated(new_id));
+
         Ok(())
     }
 

@@ -588,6 +588,8 @@ pub mod pallet {
     PendingStorageFull,
     /// Called a deprecated / removed extrinsic retained only for decoding legacy transactions
     DeprecatedExtrinsic,
+    /// Validator attempted to submit a vote for a session they already voted in
+    AlreadyVoted,
     }
 
     #[pallet::genesis_config]
@@ -927,7 +929,11 @@ pub mod pallet {
             Error::<T>::UnauthorizedParticipation
         );
 
-        // Add the vote to the proposed public keys
+        // Reject re-votes: once cast a DKG vote is final.
+        ensure!(
+            !ProposedPublicKeys::<T>::contains_key(nft_id.clone(), validator_id),
+            Error::<T>::AlreadyVoted
+        );
         ProposedPublicKeys::<T>::insert(nft_id.clone(), validator_id, aggregated_key.clone());
 
         log::debug!("[TSS] Proposed public key inserted");
@@ -1011,7 +1017,11 @@ pub mod pallet {
         ensure!(dkg_session.participants.contains(&who), Error::<T>::UnauthorizedParticipation);
         let validator_id = ValidatorIds::<T>::get(who).ok_or(Error::<T>::UnauthorizedParticipation)?;
 
-        // Insert vote
+        // Reject re-votes: once cast a signing vote is final.
+        ensure!(
+            !ProposedSignatures::<T>::contains_key(session_id, validator_id),
+            Error::<T>::AlreadyVoted
+        );
         ProposedSignatures::<T>::insert(session_id, validator_id, signature.clone());
 
         // Count votes for this signature
@@ -1625,10 +1635,13 @@ pub mod pallet {
                     .propagate(true)
                     .build();
             }
-            Call::create_signing_session_unsigned { .. } => {
+            Call::create_signing_session_unsigned { payload, .. } => {
+                // Tag by request_id so the pool keeps at most one creation tx per request,
+                // regardless of which validator submitted it. Prevents N identical sessions
+                // from being created when all validators' offchain workers fire simultaneously.
                 return ValidTransaction::with_tag_prefix("TssPallet")
                     .priority(100)
-                    .and_provides(call.encode())
+                    .and_provides((b"create_signing_session", &payload.request_id).encode())
                     .longevity(16) // L-N3: shortened to reduce pool-residence/spam window
                     .propagate(true)
                     .build();
