@@ -158,7 +158,7 @@ frame_election_provider_support::generate_solution_type!(
 );
 
 pub const PRIMARY_PROBABILITY: (u64, u64) = (1, 4);
-pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 2 * HOURS;
+pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 10 * MINUTES;
 pub const EPOCH_DURATION_IN_SLOTS: u64 = {
     const SLOT_FILL_RATE: f64 = MILLISECS_PER_BLOCK as f64 / SLOT_DURATION as f64;
 
@@ -715,7 +715,7 @@ impl pallet_election_provider_multi_phase::BenchmarkingConfig for ElectionProvid
 
 
 parameter_types! {
-    pub const SessionsPerEra: sp_staking::SessionIndex = 6;
+    pub const SessionsPerEra: sp_staking::SessionIndex = 1;
     pub const MaxNominators: u32 = <NposSolution16 as frame_election_provider_support::NposSolution>::LIMIT as u32;
     pub const OffendingValidatorsThreshold: Perbill = Perbill::from_percent(17);
     pub const BondingDuration: sp_staking::EraIndex = 6;

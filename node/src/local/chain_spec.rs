@@ -24,7 +24,8 @@ use local_runtime::{
     EVMConfig, GrandpaId,
     Precompiles, RuntimeGenesisConfig, Signature, SudoConfig,
     TechnicalCommitteeMembershipConfig, TreasuryPalletId, VestingConfig, UOMI, ElectionsConfig,
-    StakerStatus, SessionConfig, StakingConfig, SessionKeys, MaxNominators, NominationPoolsConfig
+    StakerStatus, SessionConfig, StakingConfig, SessionKeys, MaxNominators, NominationPoolsConfig,
+    pallet_tss,
 };
 use sp_consensus_babe::AuthorityId as BabeId;
 use sc_service::ChainType;
@@ -79,11 +80,15 @@ pub fn development_config() -> ChainSpec {
         .with_chain_type(ChainType::Development)
         .with_properties(properties)
         .with_genesis_config(testnet_genesis(
-            vec![authority_keys_from_seed("Alice")],
+            vec![
+                authority_keys_from_seed("Alice"),
+                authority_keys_from_seed("Bob"),
+                authority_keys_from_seed("Charlie"),
+            ],
             vec![],
             get_account_id_from_seed::<sr25519::Public>("Alice"),
             vec![
-                //get_account_id_from_seed::<sr25519::Public>("Alice"),
+                get_account_id_from_seed::<sr25519::Public>("Alice"),
                 get_account_id_from_seed::<sr25519::Public>("Bob"),
                 get_account_id_from_seed::<sr25519::Public>("Dave"),
                 get_account_id_from_seed::<sr25519::Public>("Charlie"),
@@ -236,7 +241,7 @@ fn testnet_genesis(
 		},
 		staking: StakingConfig {
 			validator_count: initial_authorities.len() as u32,
-			minimum_validator_count: initial_authorities.len() as u32,
+			minimum_validator_count: 1,
 			invulnerables: initial_authorities.iter().map(|x| x.0.clone()).collect(),
 			slash_reward_fraction: Perbill::from_percent(10),
 			stakers,
@@ -249,7 +254,9 @@ fn testnet_genesis(
         treasury: Default::default(),
         base_fee: Default::default(),
         community_treasury: Default::default(),
-        tss: Default::default(),
+        tss: pallet_tss::GenesisConfig {
+            initial_validators: initial_authorities.iter().map(|x| x.0.clone()).collect(),
+        },
     };
     serde_json::to_value(&config).expect("Could not build genesis config.")
 }
