@@ -513,11 +513,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         let maybe_agg_key = extract_agg_key(&msg);
         match maybe_agg_key {
             Ok(agg_key_bytes) => {
-                if agg_key_bytes.len() > 80 { // sanity log to help in future debugging
-                    log::warn!("[TSS] Extracted aggregated key length {} seems large; expected <=65", agg_key_bytes.len());
-                }
-                if let Err(err) = self.client.submit_dkg_result(self.client.best_hash(), session_id, agg_key_bytes) {
-                    log::error!("[TSS] Error submitting DKG result to chain: {:?}", err);
+                log::info!("[TSS] Submitting DKG result for session {} key_len={}", session_id, agg_key_bytes.len());
+                match self.client.submit_dkg_result(self.client.best_hash(), session_id, agg_key_bytes) {
+                    Ok(()) => log::info!("[TSS] DKG result submitted to pool OK for session {}", session_id),
+                    Err(err) => log::error!("[TSS] Error submitting DKG result to chain: {:?}", err),
                 }
             }
             Err(parse_err) => {

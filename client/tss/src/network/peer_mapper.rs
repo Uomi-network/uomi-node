@@ -244,6 +244,15 @@ impl PeerMapper {
         self.peers.insert(peer_id, public_key_data);
     }
 
+    /// Check if the given PeerId is among the provided participants (by key lookup in peers).
+    /// Used to decide quickly, before touching session state, whether this node should participate.
+    pub fn is_peer_in_participants(&self, peer_id: &PeerId, participants: &[[u8; 32]]) -> bool {
+        let Some(account_id) = self.peers.get(peer_id) else {
+            return false;
+        };
+        participants.iter().any(|p| p.to_vec() == *account_id)
+    }
+
     pub fn get_validator_id(&self, public_key: &TSSPublic) -> Option<u32> {
         let validator_ids = self.validator_ids.lock().unwrap();
         let id = validator_ids.get(public_key).cloned();

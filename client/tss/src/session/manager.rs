@@ -178,6 +178,10 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
         self.session_core.is_authorized_for_session(session_id)
     }
 
+    fn is_local_node_in_participants(&self, participants: &[[u8; 32]]) -> bool {
+        self.session_core.is_local_node_in_participants(participants)
+    }
+
     // Add a TssMessage we received from an unknown peer until they announce themselves
     pub fn add_unknown_peer_message(&self, peer_id: PeerId, signed_message: SignedTssMessage) {
         log::debug!("[TSS] Adding unknown peer SIGNED message from {:?}", peer_id);
@@ -297,6 +301,7 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     pub fn process_runtime_message(&mut self, runtime_message: TSSRuntimeEvent) {
         match runtime_message {
             TSSRuntimeEvent::DKGSessionInfoReady(id, t, n, participants) => {
+                log::info!("[TSS] SessionManager received DKGSessionInfoReady id={} t={} n={} participants={}", id, t, n, participants.len());
                 if let Err(e) = self.add_and_initialize_dkg_session(id, t, n, participants) {
                     log::error!("[TSS] Failed to process DKG session {}: {:?}", id, e);
                 }
@@ -327,29 +332,38 @@ impl<B: BlockT, C: ClientManager<B>> SessionManager<B, C> {
     }
 
     fn add_and_initialize_dkg_session(&self, id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>) -> Result<(), String> {
+        // Skip silently if this node is not a participant — all validators receive the
+        // DKGSessionCreated event, but only participants should run the DKG protocol.
+        if !self.is_local_node_in_participants(&participants) {
+            log::info!("[TSS] Not a participant in DKG session {} — skipping", id);
+            return Ok(());
+        }
+        log::info!("[TSS] This node IS a participant in DKG session {} — initializing", id);
+
         self.add_session_data(id, t, n, [0; 32], participants.clone(), Vec::new())
             .map_err(|e| format!("Failed to add data: {:?}", e))?;
-        
+
         log::debug!("[TSS] Successfully added data for DKG session {}", id);
-        
-        // Check if the node is authorized for this session
-        if !self.is_authorized_for_session(&id) {
-            log::warn!("[TSS] Node not authorized for session {}", id);
-            return Err(format!("Node not authorized for session {}", id));
-        }
-        
 
         self.dkg_handle_session_created(id, n.into(), t.into(), participants.clone())
             .map_err(|e| format!("Failed to initialize DKG session: {:?}", e))?;
-        
+
         log::debug!("[TSS] Successfully initialized DKG session {}", id);
-        
+
         self.ecdsa_create_keygen_phase(id, n.into(), t.into(), participants);
-        
+
         Ok(())
     }
 
     fn add_and_initialize_dkg_reshare_session(&self, id: SessionId, t: u16, n: u16, participants: Vec<TSSParticipant>, old_participants: Vec<TSSParticipant>, old_id: SessionId) -> Result<(), String> {
+        // Skip silently if this node is neither a new nor an old participant.
+        let in_new = self.is_local_node_in_participants(&participants);
+        let in_old = self.is_local_node_in_participants(&old_participants);
+        if !in_new && !in_old {
+            log::debug!("[TSS] Not a participant in reshare session {} — skipping", id);
+            return Ok(());
+        }
+
         self.add_session_data(id, t, n, [0; 32], participants.clone(), Vec::new())
             .map_err(|e| format!("Failed to add data: {:?}", e))?;
         

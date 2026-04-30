@@ -100,14 +100,16 @@ where
 
     /// Handle DKG session creation event
     async fn handle_dkg_session_created(&self, hash: B::Hash, id: u64) {
+        log::info!("[TSS] DKGSessionCreated event received for session {}", id);
         let n = self.get_dkg_session_participants_count(hash, id);
         let t = self.get_dkg_session_threshold(hash, id);
 
-        // t is a percentage value, convert it to the actual threshold value
-        let t = (t as f64 * n as f64 / 100.0) as u16;
+        // Ceiling integer division matching pallet: ((n * t) + 99) / 100
+        let t = (((n as u32 * t) + 99) / 100) as u16;
 
         let participants = self.get_dkg_session_participants(hash, id);
 
+        log::info!("[TSS] DKG session {} params: n={} t_abs={} participants={}", id, n, t, n);
         // Notify the session manager about the new DKG Session
         if let Err(e) = self.sender.unbounded_send(
             TSSRuntimeEvent::DKGSessionInfoReady(
@@ -162,8 +164,8 @@ where
         let n = self.get_dkg_session_participants_count(hash, new_id);
         let t = self.get_dkg_session_threshold(hash, new_id);
 
-        // t is a percentage value, convert it to the actual threshold value
-        let t = (t as f64 * n as f64 / 100.0) as u16;
+        // Ceiling integer division matching pallet: ((n * t) + 99) / 100
+        let t = (((n as u32 * t) + 99) / 100) as u16;
 
     let participants = self.get_dkg_session_participants(hash, new_id);
 
@@ -194,8 +196,8 @@ where
         // Retrieve participants & threshold parameters from the (already finished) DKG session.
         let n = self.get_dkg_session_participants_count(hash, dkg_session_id);
         let t_percent = self.get_dkg_session_threshold(hash, dkg_session_id);
-        // Convert percentage threshold to absolute.
-        let t_abs = (t_percent as f64 * n as f64 / 100.0) as u16;
+        // Ceiling integer division matching pallet: ((n * t) + 99) / 100
+        let t_abs = (((n as u32 * t_percent) + 99) / 100) as u16;
 
         let participants = self.get_dkg_session_participants(hash, dkg_session_id);
         if participants.is_empty() {

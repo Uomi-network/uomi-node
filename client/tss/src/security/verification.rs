@@ -51,10 +51,16 @@ pub fn verify_signature(signed_message: &SignedTssMessage) -> bool {
 }
 
 /// Checks if the message block number is within acceptable bounds.
+///
+/// Only rejects messages that are too OLD (replay protection). Future-signed messages
+/// are accepted unconditionally: in a p2p network nodes can be significantly behind
+/// in block import, and the forward check provides no real security (an attacker would
+/// need the private key to forge a future-dated message, and could just sign a fresh
+/// one instead). Session lifetimes (pallet deadline) provide the outer validity bound.
 pub fn is_block_number_valid(signed_message: &SignedTssMessage, current_block: u64, max_age_blocks: u64) -> bool {
     if current_block < signed_message.block_number {
-        // Message from the future (higher block number) - reject
-        return false;
+        // Message is from the future — sender is ahead of us in block import, accept it.
+        return true;
     }
     let age = current_block - signed_message.block_number;
     age <= max_age_blocks
@@ -92,4 +98,52 @@ pub fn verify_message_sender(
     // Block-number replay checks occur in the gossip validator.
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::TssMessage;
+
+    fn msg(block_number: u64) -> SignedTssMessage {
+        SignedTssMessage {
+            message: TssMessage::Ping,
+            sender_public_key: [0u8; 32],
+            signature: [0u8; 64],
+            block_number,
+        }
+    }
+
+    #[test]
+    fn block_valid_same_block() {
+        assert!(is_block_number_valid(&msg(100), 100, 100));
+    }
+
+    #[test]
+    fn block_valid_within_past_window() {
+        assert!(is_block_number_valid(&msg(50), 100, 100));
+    }
+
+    #[test]
+    fn block_expired_too_old() {
+        assert!(!is_block_number_valid(&msg(1), 200, 100));
+    }
+
+    #[test]
+    fn block_valid_sender_ahead_small() {
+        // Sender at 2281, receiver at 2203 (78 blocks ahead) — accepted
+        assert!(is_block_number_valid(&msg(2281), 2203, 100));
+    }
+
+    #[test]
+    fn block_valid_sender_ahead_large() {
+        // Sender at 2643, receiver at 2512 (131 blocks ahead) — accepted regardless
+        assert!(is_block_number_valid(&msg(2643), 2512, 100));
+    }
+
+    #[test]
+    fn block_valid_sender_far_future() {
+        // Even very far future is accepted (no forward bound)
+        assert!(is_block_number_valid(&msg(9999), 100, 100));
+    }
 }

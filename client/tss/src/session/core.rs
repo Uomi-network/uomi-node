@@ -57,6 +57,26 @@ impl SessionCore {
         false
     }
     
+    /// Check if this node's key appears in the provided participants list.
+    /// Cheaper than `is_authorized_for_session` because it doesn't require session state
+    /// to be populated first — safe to call before `add_session_data`.
+    pub fn is_local_node_in_participants(&self, participants: &[[u8; 32]]) -> bool {
+        if self.validator_key.len() != 32 {
+            log::error!("[TSS] validator_key length is {}, expected 32", self.validator_key.len());
+            return false;
+        }
+        let local_key: &[u8; 32] = self.validator_key[..32].try_into().expect("length checked above");
+        let found = participants.iter().any(|p| p == local_key);
+        if !found {
+            log::debug!(
+                "[TSS] Not a participant — local_key=0x{} participants=[{}]",
+                hex::encode(local_key),
+                participants.iter().map(|p| format!("0x{}", hex::encode(p))).collect::<Vec<_>>().join(", ")
+            );
+        }
+        found
+    }
+
     /// Check if node is authorized to participate in a session
     pub fn is_authorized_for_session(&self, session_id: &SessionId) -> bool {
         let mut peer_mapper = self.peer_mapper.lock().unwrap();

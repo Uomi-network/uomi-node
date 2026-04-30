@@ -1459,17 +1459,19 @@ fn test_unknown_peer_handling() {
     } // Drop mutable borrow
 
     // --- Step 2: Node B sends Announce message to Node A ---
-    // Generate a valid signature for the announcement
-    // We need Node B's key in the keystore to sign
-    let node_b_seed = [1u8; 32]; // Seed used in generate_peer_data(1)
-   
+    // Read the nonce that Node A stored when it buffered B's message (challenge-response).
+    let challenge_nonce = {
+        let node_a = network.node_mut(&node_a_id);
+        let outstanding = node_a.session_manager.outstanding_challenges.lock().unwrap();
+        *outstanding.get(&node_b_id.to_bytes()).expect("Node A should have stored a challenge nonce for Node B")
+    };
 
     let announce_message = TssMessage::Announce(
         rand::thread_rng().gen(), // Nonce
         node_b_id.to_bytes(),     // PeerId bytes
         node_b_pubkey.clone(),    // Public key
-        vec![0u8; 64],            // Signature
-        0,                        // Challenge answer placeholder
+        vec![0u8; 64],            // Signature (accepted in test mode)
+        challenge_nonce,          // Must match nonce sent in GetInfo
     );
 
     {

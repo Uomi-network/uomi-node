@@ -47,7 +47,7 @@ impl TssValidator {
             processed_messages: Arc::new(Mutex::new(HashMap::new())),
             message_expiry,
             sent_announcements: Arc::new(Mutex::new(HashMap::new())),
-            max_message_age_blocks: 100, // 5 minutes worth of blocks as an approximate upper bound, since 3s block time
+            max_message_age_blocks: 1000, // ~50 minutes at 3s/block; generous window for nodes on independent chains
             get_block_number,
         }
     }

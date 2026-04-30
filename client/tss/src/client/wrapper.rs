@@ -395,7 +395,7 @@ mod tests {
             reported_participants: bounded,
             public: MultiSigner::from(pub_dummy),
         };
-        let dummy_sig: Signature = sr25519::Signature([0u8; 64]).into();
+        let dummy_sig: Signature = sr25519::Signature::from_raw([0u8; 64]).into();
         let call = RuntimeCall::Tss(uomi_runtime::pallet_tss::Call::report_participant {
             payload: payload.clone(),
             signature: dummy_sig,
@@ -447,7 +447,7 @@ mod tests {
             public_key: bounded,
             public: MultiSigner::from(pub_dummy),
         };
-        let dummy_sig: Signature = sr25519::Signature([0u8; 64]).into();
+        let dummy_sig: Signature = sr25519::Signature::from_raw([0u8; 64]).into();
         let call = RuntimeCall::Tss(uomi_runtime::pallet_tss::Call::submit_dkg_result {
             payload: payload.clone(),
             signature: dummy_sig,
