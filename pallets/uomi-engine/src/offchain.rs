@@ -223,7 +223,7 @@ use crate::{
     consts::{MAX_INPUTS_MANAGED_PER_BLOCK, PALLET_VERSION},
     ipfs::IpfsInterface,
     payloads::{PayloadNodesOutputs, PayloadNodesVersions, PayloadNodesOpocL0Inferences},
-    types::{BlockNumber, Data, NftId, RequestId, Version, AiModelKey},
+    types::{BlockNumber, Data, InferenceMetrics, NftId, RequestId, Version, AiModelKey},
     {BlockTime, Call, Config, Inputs, NodesOutputs, NodesVersions, OpocAssignment, Pallet, AIModels, NodesOpocL0Inferences},
 };
 
@@ -245,6 +245,7 @@ struct CallAiRequestWithoutProof {
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiResponse {
     result: bool,
+    metrics: CallAiMetrics,
     response: String,
     proof: String
 }
@@ -252,6 +253,21 @@ struct CallAiResponse {
 #[derive(miniserde::Serialize, miniserde::Deserialize)]
 struct CallAiResponseCleaned {
     response: String,
+}
+
+#[derive(miniserde::Serialize, miniserde::Deserialize)]
+struct CallAiMetrics {
+    tokens_in: u32,
+    tokens_out: u32,
+}
+
+impl From<CallAiMetrics> for InferenceMetrics {
+    fn from(metrics: CallAiMetrics) -> Self {
+        Self {
+            tokens_in: metrics.tokens_in,
+            tokens_out: metrics.tokens_out,
+        }
+    }
 }
 
 
@@ -333,7 +349,7 @@ impl<T: Config> Pallet<T> {
             Err(error) => {
                 log::error!("UOMI-ENGINE: Error detecting opoc level: {:?}", error);
                 // In case of error checking the opoc level, complete the request with an empty output
-                Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
+                Self::offchain_store_output_data(&request_id, &Data::default(), InferenceMetrics::default()).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Remove request_id from the semaphore
@@ -350,7 +366,7 @@ impl<T: Config> Pallet<T> {
             Err(error) => {
                 log::error!("UOMI-ENGINE: Error loading the wasm from the NFT ID: {:?}", error);
                 // In case of error loading the wasm, complete the request with an empty output
-                Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
+                Self::offchain_store_output_data(&request_id, &Data::default(), InferenceMetrics::default()).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
                 // Remove request_id from the semaphore
@@ -363,18 +379,18 @@ impl<T: Config> Pallet<T> {
 
         // Run the wasm and store the output data
         match Self::offchain_run_wasm(wasm, input_data, input_file_cid, address, block_number, expiration_block_number, nft_required_consensus, nft_execution_max_time, request_id, opoc_level) {
-            Ok(output_data) => {
+            Ok((output_data, metrics)) => {
                 let final_output_data = output_data.clone();
 
                 // Store the output data
-                Self::offchain_store_output_data(&request_id, &final_output_data).unwrap_or_else(|e| {
+                Self::offchain_store_output_data(&request_id, &final_output_data, metrics).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
             },
             Err(error) => {
                 log::error!("UOMI-ENGINE: Error running request {:?}: {:?}", request_id, error);
                 // In case of error running the wasm, complete the request with an empty output
-                Self::offchain_store_output_data(&request_id, &Data::default()).unwrap_or_else(|e| {
+                Self::offchain_store_output_data(&request_id, &Data::default(), InferenceMetrics::default()).unwrap_or_else(|e| {
                     log::error!("UOMI-ENGINE: Error storing output data: {:?}", e);
                 });
             },
@@ -479,7 +495,7 @@ impl<T: Config> Pallet<T> {
     }
 
     #[cfg(feature = "std")]
-    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, request_id: RequestId, opoc_level:OpocLevel) -> Result<Data, wasmtime::Error> {
+    pub fn offchain_run_wasm(wasm: Vec<u8>, input_data: Data, input_file_cid: Cid, address: H160, block_number: BlockNumber, expiration_block_number: BlockNumber, nft_required_consensus: U256, nft_execution_max_time: U256, request_id: RequestId, opoc_level:OpocLevel) -> Result<(Data, InferenceMetrics), wasmtime::Error> {
         // Convert input_data to a Vec<u8>
         let input_data_as_vec = input_data.to_vec();
         // Convert address to a Vec<u8>
@@ -592,6 +608,8 @@ impl<T: Config> Pallet<T> {
         // NOTE: The call_ai function is "special". It needs to track the number of calls and count them by incrementing a counter.
         // This is required to permit us to log the executions and store them on OpocL0Inferences (on Opoc level 0) or read them from OpocL0Inferences (on Opoc level 1/2).
         let call_ai_counter = std::sync::RwLock::new(0u32);
+        let inference_metrics = std::sync::Arc::new(std::sync::RwLock::new(InferenceMetrics::default()));
+        let call_ai_metrics = inference_metrics.clone();
         let call_ai = move |mut caller: wasmtime::Caller<'_, HostState>, model: i32, ptr: i32, len: i32, output_ptr: i32, _: i32| {
             *call_ai_counter.write().unwrap() += 1;
 
@@ -599,8 +617,13 @@ impl<T: Config> Pallet<T> {
             let mut buffer = vec![0u8; len as usize];
             memory.read(&caller, ptr as usize, &mut buffer).expect("Failed to read memory");
             let model = AiModelKey::from(model as u32);
-            let output = match Self::offchain_worker_call_ai(model, block_number, buffer, nft_required_consensus, *call_ai_counter.read().unwrap(), request_id, opoc_level) {
-                Ok(output) => output,
+            let output = match Self::offchain_worker_call_ai(model, block_number, buffer.clone(), nft_required_consensus, *call_ai_counter.read().unwrap(), request_id, opoc_level) {
+                Ok((output, metrics)) => {
+                    let mut accumulated_metrics = call_ai_metrics.write().unwrap();
+                    accumulated_metrics.tokens_in = accumulated_metrics.tokens_in.saturating_add(metrics.tokens_in);
+                    accumulated_metrics.tokens_out = accumulated_metrics.tokens_out.saturating_add(metrics.tokens_out);
+                    output
+                },
                 Err(error) => {
                     log::error!("Error calling the AI: {:?}", error);
                     Vec::new()
@@ -673,7 +696,8 @@ impl<T: Config> Pallet<T> {
             Ok(_) => {
                 let stored_data = store.data().clone();
                 let data: Data = stored_data.try_into().unwrap_or_else(|_| Data::default());
-                Ok(data)
+                let metrics = *inference_metrics.read().unwrap();
+                Ok((data, metrics))
             }
             Err(err) => {
                 log::error!("UOMI-ENGINE: WASM execution error: {:?}", err);
@@ -693,13 +717,25 @@ impl<T: Config> Pallet<T> {
         wasm_data
     }
 
+    fn estimate_token_count(data: &[u8]) -> u32 {
+        if data.is_empty() {
+            return 0;
+        }
+
+        ((data.len() as u32).saturating_add(3) / 4).max(1)
+    }
+
     #[cfg(feature = "std")]
-    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId, opoc_level:OpocLevel) -> Result<Vec<u8>, DispatchError> {
+    pub fn offchain_worker_call_ai(model: AiModelKey, block_number: BlockNumber, input: Vec<u8>, required_consensus: U256, counter: u32, request_id: RequestId, opoc_level:OpocLevel) -> Result<(Vec<u8>, InferenceMetrics), DispatchError> {
         let request_id_as_string = format!("{:?}", request_id);
             
         if model == AiModelKey::zero() { // Model 0 is a simple model that return the input data inverted used for tests
-            let output = input.iter().rev().cloned().collect();
-            return Ok(output);
+            let output: Vec<u8> = input.iter().rev().cloned().collect();
+            let metrics = InferenceMetrics {
+                tokens_in: Self::estimate_token_count(&input),
+                tokens_out: Self::estimate_token_count(&output),
+            };
+            return Ok((output, metrics));
         }
 
         if model >= U256::from(100) && required_consensus > U256::from(1) { // Models with id > 100 (example image generation) can not be called with security (consensus > 1)
@@ -746,6 +782,11 @@ impl<T: Config> Pallet<T> {
                 log::error!("UOMI-ENGINE: Error parsing output data to JSON");
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
+            if !output_json.result {
+                log::error!("UOMI-ENGINE: AI service returned result=false");
+                return Err(DispatchError::Other("AI service returned result=false"));
+            }
+            let metrics: InferenceMetrics = output_json.metrics.into();
             let output_json_cleaned = CallAiResponseCleaned {
                 response: output_json.response,
             };
@@ -774,6 +815,7 @@ impl<T: Config> Pallet<T> {
                         request_id: request_id.clone(), 
                         inference_index: counter,
                         inference_proof: output_proof.clone(),
+                        metrics,
                         public: acct.public.clone(),
                     },
                     |payload, signature| Call::store_nodes_opoc_l0_inferences { 
@@ -783,7 +825,7 @@ impl<T: Config> Pallet<T> {
                 );
             }
 
-            Ok(output.to_vec())
+            Ok((output.to_vec(), metrics))
         } else {
             let mut proof: Data = Data::default();
             for (account_id, inference_data) in NodesOpocL0Inferences::<T>::iter_prefix(request_id) { // TODO: On turing, we need to be sure the account_id is the same of the node used on opoc level 0
@@ -821,6 +863,11 @@ impl<T: Config> Pallet<T> {
                 log::error!("UOMI-ENGINE: Error parsing output data to JSON");
                 DispatchError::Other("Error parsing output data to JSON")
             })?;
+            if !output_json.result {
+                log::error!("UOMI-ENGINE: AI service returned result=false");
+                return Err(DispatchError::Other("AI service returned result=false"));
+            }
+            let metrics: InferenceMetrics = output_json.metrics.into();
             let output_json_cleaned = CallAiResponseCleaned {
                 response: output_json.response,
             };
@@ -830,7 +877,7 @@ impl<T: Config> Pallet<T> {
                 DispatchError::Other("Failed to convert output")
             })?;
 
-            Ok(output.to_vec())
+            Ok((output.to_vec(), metrics))
         }
     
     }
@@ -907,7 +954,7 @@ impl<T: Config> Pallet<T> {
         Ok(file)
     }
 
-    fn offchain_store_output_data(request_id: &RequestId, output_data: &Data) -> DispatchResult {
+    fn offchain_store_output_data(request_id: &RequestId, output_data: &Data, metrics: InferenceMetrics) -> DispatchResult {
         let signer = Signer::<T, T::UomiAuthorityId>::all_accounts();
         if !signer.can_sign() {
             log::error!("No accounts available to sign the transaction");
@@ -918,6 +965,7 @@ impl<T: Config> Pallet<T> {
             |acct| PayloadNodesOutputs { 
                 request_id: request_id.clone(), 
                 output_data: output_data.clone(),
+                metrics,
                 public: acct.public.clone(),
             },
             |payload, signature| Call::store_nodes_outputs { 

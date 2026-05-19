@@ -1308,6 +1308,7 @@ impl pallet_uomi_engine::Config for Runtime {
     type UomiAuthorityId = pallet_uomi_engine::crypto::AuthId;
     type RuntimeEvent = RuntimeEvent;
     type IpfsPallet = IpfsWrapper;
+    type Currency = Balances;
     type Randomness = pallet_babe::ParentBlockRandomness<Runtime>;
     type OffenceReporter = pallet_offences::Pallet<Runtime>;
     type MaxOffchainConcurrent = frame_support::traits::ConstU32<5>; // NOTE: This config is not used anymore, but kept for retro-compatibility.

@@ -8,7 +8,7 @@ use sp_core::U256;
 
 use crate::{
    MaxDataSize,
-   types::Version,
+   types::{InferenceMetrics, Version},
 };
 
 // PayloadNodesOutputs
@@ -17,6 +17,7 @@ use crate::{
 pub struct PayloadNodesOutputs<Public> {
     pub request_id: U256,
     pub output_data: BoundedVec<u8, MaxDataSize>,
+    pub metrics: InferenceMetrics,
     pub public: Public,
 }
 
@@ -47,6 +48,7 @@ pub struct PayloadNodesOpocL0Inferences<Public> {
     pub request_id: U256,
     pub inference_index: u32,
     pub inference_proof: BoundedVec<u8, MaxDataSize>,
+    pub metrics: InferenceMetrics,
     pub public: Public,
 }
 

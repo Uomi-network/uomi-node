@@ -367,6 +367,7 @@ impl pallet_uomi_engine::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type Randomness = pallet_babe::ParentBlockRandomness<Test>;
     type IpfsPallet = IpfsWrapper;
+    type Currency = Balances;
     type MaxOffchainConcurrent = TestMaxOffchainConcurrent; // NOTE: This config is not used anymore, but kept for retro-compatibility.
     type OffenceReporter = TestOffenceReporter;
 }

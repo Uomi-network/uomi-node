@@ -215,6 +215,7 @@ std = [
 	"log?/std",
 	"num_enum/std",
 	"pallet-evm-precompile-assets-erc20/std",
+	"pallet-evm-precompile-uomi-engine/std",
 	"precompile-utils/std",
 	"scale-info/std",
 ]

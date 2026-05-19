@@ -42,7 +42,7 @@ use frame_support::{
     },
     parameter_types,
     storage::types::StorageValue,
-    traits::{Randomness, Get},
+    traits::{Currency, ExistenceRequirement, Get, Randomness},
 };
 use frame_support::pallet_prelude::OptionQuery;
 use frame_system::{
@@ -57,7 +57,7 @@ use pallet_session::{self as session};
 use pallet_authorship as authorship;
 use sp_core::{H160, U256};
 use sp_runtime::{
-    traits::{IdentifyAccount, Convert, SaturatedConversion},
+    traits::{IdentifyAccount, Convert, SaturatedConversion, Saturating, Zero},
     DispatchResult,
 };
 use sp_std::{
@@ -66,9 +66,13 @@ use sp_std::{
     vec,
     vec::Vec,
 };
-use types::{Address, AiModelKey, BlockNumber, Data, NftId, RequestId, Version};
+use types::{Address, AiModelKey, BlockNumber, Data, InferenceBalance, InferenceMetrics, ModelPrice, NftId, RequestId, Version};
 
 use crate::ipfs::IpfsInterface;
+
+pub type BalanceOf<T> = <<T as pallet::Config>::Currency as Currency<
+    <T as frame_system::Config>::AccountId,
+>>::Balance;
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen, Default, Copy, DecodeWithMemTracking)]
 pub enum OpocLevel {
@@ -109,6 +113,7 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         type Randomness: Randomness<Option<<Self as frame_system::Config>::Hash>, BlockNumberFor<Self>>;
         type IpfsPallet: ipfs::IpfsInterface<Self>;
+        type Currency: Currency<Self::AccountId>;
         type MaxOffchainConcurrent: Get<u32>; // NOTE: This config is not used anymore, but kept for retro-compatibility.
         type OffenceReporter: ReportOffence<
             <Self as frame_system::Config>::AccountId,
@@ -153,6 +158,7 @@ pub mod pallet {
             request_id: RequestId, // The request ID.
             account_id: T::AccountId, // The account ID of the validator.
             output_data: Data, // The output data of the request.
+            metrics: InferenceMetrics, // The inference metrics reported by the validator.
         },
         NodeVersionReceived {
             account_id: T::AccountId, // The account ID of the validator.
@@ -163,6 +169,27 @@ pub mod pallet {
             account_id: T::AccountId, // The account ID of the validator.
             inference_index: u32, // The inference index.
             inference_proof: Data, // The inference proof.
+            metrics: InferenceMetrics, // The Level 0 inference metrics.
+        },
+        ModelPricingSet {
+            model: AiModelKey,
+            price: ModelPrice,
+        },
+        InferencePaymentReserved {
+            request_id: RequestId,
+            payer: T::AccountId,
+            amount: BalanceOf<T>,
+        },
+        InferencePaymentSettled {
+            request_id: RequestId,
+            actual_cost: BalanceOf<T>,
+            refunded: BalanceOf<T>,
+            rewardees: u32,
+        },
+        InferencePaymentRewardPaid {
+            request_id: RequestId,
+            validator: T::AccountId,
+            amount: BalanceOf<T>,
         },
         // --- Offence reporting (structure only, no logic yet) ---
         EngineOffenceReported {
@@ -213,6 +240,8 @@ pub mod pallet {
     TooManyOffenders,
     OffenceAlreadyPending,
     OffenceNoValidOffenders,
+    InferenceCostOverflow,
+    InsufficientInferencePayment,
     }
 
     // ------------------------------------------------------------
@@ -305,6 +334,18 @@ pub mod pallet {
 		ValueQuery
 	>;
 
+    // NodesInferenceMetrics stores the token metrics reported for a request output.
+    #[pallet::storage]
+    pub type NodesInferenceMetrics<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        RequestId,
+        Blake2_128Concat,
+        T::AccountId,
+        InferenceMetrics,
+        ValueQuery
+    >;
+
     // NodesWorks storage is used to store the number of works that have every validator
 	#[pallet::storage]
 	pub type NodesWorks<T: Config> = StorageDoubleMap<
@@ -375,6 +416,40 @@ pub mod pallet {
             U256, // nft_id (agent id)
         ),
         ValueQuery
+    >;
+
+    // OutputInferenceMetrics stores the canonical Level 0 metrics selected at completion.
+    #[pallet::storage]
+    pub type OutputInferenceMetrics<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        RequestId,
+        InferenceMetrics,
+        ValueQuery
+    >;
+
+    // ModelPricing stores pricing parameters used by quote helpers. Payment settlement is intentionally
+    // not wired yet, because the EVM visibility strategy (payable value vs record_cost) is still open.
+    #[pallet::storage]
+    pub type ModelPricing<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        AiModelKey,
+        ModelPrice,
+        ValueQuery
+    >;
+
+    #[pallet::storage]
+    pub type PendingInferencePayments<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        RequestId,
+        (
+            T::AccountId, // payer account to refund
+            T::AccountId, // escrow account currently holding msg.value
+            BalanceOf<T>, // max paid amount
+        ),
+        OptionQuery
     >;
 
 	// OpocBlacklist storage is used to store the blacklist of validators
@@ -542,6 +617,14 @@ pub mod pallet {
                 for (request_id, account_id) in outputs_to_remove {
                     log::info!("UOMI-ENGINE: Removing NodesOutputs for non-existing request_id: {:?}", request_id);
                     NodesOutputs::<T>::remove(request_id, account_id);
+                }
+                let metrics_to_remove: sp_std::vec::Vec<_> = NodesInferenceMetrics::<T>::iter()
+                    .filter(|(request_id, _, _)| !Inputs::<T>::contains_key(request_id))
+                    .map(|(request_id, account_id, _)| (request_id, account_id))
+                    .collect();
+                for (request_id, account_id) in metrics_to_remove {
+                    log::info!("UOMI-ENGINE: Removing NodesInferenceMetrics for non-existing request_id: {:?}", request_id);
+                    NodesInferenceMetrics::<T>::remove(request_id, account_id);
                 }
                 let inferences_to_remove: sp_std::vec::Vec<_> = NodesOpocL0Inferences::<T>::iter()
                     .filter(|(request_id, _, _)| !Inputs::<T>::contains_key(request_id))
@@ -776,7 +859,7 @@ pub mod pallet {
         ) -> DispatchResult {
             ensure_none(origin)?;
 
-            let payloads::PayloadNodesOutputs { request_id, output_data, public } = payload;
+            let payloads::PayloadNodesOutputs { request_id, output_data, metrics, public } = payload;
 
             let public_account_id = public.into_account();
 
@@ -792,8 +875,9 @@ pub mod pallet {
             }
 
             NodesOutputs::<T>::insert(request_id, public_account_id.clone(), output_data.clone());
+            NodesInferenceMetrics::<T>::insert(request_id, public_account_id.clone(), metrics);
 
-            Self::deposit_event(Event::NodeOutputReceived { request_id, account_id: public_account_id, output_data });
+            Self::deposit_event(Event::NodeOutputReceived { request_id, account_id: public_account_id, output_data, metrics });
 
             Ok(())
         }
@@ -833,7 +917,7 @@ pub mod pallet {
             _signature: T::Signature
         ) -> DispatchResult {
             ensure_none(origin)?;
-            let payloads::PayloadNodesOpocL0Inferences { public, request_id, inference_index, inference_proof } = payload;
+            let payloads::PayloadNodesOpocL0Inferences { public, request_id, inference_index, inference_proof, metrics } = payload;
             let public_account_id = public.into_account();
 
             if !Self::address_is_active_validator(&public_account_id) {
@@ -849,8 +933,9 @@ pub mod pallet {
             }
 
             NodesOpocL0Inferences::<T>::insert(request_id, public_account_id.clone(), (inference_index, inference_proof.clone()));
+            NodesInferenceMetrics::<T>::insert(request_id, public_account_id.clone(), metrics);
 
-            Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof });
+            Self::deposit_event(Event::NodeOpocL0InferenceReceived { request_id, account_id: public_account_id, inference_index, inference_proof, metrics });
 
             Ok(())
         }
@@ -876,6 +961,19 @@ pub mod pallet {
 
             OpocBlacklist::<T>::remove_all(None);
 
+            Ok(())
+        }
+
+        #[pallet::call_index(6)]
+        #[pallet::weight(10_000)]
+        pub fn set_model_pricing(
+            origin: OriginFor<T>,
+            model: AiModelKey,
+            price: ModelPrice,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            ModelPricing::<T>::insert(model, price);
+            Self::deposit_event(Event::ModelPricingSet { model, price });
             Ok(())
         }
     }
@@ -983,6 +1081,209 @@ impl<T: Config> Pallet<T> {
         Self::deposit_event(Event::RequestAccepted { request_id, address, nft_id });
 
         Ok(())
+    }
+
+    pub fn run_request_with_payment(
+        request_id: U256,
+        address: H160,
+        nft_id: U256,
+        input_data: Vec<u8>,
+        input_file_cid: Vec<u8>,
+        min_validators: U256,
+        min_blocks: U256,
+        payer: T::AccountId,
+        escrow_account: T::AccountId,
+        paid_amount: BalanceOf<T>,
+    ) -> DispatchResult {
+        Self::run_request(
+            request_id,
+            address,
+            nft_id,
+            input_data,
+            input_file_cid,
+            min_validators,
+            min_blocks,
+        )?;
+
+        PendingInferencePayments::<T>::insert(
+            request_id,
+            (payer.clone(), escrow_account, paid_amount),
+        );
+        Self::deposit_event(Event::InferencePaymentReserved {
+            request_id,
+            payer,
+            amount: paid_amount,
+        });
+
+        Ok(())
+    }
+
+    pub fn quote_inference_for_request_v1(
+        nft_id: U256,
+        input_size: u32,
+        min_validators: U256,
+        max_output_tokens: u32,
+    ) -> Result<InferenceBalance, DispatchError> {
+        Self::quote_inference_v1(
+            nft_id,
+            Self::estimate_token_count_from_size(input_size),
+            max_output_tokens,
+            min_validators,
+        )
+    }
+
+    pub fn calculate_inference_cost(
+        model: AiModelKey,
+        metrics: InferenceMetrics,
+        l1_verifier_count: u32,
+    ) -> Result<InferenceBalance, DispatchError> {
+        let price = ModelPricing::<T>::get(model);
+        Self::calculate_inference_cost_with_price(price, metrics, l1_verifier_count)
+    }
+
+    pub fn calculate_inference_cost_with_price(
+        price: ModelPrice,
+        metrics: InferenceMetrics,
+        l1_verifier_count: u32,
+    ) -> Result<InferenceBalance, DispatchError> {
+        let token_cost = (metrics.tokens_in as InferenceBalance)
+            .checked_mul(price.price_per_input_token)
+            .and_then(|input_cost| {
+                (metrics.tokens_out as InferenceBalance)
+                    .checked_mul(price.price_per_output_token)
+                    .and_then(|output_cost| input_cost.checked_add(output_cost))
+            })
+            .ok_or(Error::<T>::InferenceCostOverflow)?;
+
+        let execution_multiplier = l1_verifier_count
+            .checked_add(1)
+            .ok_or(Error::<T>::InferenceCostOverflow)?;
+
+        token_cost
+            .checked_mul(execution_multiplier as InferenceBalance)
+            .and_then(|cost| price.base_fee.checked_add(cost))
+            .ok_or(Error::<T>::InferenceCostOverflow.into())
+    }
+
+    pub fn quote_inference_v1(
+        model: AiModelKey,
+        tokens_in: u32,
+        max_output_tokens: u32,
+        min_validators: U256,
+    ) -> Result<InferenceBalance, DispatchError> {
+        let l1_verifier_count = min_validators
+            .saturating_sub(U256::from(1))
+            .min(U256::from(u32::MAX))
+            .low_u64() as u32;
+        Self::calculate_inference_cost(
+            model,
+            InferenceMetrics { tokens_in, tokens_out: max_output_tokens },
+            l1_verifier_count,
+        )
+    }
+
+    pub fn estimate_token_count_from_size(input_size: u32) -> u32 {
+        if input_size == 0 {
+            return 0;
+        }
+
+        input_size.saturating_add(3) / 4
+    }
+
+    pub fn settle_inference_payment(
+        request_id: &RequestId,
+        output_data: &Data,
+        metrics: InferenceMetrics,
+        nft_required_consensus: U256,
+        nft_id: NftId,
+    ) -> DispatchResult {
+        let Some((payer, escrow_account, paid_amount)) = PendingInferencePayments::<T>::get(request_id) else {
+            return Ok(());
+        };
+
+        let actual_cost_u128 = if output_data == &Data::default() {
+            0
+        } else {
+            let l1_verifier_count = nft_required_consensus
+                .saturating_sub(U256::from(1))
+                .min(U256::from(u32::MAX))
+                .low_u64() as u32;
+            Self::calculate_inference_cost(nft_id, metrics, l1_verifier_count)?
+        };
+
+        let rewardees = if actual_cost_u128 == 0 {
+            Vec::new()
+        } else {
+            Self::inference_payment_rewardees(request_id, output_data)
+        };
+
+        let mut actual_cost: BalanceOf<T> = actual_cost_u128.saturated_into();
+        if rewardees.is_empty() {
+            actual_cost = BalanceOf::<T>::zero();
+        }
+        if actual_cost > paid_amount {
+            actual_cost = paid_amount;
+        }
+
+        let rewardees_count: u32 = rewardees.len().saturated_into();
+        let mut distributed = BalanceOf::<T>::zero();
+        if actual_cost > BalanceOf::<T>::zero() && rewardees_count > 0 {
+            let rewardees_count_balance: BalanceOf<T> = rewardees_count.saturated_into();
+            let per_validator_reward = actual_cost / rewardees_count_balance;
+            if per_validator_reward > BalanceOf::<T>::zero() {
+                for validator in rewardees.iter() {
+                    <T as pallet::Config>::Currency::transfer(
+                        &escrow_account,
+                        validator,
+                        per_validator_reward,
+                        ExistenceRequirement::AllowDeath,
+                    )?;
+                    distributed = distributed.saturating_add(per_validator_reward);
+                    Self::deposit_event(Event::InferencePaymentRewardPaid {
+                        request_id: *request_id,
+                        validator: validator.clone(),
+                        amount: per_validator_reward,
+                    });
+                }
+            }
+        }
+
+        let refunded = paid_amount.saturating_sub(distributed);
+        if refunded > BalanceOf::<T>::zero() {
+            <T as pallet::Config>::Currency::transfer(
+                &escrow_account,
+                &payer,
+                refunded,
+                ExistenceRequirement::AllowDeath,
+            )?;
+        }
+
+        PendingInferencePayments::<T>::remove(request_id);
+        Self::deposit_event(Event::InferencePaymentSettled {
+            request_id: *request_id,
+            actual_cost,
+            refunded,
+            rewardees: rewardees_count,
+        });
+
+        Ok(())
+    }
+
+    fn inference_payment_rewardees(
+        request_id: &RequestId,
+        output_data: &Data,
+    ) -> Vec<T::AccountId> {
+        OpocAssignment::<T>::iter_prefix(*request_id)
+            .filter_map(|(validator, _)| {
+                if NodesOutputs::<T>::contains_key(*request_id, &validator) &&
+                    NodesOutputs::<T>::get(*request_id, validator.clone()) == *output_data
+                {
+                    Some(validator)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     // OTHER FUNCTIONS

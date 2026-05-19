@@ -18,8 +18,9 @@
 
 use crate::testing::PrettyLog;
 use alloc::boxed::Box;
-use evm::{ExitRevert, ExitSucceed};
-use fp_evm::{Context, ExitError, ExitReason, Log, PrecompileHandle, Transfer};
+use fp_evm::{
+	Context, ExitError, ExitReason, ExitRevert, ExitSucceed, Log, PrecompileHandle, Transfer,
+};
 use sp_core::{H160, H256};
 
 #[derive(Debug, Clone)]
@@ -193,9 +194,17 @@ impl PrecompileHandle for MockHandle {
 		&self.context
 	}
 
+	fn origin(&self) -> H160 {
+		self.context.caller
+	}
+
 	/// Is the precompile call is done statically.
 	fn is_static(&self) -> bool {
 		self.is_static
+	}
+
+	fn is_contract_being_constructed(&self, _address: H160) -> bool {
+		false
 	}
 
 	/// Retrieve the gas limit of this call.

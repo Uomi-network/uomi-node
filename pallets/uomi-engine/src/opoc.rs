@@ -6,7 +6,7 @@ use sp_core::U256;
 use sp_std::{ collections::btree_map::BTreeMap, vec, vec::Vec };
 
 use crate::{
-    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, RequestId }, NftId, Config, Event, Inputs, OpocErrors, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs, Pallet
+    consts::{MAX_INPUTS_MANAGED_PER_BLOCK, MAX_REQUEST_RETRIES}, ipfs::IpfsInterface, types::{ BlockNumber, Data, InferenceMetrics, RequestId }, NftId, Config, Event, Inputs, OpocErrors, NodesInferenceMetrics, NodesOpocL0Inferences, NodesOutputs, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, OutputInferenceMetrics, Outputs, Pallet
 };
 
 // Helper trait imports for accessing staking internals
@@ -998,6 +998,22 @@ impl<T: Config> Pallet<T> {
                 total_consensus.clone(),
                 *nft_id,
             ));
+            let metrics = Self::opoc_get_level_0_metrics(request_id, output_data);
+            OutputInferenceMetrics::<T>::insert(request_id, metrics);
+            let (_, _, _, nft_required_consensus, _, _, _, _) = Inputs::<T>::get(request_id);
+            if let Err(error) = Self::settle_inference_payment(
+                request_id,
+                output_data,
+                metrics,
+                nft_required_consensus,
+                *nft_id,
+            ) {
+                log::error!(
+                    "Failed to settle inference payment for request {:?}. error: {:?}",
+                    request_id,
+                    error
+                );
+            }
             Self::deposit_event(Event::RequestCompleted {
                 request_id: request_id.clone(),
                 output_data: output_data.clone(),
@@ -1035,6 +1051,8 @@ impl<T: Config> Pallet<T> {
             let _ = OpocTimeouts::<T>::clear_prefix(request_id, u32::MAX, None);
             // remove all outputs from NodesOutputs
             let _ = NodesOutputs::<T>::clear_prefix(request_id, u32::MAX, None);
+            // remove all per-node metrics from NodesInferenceMetrics
+            let _ = NodesInferenceMetrics::<T>::clear_prefix(request_id, u32::MAX, None);
             // remove all inferences from NodesOpocL0Inferences
             let _ = NodesOpocL0Inferences::<T>::clear_prefix(request_id, u32::MAX, None);
         }
@@ -1235,6 +1253,22 @@ impl<T: Config> Pallet<T> {
         }
 
         Ok((outputs, validators_not_completed, validators_in_timeout))
+    }
+
+    fn opoc_get_level_0_metrics(request_id: &RequestId, output_data: &Data) -> InferenceMetrics {
+        for (validator, (_expiration_block_number, opoc_level)) in OpocAssignment::<T>::iter_prefix(*request_id) {
+            if opoc_level != OpocLevel::Level0 {
+                continue;
+            }
+
+            if NodesOutputs::<T>::contains_key(*request_id, &validator) &&
+                NodesOutputs::<T>::get(*request_id, validator.clone()) == *output_data
+            {
+                return NodesInferenceMetrics::<T>::get(*request_id, validator);
+            }
+        }
+
+        InferenceMetrics::default()
     }
 
     fn opoc_blacklist_operations_check(

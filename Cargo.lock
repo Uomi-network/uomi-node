@@ -10846,18 +10846,35 @@ dependencies = [
 name = "pallet-evm-precompile-uomi-engine"
 version = "0.2.0"
 dependencies = [
+ "env_logger 0.10.2",
  "fp-evm",
+ "frame-election-provider-support",
  "frame-support 41.0.0",
  "frame-system 41.0.0",
  "hex",
+ "hex-literal",
  "log",
+ "pallet-authorship",
+ "pallet-babe",
+ "pallet-balances",
  "pallet-evm",
+ "pallet-ipfs",
+ "pallet-offences",
+ "pallet-session",
+ "pallet-staking",
+ "pallet-staking-reward-curve",
+ "pallet-timestamp",
  "pallet-uomi-engine",
  "parity-scale-codec",
  "precompile-utils",
+ "scale-info",
+ "sp-consensus-babe 0.43.0",
  "sp-core 37.0.0",
+ "sp-io 41.0.1",
  "sp-runtime 42.0.0",
+ "sp-staking 39.0.0",
  "sp-std 14.0.0 (git+https://github.com/paritytech/polkadot-sdk?branch=stable2506)",
+ "uomi-primitives",
 ]
 
 [[package]]

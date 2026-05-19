@@ -17,10 +17,25 @@ interface IEngine {
      * @param inputCid The content identifier for the input data (0x if none).
      * @param minValidators The minimum number of validators required.
      * @param minBlocks The minimum number of blocks required for execution.
+     * @param maxOutputTokens The maximum output token budget used to reserve inference payment.
      */
     function call_agent(
-        uint256 requestId, uint256 nftId, address sender, bytes calldata data, bytes calldata inputCid, uint256 minValidators, uint256 minBlocks
-    ) external;
+        uint256 requestId,
+        uint256 nftId,
+        address sender,
+        bytes calldata data,
+        bytes calldata inputCid,
+        uint256 minValidators,
+        uint256 minBlocks,
+        uint256 maxOutputTokens
+    ) external payable returns (bool);
+
+    function quote_inference(
+        uint256 nftId,
+        uint256 inputSize,
+        uint256 minValidators,
+        uint256 maxOutputTokens
+    ) external view returns (uint256 maxCost);
     /**
      * @notice Retrieves the output associated with a given request ID.
      * @param requestId The unique identifier for the request.

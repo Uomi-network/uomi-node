@@ -26,3 +26,50 @@ frame-support = { workspace = true }
 frame-system = { workspace = true }
 parity-scale-codec = { workspace = true }
 hex = { workspace = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+frame-election-provider-support = { workspace = true, features = ["std"] }
+hex-literal = { workspace = true }
+pallet-authorship = { workspace = true, features = ["std"] }
+pallet-babe = { workspace = true, features = ["std"] }
+pallet-balances = { workspace = true, features = ["std"] }
+pallet-ipfs = { workspace = true, features = ["std"] }
+pallet-offences = { workspace = true, features = ["std"] }
+pallet-session = { workspace = true, features = ["std"] }
+pallet-staking = { workspace = true, features = ["std"] }
+pallet-staking-reward-curve = { workspace = true }
+pallet-timestamp = { workspace = true, features = ["std"] }
+precompile-utils = { workspace = true, features = ["testing"] }
+scale-info = { workspace = true }
+sp-consensus-babe = { workspace = true, features = ["std"] }
+sp-io = { workspace = true, features = ["std"] }
+sp-staking = { workspace = true, features = ["std"] }
+uomi-primitives = { workspace = true, features = ["std"] }
+
+[features]
+default = ["std"]
+std = [
+	"fp-evm/std",
+	"frame-support/std",
+	"frame-system/std",
+	"pallet-evm/std",
+	"pallet-uomi-engine/std",
+	"precompile-utils/std",
+	"sp-core/std",
+	"sp-runtime/std",
+	"sp-std/std",
+	"log/std",
+	"pallet-authorship/std",
+	"pallet-babe/std",
+	"pallet-balances/std",
+	"pallet-ipfs/std",
+	"pallet-offences/std",
+	"pallet-session/std",
+	"pallet-staking/std",
+	"pallet-timestamp/std",
+	"sp-consensus-babe/std",
+	"sp-io/std",
+	"sp-staking/std",
+	"uomi-primitives/std",
+]

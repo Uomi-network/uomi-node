@@ -1,15 +1,15 @@
 use pallet_ipfs::types::Cid;
 use pallet_ipfs::CidsStatus;
 use crate::{
-    mock::*, Event, Inputs, MaxDataSize, OpocErrors, NodesOutputs, NodesVersions, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs,
-    types::{ BlockNumber, Data, Address, NftId, RequestId },
+    mock::*, Event, Inputs, MaxDataSize, ModelPricing, OpocErrors, NodesOutputs, NodesVersions, OpocTimeouts, NodesWorks, OpocAssignment, OpocBlacklist, OpocLevel, Outputs,
+    types::{ BlockNumber, Data, Address, InferenceMetrics, ModelPrice, NftId, RequestId },
     consts::{MAX_REQUEST_RETRIES}
 };
 use sp_std::vec;
 use env_logger::Builder;
 use frame_support::{
     assert_ok,
-    traits::{Currency, OffchainWorker, OnFinalize, OnInitialize},
+    traits::{Currency, Get, OffchainWorker, OnFinalize, OnInitialize},
     BoundedVec,
 };
 use log::LevelFilter;
@@ -45,6 +45,189 @@ fn test_sample() {
     }
 
     assert_ok!(ok());
+}
+
+#[test]
+fn test_set_model_pricing_and_quote_v1() {
+    make_logger();
+    new_test_ext().execute_with(|| {
+        let model = U256::from(1);
+        let price = ModelPrice {
+            price_per_input_token: 10,
+            price_per_output_token: 30,
+            base_fee: 1_000,
+        };
+
+        assert_ok!(TestingPallet::set_model_pricing(RuntimeOrigin::root(), model, price));
+        assert_eq!(ModelPricing::<Test>::get(model), price);
+
+        let quote = TestingPallet::quote_inference_v1(
+            model,
+            10,
+            20,
+            U256::from(3),
+        ).expect("quote should be calculated");
+
+        assert_eq!(quote, 1_000 + ((10 * 10) + (20 * 30)) * 3);
+    });
+}
+
+#[test]
+fn test_calculate_inference_cost_detects_overflow() {
+    make_logger();
+    new_test_ext().execute_with(|| {
+        let price = ModelPrice {
+            price_per_input_token: u128::MAX,
+            price_per_output_token: 0,
+            base_fee: 0,
+        };
+
+        let result = TestingPallet::calculate_inference_cost_with_price(
+            price,
+            InferenceMetrics { tokens_in: 2, tokens_out: 0 },
+            0,
+        );
+
+        assert!(result.is_err());
+    });
+}
+
+#[test]
+fn test_settle_inference_payment_transfers_cost_and_refund() {
+    make_logger();
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let request_id = U256::from(42);
+        let nft_id = U256::from(1);
+        let payer = AccountId::from_raw([7u8; 32]);
+        let escrow = AccountId::from_raw([8u8; 32]);
+        let validator_0 = AccountId::from_raw([1u8; 32]);
+        let validator_1 = AccountId::from_raw([2u8; 32]);
+        let validator_2 = AccountId::from_raw([3u8; 32]);
+        let paid = 10_000u128;
+        let min_validators = U256::from(3);
+        let metrics = InferenceMetrics { tokens_in: 2, tokens_out: 3 };
+        let output: Data = BoundedVec::try_from(vec![1, 2, 3]).expect("Vector exceeds the bound");
+
+        ModelPricing::<Test>::insert(
+            nft_id,
+            ModelPrice {
+                price_per_input_token: 10,
+                price_per_output_token: 20,
+                base_fee: 100,
+            },
+        );
+        let _ = <Balances as Currency<AccountId>>::make_free_balance_be(&escrow, paid);
+
+        assert_ok!(TestingPallet::run_request_with_payment(
+            request_id,
+            H160::repeat_byte(0xAA),
+            nft_id,
+            vec![1, 2, 3],
+            Vec::new(),
+            min_validators,
+            U256::from(10),
+            payer.clone(),
+            escrow.clone(),
+            paid,
+        ));
+        OpocAssignment::<Test>::insert(request_id, validator_0.clone(), (U256::from(10), OpocLevel::Level0));
+        OpocAssignment::<Test>::insert(request_id, validator_1.clone(), (U256::from(10), OpocLevel::Level1));
+        OpocAssignment::<Test>::insert(request_id, validator_2.clone(), (U256::from(10), OpocLevel::Level1));
+        NodesOutputs::<Test>::insert(request_id, validator_0.clone(), output.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), output.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_2.clone(), output.clone());
+
+        assert_ok!(TestingPallet::settle_inference_payment(
+            &request_id,
+            &output,
+            metrics,
+            min_validators,
+            nft_id,
+        ));
+
+        let expected_cost = 100 + ((2 * 10) + (3 * 20)) * 3;
+        let expected_validator_reward = expected_cost / 3;
+        let expected_distributed = expected_validator_reward * 3;
+        assert_eq!(Balances::free_balance(&validator_0), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&validator_1), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&validator_2), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&payer), paid - expected_distributed);
+        assert_eq!(Balances::free_balance(&escrow), 0);
+    });
+}
+
+#[test]
+fn test_settle_inference_payment_worst_case_consumes_full_payment() {
+    make_logger();
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let request_id = U256::from(43);
+        let nft_id = U256::from(1);
+        let payer = AccountId::from_raw([10u8; 32]);
+        let escrow = AccountId::from_raw([11u8; 32]);
+        let validator_0 = AccountId::from_raw([12u8; 32]);
+        let validator_1 = AccountId::from_raw([13u8; 32]);
+        let validator_2 = AccountId::from_raw([14u8; 32]);
+        let validator_3 = AccountId::from_raw([15u8; 32]);
+        let min_validators = U256::from(4);
+        let metrics = InferenceMetrics { tokens_in: 5, tokens_out: 20 };
+        let output: Data = BoundedVec::try_from(vec![9, 9, 9]).expect("Vector exceeds the bound");
+        let price = ModelPrice {
+            price_per_input_token: 10,
+            price_per_output_token: 30,
+            base_fee: 1_000,
+        };
+
+        ModelPricing::<Test>::insert(nft_id, price);
+        let paid = TestingPallet::quote_inference_v1(
+            nft_id,
+            metrics.tokens_in,
+            metrics.tokens_out,
+            min_validators,
+        ).expect("worst-case quote should be calculated");
+
+        let _ = <Balances as Currency<AccountId>>::make_free_balance_be(&escrow, paid);
+
+        assert_ok!(TestingPallet::run_request_with_payment(
+            request_id,
+            H160::repeat_byte(0xAA),
+            nft_id,
+            vec![1, 2, 3],
+            Vec::new(),
+            min_validators,
+            U256::from(10),
+            payer.clone(),
+            escrow.clone(),
+            paid,
+        ));
+        OpocAssignment::<Test>::insert(request_id, validator_0.clone(), (U256::from(10), OpocLevel::Level0));
+        OpocAssignment::<Test>::insert(request_id, validator_1.clone(), (U256::from(10), OpocLevel::Level1));
+        OpocAssignment::<Test>::insert(request_id, validator_2.clone(), (U256::from(10), OpocLevel::Level1));
+        OpocAssignment::<Test>::insert(request_id, validator_3.clone(), (U256::from(10), OpocLevel::Level1));
+        NodesOutputs::<Test>::insert(request_id, validator_0.clone(), output.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_1.clone(), output.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_2.clone(), output.clone());
+        NodesOutputs::<Test>::insert(request_id, validator_3.clone(), output.clone());
+
+        assert_ok!(TestingPallet::settle_inference_payment(
+            &request_id,
+            &output,
+            metrics,
+            min_validators,
+            nft_id,
+        ));
+
+        let expected_validator_reward = paid / 4;
+        assert_eq!(Balances::free_balance(&validator_0), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&validator_1), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&validator_2), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&validator_3), expected_validator_reward);
+        assert_eq!(Balances::free_balance(&payer), 0);
+        assert_eq!(Balances::free_balance(&escrow), 0);
+    });
 }
 
 // 🚀 TEST FUNCTION run_request
@@ -680,7 +863,7 @@ fn test_offchain_run_wasm_case_1() {
 
         // Be sure result is input_data reversed
         let input_data_reversed = input_data.iter().rev().cloned().collect::<Vec<u8>>();
-        assert_eq!(result.unwrap(), input_data_reversed);
+        assert_eq!(result.unwrap().0, input_data_reversed);
     });
 }
 
@@ -792,7 +975,7 @@ fn test_offchain_run_wasm_case_4() {
 
         // Be sure result is input_data reversed
         let input_data_reversed = input_data.iter().rev().cloned().collect::<Vec<u8>>();
-        assert_eq!(result.unwrap(), input_data_reversed);
+        assert_eq!(result.unwrap().0, input_data_reversed);
     });
 }
 
@@ -868,7 +1051,7 @@ fn test_offchain_run_wasm_case_6() {
 
         // Be sure result is address as bytes
         let address_as_vec: BoundedVec::<u8, MaxDataSize> = address.as_ref().to_vec().try_into().unwrap_or_else(|_| BoundedVec::<u8, MaxDataSize>::default());
-        assert_eq!(result.unwrap(), address_as_vec);
+        assert_eq!(result.unwrap().0, address_as_vec);
     });
 }
 
