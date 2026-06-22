@@ -140,7 +140,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("local"),
     impl_name: create_runtime_str!("local"),
     authoring_version: 1,
-    spec_version: 1, // Bumped due to SubmitFsaTransactionPayload change (added request_id)
+    spec_version: 2, // Bumped due to inference payment runtime changes
     impl_version: 2,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1, // Extrinsic payload shape change
